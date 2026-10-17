@@ -1150,16 +1150,29 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("stillParent", true, ((Object) implementation) instanceof InterfaceParentFixture.Parent);
             scenario.check("value", 12, contract.value());
         });
-        runScenario("interface-parent-batch", 66, scenario -> {
-            // Plain would link the Parent published before this batch replaces it.
-            scenario.expectRejectionBy(InterfaceParentFixture.Plain.class);
+        runScenario("interface-parent-batch", 0, scenario -> {
+            // Plain links the rebuilt Parent, whose rebuild is allocated first.
             scenario.redefine(new Class<?>[]{InterfaceParentFixture.Parent.class, InterfaceParentFixture.Plain.class},
                     "interface-parent-batch", "interface-parent-batch");
-            scenario.check("rejectionReason", true,
-                    DcevmRuntime.capabilities().getString("lastRejection").contains("redefined in the same batch"));
-            scenario.check("plainNotParent", false, plain instanceof InterfaceParentFixture.Parent);
-            scenario.check("parentDefaultUnchanged", 21,
+            scenario.check("plainIsParent", true, plain instanceof InterfaceParentFixture.Parent);
+            InterfaceParentFixture.Parent plainParent = (InterfaceParentFixture.Parent) plain;
+            scenario.check("plainRequired", 51, plainParent.parentRequired());
+            scenario.check("plainDefault", 22, plainParent.parentValue());
+            scenario.check("implementationDefault", 22,
                     ((InterfaceParentFixture.Parent) (Object) implementation).parentValue());
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("plainDefaultAfterGc", 22, plainParent.parentValue());
+        });
+        Object extra = Class.forName("com.github.ytlog.artdcevm.fixture.InterfaceParentFixture$Extra");
+        runScenario("interface-parent-rebuilt", 0, scenario -> {
+            // Contract newly extends Extra while the batch rebuilds Extra.
+            scenario.redefine(new Class<?>[]{InterfaceParentFixture.Contract.class, InterfaceParentFixture.Extra.class},
+                    "interface-parent-rebuilt", "interface-parent-rebuilt");
+            scenario.check("extraLoaded", true, extra != null);
+            scenario.check("instanceIsExtra", true, ((Object) implementation) instanceof InterfaceParentFixture.Extra);
+            scenario.check("extraDefault", 32, ((InterfaceParentFixture.Extra) (Object) implementation).extraValue());
+            scenario.check("value", 13, contract.value());
+            scenario.check("marker", 9, implementation.marker);
         });
     }
 

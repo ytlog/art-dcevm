@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
 #include "platform/abi/arm64/common/redefinition.h"
 
 // State of the standard-entry transactions on this thread. A ClassFileLoadHook
@@ -31,6 +32,9 @@ struct Requirements {
   // During ART verification, resolve the descriptor to the target's
   // replacement. Superclass changes and interface groups need it.
   bool redirect_verification = false;
+  // Added interfaces (global references) that the batch may also rebuild: the
+  // target links their replacements, so those rebuilds are allocated first.
+  std::vector<jclass> linked_interfaces;
 };
 
 struct Context {

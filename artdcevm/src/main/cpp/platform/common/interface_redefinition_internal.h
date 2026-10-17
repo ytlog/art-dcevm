@@ -129,6 +129,7 @@ struct Group {
   Members extended;              // With ancestor subtrees; empty without ancestors.
   std::optional<bool> uses_extended;  // Fixed by the group's allocation.
   int32_t owner = -1;                 // Index into the chosen members' orderings.
+  bool allocating = false;            // Detects rebuilds that link each other.
   // Before allocation chooses, the widest candidate membership.
   const Members& Current() const {
     return uses_extended ? (*uses_extended ? extended : core) : ancestors.empty() ? core : extended;
@@ -178,6 +179,9 @@ struct State final : transaction::Part {
   // ART's Run of this transaction, and the class it is linking for a group.
   Attempt* attempt = nullptr;
   const Linking* linking = nullptr;
+  // ART allocates a class that links rebuilt interfaces: its lookups of
+  // their old classes resolve to the allocated replacements.
+  bool external = false;
 };
 inline State* CurrentState() {
   return transaction::PartOf<State>(transaction::Current(), &transaction::Context::interfaces);
@@ -224,6 +228,8 @@ bool RuntimeAvailable();
 Handle ReplacementRoot(const Group&);
 // The group whose current membership contains `klass`.
 const Group* AffectedGroup(void*);
+// The replacement an allocated rebuild holds for an old class, or null.
+void* ReplacementFor(void* old, bool* pending);
 jvmtiError NormalCan(Handle, std::string*) noexcept;
 jvmtiError NormalGet(Handle, std::string*) noexcept;
 jvmtiError StructuralCan(Handle, std::string*) noexcept;

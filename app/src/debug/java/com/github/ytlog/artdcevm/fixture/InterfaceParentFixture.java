@@ -14,6 +14,9 @@ public final class InterfaceParentFixture {
     public static class Complete implements Contract {
         public int parentRequired() { return 31; }
     }
+    public interface Extra {
+        default int extraValue() { return 31; }
+    }
     public static class Plain {
         public int parentRequired() { return 51; }
     }

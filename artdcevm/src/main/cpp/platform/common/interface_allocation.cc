@@ -165,10 +165,27 @@ class LinkingScope {
   State* state_;
   const Linking* previous_;
 };
-void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) noexcept try {
+// The replacement an allocated rebuild holds for `old`. `pending` is set when
+// `old` belongs to a rebuild whose replacement is not allocated yet.
+void* ReplacementFor(void* old, bool* pending) {
   const State* state = CurrentState();
+  if (!state || !state->attempt) return nullptr;
+  for (const auto& group : state->groups) {
+    const TypeSnapshot* allocated = group.Allocated();
+    auto* replacements = allocated ? ReplacementRoot(group).Get<ObjectArray>() : nullptr;
+    for (size_t i = 0; replacements && i < allocated->types.size(); ++i) {
+      if (Decode(allocated->types[i]) != old) continue;
+      void* replacement = runtime_thread::Read(Thread(), replacements->elements[i]);
+      if (!replacement && pending) *pending = true;
+      return replacement;
+    }
+  }
+  return nullptr;
+}
+void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) noexcept try {
+  State* state = CurrentState();
   const Linking* linking = state ? state->linking : nullptr;
-  if (!linking || cache != linking->private_cache.Get<void>()) return nullptr;
+  if (!state || (linking ? cache != linking->private_cache.Get<void>() : !state->external)) return nullptr;
   const auto* dex = reinterpret_cast<const DexFilePrefix*>(static_cast<DexCache*>(cache)->dex_file);
 ARTDCEVM_TEST(
   if (ARTDCEVM_FAULT(11)) throw std::bad_alloc{};
@@ -180,10 +197,18 @@ ARTDCEVM_TEST(
   // find an old interface and bypass this hook during the same link.
   void* old = process->lookup_view ? process->lookup_view(linker, runtime_thread::Current(Thread()), type, loader)
                          : process->lookup_chars(linker, runtime_thread::Current(Thread()), type.c_str(), loader);
-  for (size_t i = 0; i < linking->old_types->size(); ++i)
-    if ((*linking->old_types)[i].Get<void>() == old)
-      return runtime_thread::Read(Thread(), linking->new_types.Get<ObjectArray>()->elements[i]);
-  return nullptr;
+  bool pending = false;
+  void* replacement = nullptr;
+  for (size_t i = 0; linking && i < linking->old_types->size(); ++i)
+    if ((*linking->old_types)[i].Get<void>() == old) {
+      replacement = runtime_thread::Read(Thread(), linking->new_types.Get<ObjectArray>()->elements[i]);
+      pending = !replacement;
+    }
+  // Another rebuild of the batch; a class linking a replacement allocated
+  // later would keep the old one, so that order fails the transaction.
+  if (!replacement && !pending) replacement = ReplacementFor(old, &pending);
+  if (pending && state->attempt) state->attempt->error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+  return replacement;
 } catch (...) {
   // Lookup cannot return a JVMTI error. Retain it until Finish regains control;
   // the result of this link will never be committed.
@@ -195,7 +220,7 @@ void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) no
   return reinterpret_cast<LookupCache>(process->original_lookup_cache)(linker, index, cache, loader);
 }
 void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
-  if (const State* state = CurrentState(); state && state->linking) {
+  if (const State* state = CurrentState(); state && (state->linking || state->external)) {
     if (void* object = Redirect(linker, index, runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->dex_cache)),
                                runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->class_loader)))) return object;
   }
@@ -266,7 +291,9 @@ bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, Hol
   }
   return true;
 }
-bool AllocateInterface(const Group& group, ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
+bool AllocateLinked(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, const HolderView& holder,
+                    const std::vector<jclass>& linked);
+bool AllocateInterface(Group& group, ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
                        const HolderView& holder) {
   struct AllocationTimer {
     std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
@@ -293,6 +320,17 @@ ARTDCEVM_TEST(
   if (initialized[data->index] || !structural[data->index] || !initial[data->index])
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface target requires an unallocated structural transaction");
   process->verified_release.store(state->selected_release);
+  // Rebuilds that members of this one newly link are allocated first.
+  group.allocating = true;
+  for (jint j = 0; j < state->batch_size; ++j) {
+    auto* entry = holder.Definition(j);
+    const auto* requirements = transaction::Current()->Find(entry);
+    if (!requirements || requirements->linked_interfaces.empty() ||
+        AffectedGroup(process->mirror_class(entry)) != &group) continue;
+    RedefinitionDataIter item{j, data->holder};
+    if (!AllocateLinked(entry, &item, holder, requirements->linked_interfaces)) return false;
+  }
+  group.allocating = false;
   const Members& members = group.Current();
   const TypeSnapshot* snapshot = group.Allocated();
   if (!snapshot) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface rebuild owner unavailable");
@@ -445,12 +483,59 @@ void ChooseMembers(Group& group, const HolderView& holder) {
       group.owner = static_cast<int32_t>(i);
   }
 }
+// Allocates every rebuild that holds one of `linked` before the caller links it.
+bool AllocateLinked(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, const HolderView& holder,
+                    const std::vector<jclass>& linked) {
+  State* state = CurrentState();
+  for (jclass interface : linked) {
+    const Group* found = AffectedGroup(Decode(interface));
+    if (!found) continue;
+    Group& group = state->groups[found - state->groups.data()];
+    if (!group.uses_extended) ChooseMembers(group, holder);
+    if (group.owner < 0) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface rebuild has no structural owner entry");
+    const int32_t entry = Entry(holder, group.Current().orderings[group.owner].owner);
+    if ((*holder.initialized)[entry]) continue;
+    if (group.allocating)
+      return FailAllocation(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                            "interface rebuilds of the batch link each other");
+    RedefinitionDataIter owner_data{entry, data->holder};
+    if (!AllocateInterface(group, holder.Definition(entry), &owner_data, holder)) return false;
+  }
+  return true;
+}
+class ExternalScope {
+ public:
+  explicit ExternalScope(State* state) : state_(state), previous_(std::exchange(state->external, true)) {}
+  ~ExternalScope() { state_->external = previous_; }
+ private:
+  State* state_;
+  bool previous_;
+};
 bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage,
             RedefinitionDataIter* data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
   try {
     void* klass = process->mirror_class(self);
     const Group* affected = RuntimeAvailable() ? AffectedGroup(klass) : nullptr;
+    const transaction::Requirements* requirements = transaction::Current() ? transaction::Current()->Find(self) : nullptr;
+    if (!affected && RuntimeAvailable() && requirements && !requirements->linked_interfaces.empty() &&
+        CurrentState() && CurrentState()->attempt) {
+      // ART allocates this class and its subclasses; they link the rebuilt
+      // interfaces it newly implements.
+      HolderView holder;
+      if (!VerifyHolder(self, data, &holder)) return false;
+      if ((*holder.initialized)[data->index]) return true;
+      if (!AllocateLinked(self, data, holder, requirements->linked_interfaces)) return false;
+      State* state = CurrentState();
+      bool allocated;
+      {
+        ExternalScope scope(state);
+        allocated = reinterpret_cast<Function>(process->original_finish)(self, storage, data);
+      }
+      if (allocated && state->attempt->error != JVMTI_ERROR_NONE)
+        return FailAllocation(self, state->attempt->error, "a linked interface rebuild was not allocated first");
+      return allocated;
+    }
     if (!affected) return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
     HolderView holder;
     if (!VerifyHolder(self, data, &holder)) return false;
@@ -568,7 +653,8 @@ bool RuntimeBackend::CompleteInstances(ClassRedefinitionPrefix* self, Redefiniti
 }
 bool RuntimeBackend::Check(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
                     const RedefinitionDataIter& data, std::string* rejection) {
-  return interface_dispatch::Check(thread, self, data, rejection);
+  return interface_dispatch::Check(thread, self, data, rejection,
+                                   [](void* old) { return detail::ReplacementFor(old, nullptr); });
 }
 
 }  // namespace artdcevm::interface_redefinition

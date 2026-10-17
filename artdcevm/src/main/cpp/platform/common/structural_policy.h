@@ -101,6 +101,9 @@ struct Abilities {
   // private) when no loaded code outside the batch still invokes its old kind;
   // the engine checks that before accepting (requires member_mapping).
   bool kind_changes = false;
+  // An added interface the batch also rebuilds can link as its replacement:
+  // the engine allocates that rebuild first.
+  bool batch_interfaces = false;
   std::string interface_abstract_unavailable_reason = {};
 };
 

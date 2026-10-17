@@ -30,6 +30,8 @@ const std::vector<Obligation>& Obligations() {
   return pending ? pending->entries : empty;
 }
 Services art{};
+// The interface backend's replacement lookup for the Check in progress.
+thread_local void* (*current_replacement)(void*) = nullptr;
 jclass object_array_root = nullptr, pointer_array_root = nullptr;
 std::mutex state_mutex;
 std::string state = "unavailable";
@@ -120,10 +122,12 @@ template <typename Class, typename Method> struct Verifier {
       // is named with its declaring interface.
       const std::string target = class_layout::ClassDescriptor(thread, *interface);
       std::string method = obligation.name;
-      // An unchanged parent keeps its Class in both the old and new IfTables.
+      // An unchanged parent keeps its Class in both the old and new IfTables;
+      // a parent the batch rebuilds appears there as its replacement.
       if (obligation.declaring) {
-        interface = static_cast<Class*>(class_layout::DecodeClass(art.mirror_class, self, obligation.declaring));
-        original = interface;
+        original = class_layout::DecodeClass(art.mirror_class, self, obligation.declaring);
+        void* rebuilt = current_replacement ? current_replacement(original) : nullptr;
+        interface = static_cast<Class*>(rebuilt ? rebuilt : original);
         method = "added parent " + class_layout::ClassDescriptor(thread, *interface) + "." + obligation.name;
       }
       const auto unavailable = [&](const std::string& why) {
@@ -217,6 +221,7 @@ template <typename Class, typename Method> struct Verifier {
       void* original = art.mirror_class(obligation.interface);
       void* declaring = obligation.declaring ? class_layout::DecodeClass(art.mirror_class, self, obligation.declaring)
                                              : nullptr;
+      if (void* rebuilt = declaring && current_replacement ? current_replacement(declaring) : nullptr) declaring = rebuilt;
       bool candidate = false;
       for (int32_t i = 0; i < index; ++i)
         if (originals[i].Get<void>() == original &&
@@ -279,9 +284,11 @@ void Require(ClassRedefinitionPrefix* interface, std::string name, std::string d
   auto* pending = transaction::PartOf<Pending>(context, &transaction::Context::dispatch);
   pending->entries.push_back({interface, std::move(name), std::move(descriptor), declaring});
 }
-bool Check(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data, std::string* rejection) {
+bool Check(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data, std::string* rejection,
+           void* (*replacement)(void*)) {
   const auto* context = transaction::Current();
   if (!context || Obligations().empty()) return true;
+  current_replacement = replacement;
   const int selected = class_layout::Selected();
   if (selected >= 0) {
     if (!kVerifiers[selected].check(thread, self, data, rejection)) return false;

@@ -25,8 +25,10 @@ std::string State();
 void Require(abi::arm64::ClassRedefinitionPrefix*, std::string name, std::string descriptor,
              jclass declaring = nullptr);
 // Linked groups: validate every pending obligation owned by this data item.
+// `replacement` maps a declaring parent the batch also rebuilds to its new class.
 bool Check(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
-           const abi::arm64::RedefinitionDataIter& data, std::string* rejection);
+           const abi::arm64::RedefinitionDataIter& data, std::string* rejection,
+           void* (*replacement)(void*) = nullptr);
 
 // ART 13's named NO_INLINE error service reports this actual selected pair.
 // Pointers are native metadata, rooted by the allocation attempt's class roots.

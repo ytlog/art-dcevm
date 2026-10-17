@@ -17,8 +17,10 @@ namespace artdcevm::verification_redirect {
 struct Verification {
   const abi::arm64::RedefinitionDataIter* data;
   std::string_view descriptor;  // "Lpkg/Name;"
-  // The backend that answers lookups for an interface group, or null.
+  // The backend that answers lookups for interface groups, or null.
   interface_redefinition::Backend* interface_group;
+  // The class belongs to a group, whose arrays also hold its replacement.
+  bool group_member;
 };
 
 namespace {
@@ -60,8 +62,9 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
   }
   if (target->superclass) state->moved.push_back(data.index);
   interface_redefinition::Backend* backend = interfaces.load(std::memory_order_acquire);
+  const bool member = backend && backend->IsAffected(self);
   const Verification scope{&data, target->descriptor,
-                           backend && backend->IsAffected(self) ? backend : nullptr};
+                           member || (backend && !target->linked_interfaces.empty()) ? backend : nullptr, member};
   const Verification* previous = std::exchange(state->verifying, &scope);
   const bool verified = reinterpret_cast<Function>(original_check_verification)(self, data);
   state->verifying = previous;
@@ -76,9 +79,12 @@ void* VerifiedClass(void* linker, std::string_view descriptor, Handle loader) {
   const State* state = CurrentState();
   const Verification* verifying = state ? state->verifying : nullptr;
   if (!verifying) return nullptr;
+  // A class outside the interface groups resolves itself to its new class and
+  // the rebuilt interfaces it links to their replacements.
+  if (!verifying->group_member && descriptor == verifying->descriptor) return verifying->data->NewClassObject();
   if (verifying->interface_group)
     return verifying->interface_group->VerificationClass(linker, descriptor, loader);
-  return descriptor == verifying->descriptor ? verifying->data->NewClassObject() : nullptr;
+  return nullptr;
 }
 // While a batched subclass verifies, a superclass-changed target resolves,
 // through its loader as usual, to the old class: show the verifier its new

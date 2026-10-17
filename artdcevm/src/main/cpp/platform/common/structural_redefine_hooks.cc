@@ -110,6 +110,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // target may evolve its members whenever the engine owns the mapping.
   abilities.interface_members = abilities.member_mapping;
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
+  abilities.batch_interfaces = interfaces && interfaces->Available();
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
       interface_dispatch::Available(*thread, self, (interfaces && interfaces->AbstractLinkErrorsAvailable()));
@@ -159,8 +160,11 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
+  requirements.linked_interfaces.clear();
+  if (snapshot.hierarchy.added_interface_in_batch)
+    for (const auto& [descriptor, type] : snapshot.interface_classes) requirements.linked_interfaces.push_back(type);
   requirements.redirect_verification = decision.superclass_changed || snapshot.moved_ancestor ||
-      (interfaces && interfaces->IsAffected(self));
+      !requirements.linked_interfaces.empty() || (interfaces && interfaces->IsAffected(self));
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     batch->retires_members = true;
   snapshot.retiring = decision.retired_methods;

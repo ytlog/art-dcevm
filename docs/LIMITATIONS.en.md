@@ -33,7 +33,7 @@ This capability is available only on Android 13 (API 33), Android 14 (API 34), A
 | Field modifier changes; field additions, deletions or type changes without member mapping | `SCHEMA_CHANGED` (64) |
 | Method modifier changes other than abstract/default switches; switching to abstract without a verified IfTable accessor; switching to default where it would shadow static/non-public class-chain methods | `METHOD_MODIFIERS_CHANGED` (71) |
 | Removing a parent interface; adding one without member mapping; a static/private method hiding a new parent's method, or a new parent default shadowing static/non-public class-chain methods; a new parent's abstract methods without a verified IfTable accessor | `HIERARCHY_CHANGED` (66) |
-| An added interface (including one a class adds) or one of its parents is redefined in the same batch | `HIERARCHY_CHANGED` (66) |
+| An added interface is rebuilt by the batch, and the new class and that rebuild depend on each other, or the new class precedes it within one rebuild | `HIERARCHY_CHANGED` (66) |
 | Changing the kind between interface, annotation and enum (an interface's access level, synthetic and similar modifiers may change as a class's) | `CLASS_MODIFIERS_CHANGED` (70) |
 | An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |
 | A boot interface, a Proxy implementation, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |

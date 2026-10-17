@@ -87,7 +87,7 @@ Decision CheckCopiedMembers(const ClassSchema& live, const ClassSchema& incoming
 // interface; the access check of LoadSuperAndInterfaces is not on that path.
 // Removing an interface would narrow the type of live instances.
 Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
-                         const LoadedHierarchy& hierarchy) {
+                         const LoadedHierarchy& hierarchy, const Abilities& abilities) {
   const std::set<std::string> before(live.interfaces.begin(), live.interfaces.end());
   const std::set<std::string> after(incoming.interfaces.begin(), incoming.interfaces.end());
   if (after.size() != incoming.interfaces.size())
@@ -98,7 +98,7 @@ Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
                     "interface removed: " + old);
   // The new class links the added interface's published Class: one the batch
   // also replaces would leave its copied defaults and slots on the old version.
-  if (hierarchy.added_interface_in_batch)
+  if (hierarchy.added_interface_in_batch && !abilities.batch_interfaces)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "added interface is redefined in the same batch: " + *hierarchy.added_interface_in_batch);
   for (const auto& added : incoming.interfaces) {
@@ -282,7 +282,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     Decision superclass = CheckSuperclass(live, incoming, hierarchy, abilities);
     if (superclass.error != JVMTI_ERROR_NONE) return superclass;
   }
-  Decision interfaces = CheckInterfaces(live, incoming, hierarchy);
+  Decision interfaces = CheckInterfaces(live, incoming, hierarchy, abilities);
   if (interfaces.error != JVMTI_ERROR_NONE) return interfaces;
   // Match ti_class.cc: nested classes use the InnerClass annotation's flags.
   const uint32_t class_changed =

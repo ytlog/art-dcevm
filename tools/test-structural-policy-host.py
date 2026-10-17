@@ -594,7 +594,11 @@ int main(int argc, char** argv) {
         auto implementing = klass; implementing.interfaces.push_back("Lfixture/Parent;");
         Require(policy::Evaluate(klass, implementing, facts, members).error == JVMTI_ERROR_NONE &&
                 policy::Evaluate(klass, implementing, batched, members).error == kHierarchy,
-                "a class adding an interface redefined in the same batch must be rejected");
+                "a class adding an interface redefined in the same batch needs the linked rebuild");
+        auto linking = members; linking.batch_interfaces = true;
+        Require(policy::Evaluate(klass, implementing, batched, linking).error == JVMTI_ERROR_NONE &&
+                policy::Evaluate(contract, parented, batched, linking).error == JVMTI_ERROR_NONE,
+                "an added interface the batch rebuilds must link as its replacement");
         Require(policy::Evaluate(parented, contract, facts, members).error == kHierarchy,
                 "parent interface removal must be rejected");
         for (const auto& abilities : {body_only, unmapped})

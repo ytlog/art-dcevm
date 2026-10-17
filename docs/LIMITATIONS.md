@@ -33,7 +33,7 @@
 | 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
 | abstract 与 default 互换之外的方法修饰符变化；改为 abstract 而 IfTable 探测不通过；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
 | 移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法；新父接口的 abstract 方法缺少 IfTable 探测 | `HIERARCHY_CHANGED`（66） |
-| 新增的接口（含普通类新增的接口）本身或其父接口在同批重定义 | `HIERARCHY_CHANGED`（66） |
+| 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
 | boot 接口、有 Proxy 实现类、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
