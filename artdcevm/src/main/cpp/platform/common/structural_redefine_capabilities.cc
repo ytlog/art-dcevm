@@ -1,0 +1,51 @@
+#include "platform/common/structural_redefine_internal.h"
+
+#include "platform/common/interface_dispatch.h"
+#include "support/json.h"
+
+namespace artdcevm::structural_redefine {
+using namespace detail;
+std::string Capabilities() {
+  Process* selected;
+  {
+    std::lock_guard<std::mutex> installation_lock(installation_mutex);
+    selected = process.get();
+  }
+  Process empty;
+  Process& state = selected ? *selected : empty;
+  std::lock_guard<std::mutex> lock(state.report_mutex);
+  const std::string supported = state.installed ? "true" : "false";
+  const bool methods = state.installed && state.capabilities.retirement;
+  const bool fields = methods && state.capabilities.field_retirement;
+  const std::string retirement = methods ? "true" : "false";
+  const std::string field_retirement = fields ? "true" : "false";
+  const auto interface_timing = state.interface_backend ? state.interface_backend->LastTiming() : interface_redefinition::Timing{};
+  // Both capability fields describe the same probe snapshot, including disablement.
+  const std::string interface_state = state.interface_backend ? state.interface_backend->RuntimeState() : state.interface_runtime;
+  const std::string dispatch_state = interface_dispatch::State();
+  return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
+      ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
+      ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
+          (methods && state.capabilities.superclass_change ? "true" : "false") +
+      ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
+      ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
+      ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +
+      ",\"jniRetirementGuards\":" +
+          std::to_string(member_retirement::JniRetirementGuardHits()) +
+      ",\"subclassLoadRetries\":" + std::to_string(state.subclass_retries.load()) +
+      ",\"interfaceRedefinition\":" + (state.installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
+      ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
+      ",\"interfaceAbstractMethodAddition\":" +
+          (state.installed && interface_state.rfind("verified: ", 0) == 0 &&
+           dispatch_state.rfind("verified: ", 0) == 0 && (state.interface_backend && state.interface_backend->AbstractLinkErrorsAvailable())
+               ? "true" : "false") +
+      ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(dispatch_state) +
+      ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +
+      ",\"interfaceSnapshotNanos\":" + std::to_string(interface_timing.snapshot_ns) +
+      ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +
+      ",\"memberDeletion\":" + field_retirement + ",\"memberTypeChange\":" + field_retirement +
+      ",\"hierarchyChange\":false,"
+      "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(state.diagnostic) +
+      ",\"lastRejection\":" + QuoteJsonMutf8(state.last_rejection) + "}";
+}
+}  // namespace artdcevm::structural_redefine

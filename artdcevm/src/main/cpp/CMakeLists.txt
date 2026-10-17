@@ -27,7 +27,10 @@ add_library(artdcevm SHARED
   platform/common/interface_admission.cc
   platform/common/interface_group_snapshot.cc
   platform/common/interface_allocation.cc
-  platform/common/structural_redefine_engine.cc)
+  platform/common/structural_redefine_engine.cc
+  platform/common/structural_redefine_route.cc
+  platform/common/structural_redefine_hooks.cc
+  platform/common/structural_redefine_capabilities.cc)
 target_compile_features(artdcevm PRIVATE cxx_std_17)
 option(ARTDCEVM_INTERFACE_ABORT_TESTS "Build app-owned interface abort tests" OFF)
 if(ARTDCEVM_INTERFACE_ABORT_TESTS)
