@@ -12,7 +12,7 @@
 - 退役依赖运行时探测确认 ART 的类布局声明；探测不通过的事务不允许退役，`capabilities()` 的 `memberMapping` 给出原因。
 - 增强范围是标准 `RedefineClasses`。标准入口的批次读取和事务执行已串行化；直接调用 ART 结构重定义扩展的并发事务不参与该保护。
 
-普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。Thread 探测已在 Android 13/API 33 和 Android 16/API 36 上做设备验证。Android 14/API 34 的 CMC 配置已通过普通与 CheckJNI 的完整普通类场景及 Thread 拒绝／GC 压力检查，CC 配置仍待验证；该结果未开放接口重定义。Android 11、12、15、17 只有源码声明与主机核对，尚无这项探测的设备验证。
+普通类的成员退役也依赖 Native 阶段对当前 ART Thread 声明与命名读屏障服务的探测。因此 `memberMapping` 的拒绝原因可能来自线程探测，也可能来自 Class 布局探测；映射不可用时保留原始安装原因。除既有 Android 13/API 33、Android 16/API 36 证据外，Android 11/API 30、Android 12/API 31、12L/API 32、Android 14/API 34、Android 15/API 35 和 Android 17/API 37 的 arm64 真机均已通过普通与 CheckJNI 的完整普通类场景及 Thread 拒绝／GC 压力检查，成员映射分别选择对应声明。Android 14、15 已分别覆盖实际 CC 和 CMC 配置；Android 17 已覆盖分代 CMC，CC 仍待验证。这些普通类结果未开放其他版本的接口重定义，也不代表所有 OEM 或 ART Mainline 模块均兼容。
 
 其他版本先通过 `tools/run-device-tests.py --scenario-group ordinary` 的完整普通类场景，以及 `InterfaceAbortInstrumentation` 的 `-e scenario ordinary` Thread 拒绝探测和 GC 压力检查；两者均须覆盖普通与 CheckJNI 模式。该模式保留普通类新增接口的场景，只跳过以接口为重定义目标的测试，不需要先开放接口准入。Android 14 及以上还须分别确认 CC 和 CMC 收集器的实际配置与运行结果；GC 次数或零次标记期间读取不能单独证明 CMC 覆盖。
 

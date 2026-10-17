@@ -260,11 +260,11 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 
 | 版本 | 准备与启用状态 | 启用前需要的验证 |
 | --- | --- | --- |
-| Android 11 / API 30 | 已准备，未启用；缺少 Thread 与接口设备验证 | arm64 可调试应用设备；先验证普通类，再确认安全取得 ART allocator 的命名服务或三参数数组分配包装器，验证 signed 根遍历、scope/holder、完整事务和失败清理 |
-| Android 12、12L / API 31–32 | 已准备，未启用；两 API 均缺少设备验证 | 分别需要 API 31、32 arm64 设备；先验证普通类，再确认必需命名分配服务可用，验证旧 Thread 排列和完整事务 |
-| Android 14 / API 34 | 普通类 CMC 已验证；CC 与接口待验，未启用 | Pixel 8 的 CMC 普通／CheckJNI 普通类场景、Thread 拒绝及 GC 压力通过，成员映射选择 android14；先补齐 CC，再验证 Thread deopt 字段、12 字节 scope、四标志 redefinition 和完整接口事务 |
-| Android 15 / API 35 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 35 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 16 字节 scope、三标志 redefinition、分离 Class 字段数组和完整事务 |
-| Android 17 / API 37 | 已准备，未启用；缺少 Thread 与接口设备验证 | API 37 arm64 设备；先分别验证 CC/CMC 下的普通类，再验证 tid/hash 复用槽、合并 Class 字段数组、映射与失败清理 |
+| Android 11 / API 30 | 普通类及 Thread 已真机验证；接口未启用 | Motorola G20 的普通／CheckJNI 完整普通类场景、Thread 拒绝及 GC 压力通过；仍需安全取得 ART allocator 的命名服务或三参数数组分配包装器，以及 signed 根遍历、scope/holder、完整接口事务和失败清理验证 |
+| Android 12、12L / API 31–32 | 两 API 的普通类及 Thread 已真机验证；接口未启用 | Pixel 6/API 31、Pixel 6a/API 32 的两模式第一阶段均通过；仍需确认必需命名分配服务，验证旧 Thread 排列所关联的 scope/holder 和完整接口事务 |
+| Android 14 / API 34 | 普通类 CC/CMC 已验证；接口待验，未启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 两模式第一阶段均通过，成员映射选择 android14；仍需验证 Thread deopt 字段、12 字节 scope、四标志 redefinition 和完整接口事务 |
+| Android 15 / API 35 | 普通类 CC/CMC 已验证；接口待验，未启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 两模式第一阶段均通过，成员映射选择 android15；仍需验证 16 字节 scope、三标志 redefinition、分离 Class 字段数组和完整接口事务 |
+| Android 17 / API 37 | 普通类分代 CMC 已验证；CC 与接口待验，未启用 | Pixel 11、Galaxy Z Fold8 的分代 CMC 两模式第一阶段均通过；仍需实际 CC 配置，以及 tid/hash 复用槽、合并 Class 字段数组、映射和接口失败清理验证 |
 
 上述设备验证均须覆盖普通与 CheckJNI 模式及全部探测、同批更新和失败恢复。平台 API 不能证明 ART 模块源码版本；Mainline 更新后的声明与服务仍须核对。逐套运行库的符号表、覆盖统计和采集细节仅保存在本地被忽略的 `assets/runtime_lib/README.md`；原始报告保存在 `build/evidence/`。
 
