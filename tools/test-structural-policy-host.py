@@ -101,7 +101,8 @@ void MappingRequirements() {
             next.methods[0].access = acc::kAccPublic;
             hierarchy.interface_copies.insert({"work", "()I"});
             mapping_change = true; break;
-          case 14: next.fields.push_back({"added", "J", acc::kAccPublic}); break;
+          case 14: next.fields.push_back({"added", "J", acc::kAccPublic});
+            mapping_change = interface_target; break;
           case 15: next.fields[0].access |= acc::kAccVolatile; break;
           case 16: next.methods[0].access |= acc::kAccSynchronized; break;
           case 17: next.interfaces.push_back("Lfixture/Added;");
@@ -149,7 +150,9 @@ void MappingRequirements() {
                 policy::Evaluate(before, incoming, hierarchy, instance_only).error != JVMTI_ERROR_NONE;
             Require(result.requires_member_mapping == legacy_requirement,
                     "mapping requirement differs from the legacy two-Evaluate formula");
-            Require(result.requires_member_mapping == mapping_change, "wrong mapping requirement");
+            // An interface accepts a field change only with the engine's mapping.
+            Require(result.requires_member_mapping == (mapping_change || (interface_target && (combination & 1))),
+                    "wrong mapping requirement");
           }
         }
       }
@@ -487,12 +490,59 @@ int main(int argc, char** argv) {
         auto removed = contract; removed.methods.pop_back();
         accept(removed, 1, kDeleted, "interface private instance method retirement must be accepted");
       }
-      // Virtual interface methods own iftable slots and still cannot retire.
+      // A retired abstract/default declaration takes its implementations'
+      // copies with it; a new signature is an addition with its own rules.
       for (size_t index : {size_t{0}, size_t{1}}) {
         auto removed = contract; removed.methods.erase(removed.methods.begin() + index);
-        reject(removed, kDeleted, "interface virtual method retirement must be rejected");
+        accept(removed, 1, kDeleted, "interface virtual method retirement must be accepted");
         auto resigned = contract; resigned.methods[index].descriptor = "(I)" + text;
-        reject(resigned, kDeleted, "interface virtual method signature change must be rejected");
+        accept(resigned, 1, kDeleted, "interface virtual method signature change must be accepted");
+        const auto obligations = policy::Evaluate(contract, resigned, hierarchy, members).interface_obligations;
+        Require(obligations == (index == 0 ? std::vector<policy::MemberKey>{{"name", "(I)" + text}}
+                                           : std::vector<policy::MemberKey>{}),
+                "a new abstract signature must carry its implementation obligation");
+      }
+      // abstract <-> default keeps the identity; a new abstract needs every
+      // implementation, a new default follows the added-default shadow rule.
+      {
+        auto abstracted = contract; abstracted.methods[1].access |= acc::kAccAbstract;
+        const auto pending = policy::Evaluate(contract, abstracted, hierarchy, members);
+        Require(pending.error == JVMTI_ERROR_NONE && pending.methods_structural &&
+                pending.requires_member_mapping &&
+                pending.interface_obligations == std::vector<policy::MemberKey>{{"label", "()" + text}},
+                "default made abstract must carry an implementation obligation");
+        auto no_dispatch = members; no_dispatch.interface_abstract_methods = false;
+        const auto denied = policy::Evaluate(contract, abstracted, hierarchy, no_dispatch);
+        Require(denied.error == kModifiers && denied.reason.find("IfTable accessor") != std::string::npos,
+                "default made abstract must fail closed without the dispatch probe");
+        auto defaulted = contract; defaulted.methods[0].access &= ~acc::kAccAbstract;
+        accept(defaulted, 0, kModifiers, "abstract made default must be accepted");
+        Require(policy::Evaluate(contract, defaulted, hierarchy, members).interface_obligations.empty(),
+                "abstract made default needs no obligation");
+        auto hidden = with({{"hidden", "()I", acc::kAccPublic | acc::kAccAbstract}});
+        auto shadowed = hidden; shadowed.methods.back().access = acc::kAccPublic;
+        const auto shadow = policy::Evaluate(hidden, shadowed, hierarchy, members);
+        Require(shadow.error == kModifiers && shadow.reason.find("Lfixture/Base;") != std::string::npos,
+                "abstract made default must not shadow a subtype method");
+        auto packaged = contract; packaged.methods[1].access = acc::kAccAbstract;
+        reject(packaged, kModifiers, "default made package-private abstract must be rejected");
+      }
+      // Interface statics evolve like class statics with the engine's mapping.
+      {
+        auto field = contract; field.fields.push_back({"TAG", text, acc::kAccPublic | acc::kAccStatic | acc::kAccFinal});
+        const auto added = policy::Evaluate(contract, field, hierarchy, members);
+        Require(added.error == JVMTI_ERROR_NONE && added.fields_structural && added.requires_member_mapping,
+                "interface field addition must be accepted with the mapping");
+        const auto retired = policy::Evaluate(field, contract, hierarchy, members);
+        Require(retired.error == JVMTI_ERROR_NONE && retired.retired_fields.size() == 1,
+                "interface field retirement must be accepted with the mapping");
+        auto changed = field; changed.fields[0].access &= ~acc::kAccFinal;
+        Require(policy::Evaluate(field, changed, hierarchy, members).error ==
+                JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED, "interface field modifier change must be rejected");
+        for (const auto& abilities : {body_only, unmapped})
+          Require(policy::Evaluate(contract, field, hierarchy, abilities).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
+                  "interface field change must keep its rejection without the ability");
       }
       for (const auto& name : {"more", "hidden"}) {
         auto candidate = with({{name, "()I", acc::kAccPublic | acc::kAccAbstract}});

@@ -146,7 +146,9 @@ The remaining commit cannot fail. `CollectNewFieldAndMethodMappings` only writes
 
 ## Interface member evolution
 
-On Android 13/API 33, Android 14/API 34, Android 15/API 35 and Android 16/API 36 arm64, interface targets with verified runtime declarations and member mapping support new public abstract and default methods, static methods at any access level (including synthetic methods), and private instance methods. Static/private methods can be deleted or change signature. Adding native or `<clinit>` methods rejects with 63; deleting or changing default/abstract signatures rejects with 67. Field, parent-interface and method-modifier changes still reject with 64, 66 and 71. Interfaces always use structural replacement; the engine enables `Abilities::interface_members` only when it owns member mapping.
+On Android 13/API 33, Android 14/API 34, Android 15/API 35 and Android 16/API 36 arm64, interface targets with verified runtime declarations and member mapping support new public abstract and default methods, static methods at any access level (including synthetic methods), and private instance methods. Any method can be deleted or change signature, an existing public instance method can switch between abstract and default, and static fields can be added, deleted or retyped. Adding native or `<clinit>` methods rejects with 63; field-modifier, parent-interface and other method-modifier changes still reject with 64, 66 and 71.
+
+A deleted default/abstract declaration retires through the ordinary mapping to itself. The copied defaults/mirandas that re-linked implementations no longer carry take the existing path that maps a vanished copy to its declaring class's canonical member; that canonical member is the retired old declaration, so DexCache entries are cleared, re-resolution throws `NoSuchMethodError`, and the existing guards reject JNI, reflection and MethodHandle access. A default made abstract reuses the pending conditions and IfTable acceptance of abstract additions; an abstract made default reuses the `subtype_shadows` check of default additions, and the mapping plan still rejects conflicts. Fields reuse ordinary field retirement and static-field copying; interfaces are initialized at admission, so added statics keep default values. Interfaces always use structural replacement; the engine enables `Abilities::interface_members` only when it owns member mapping.
 
 The existing interface group is reused: ART re-links the interface, loaded subinterfaces, implementations and their subclasses. An implementation without submitted DEX keeps its original DEX and a private DexCache and still receives copied defaults. New declarations have no old mapping entry. Public class implementations take precedence; a more specific subinterface overrides its parent, and a miranda can become a default copy. ART continues to perform all instance migration, reference rewriting, deoptimization and cache invalidation.
 
@@ -183,10 +185,9 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 | Change | Result |
 | --- | --- |
 | Interface target method-body edits | Accepted with verified interface runtime and member mapping |
-| Interface target new public abstract/default/static methods and private instance methods; static/private deletion or signature change | Accept with verified member mapping and interface runtime, subject to inherited/shadow/default-conflict and abstract-dispatch checks |
+| Interface target new public abstract/default/static methods and private instance methods; deletion or signature change of any method; public instance abstract ↔ default; static field additions, deletions or type changes | Accept with verified member mapping and interface runtime, subject to inherited/shadow/default-conflict and abstract-dispatch checks |
 | Interface target new native/`<clinit>` methods; abstract additions without valid dispatch or a verified IfTable accessor; direct-method hiding or default conflicts | Reject `METHOD_ADDED` (63) |
-| Interface target default/abstract deletion or signature change | Reject `METHOD_DELETED` (67) |
-| Interface target field changes; method modifiers; parent interfaces; class modifiers | Reject `SCHEMA_CHANGED` (64), `METHOD_MODIFIERS_CHANGED` (71), `HIERARCHY_CHANGED` (66), and `CLASS_MODIFIERS_CHANGED` (70), respectively |
+| Interface target field modifiers; method modifiers other than abstract ↔ default; parent interfaces; class modifiers | Reject `SCHEMA_CHANGED` (64), `METHOD_MODIFIERS_CHANGED` (71), `HIERARCHY_CHANGED` (66), and `CLASS_MODIFIERS_CHANGED` (70), respectively |
 | Unavailable interface runtime capability (unsupported version, named service or probe) | Reject `NOT_AVAILABLE` (98); declaration changes use the standard errors above |
 | Add fields or methods | Accept |
 | Change existing members' access, final, volatile, transient or synchronized flags, except making an instance method private; Java → native; abstract ↔ concrete | Accept |
@@ -195,7 +196,7 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 | native → Java | Accept when retirement is available; the engine handles JNI-entry copying. Otherwise reject with 71 |
 | Switch a method between static and instance, make an instance method private, or re-add a retired method as another invoke kind | Reject with 71; see [invoke kinds stay fixed](#invoke-kinds-stay-fixed) |
 | Change a method's varargs or strict flags | Reject with 71 |
-| Delete methods or change signatures, including native, abstract, constructors and class initializers | Accept when retirement is available; otherwise reject with `METHOD_DELETED` (67); interface default/abstract methods always reject |
+| Delete methods or change signatures, including native, abstract, constructors and class initializers | Accept when retirement is available; otherwise reject with `METHOD_DELETED` (67) |
 | Delete fields or change their types or static flags | Accept when retirement and field guards are available; otherwise reject with `SCHEMA_CHANGED` (64) |
 | Change class visibility, final, abstract, synthetic or InnerClass flags | Accept through the structural path. Adding final with a loaded subclass rejects with `CLASS_MODIFIERS_CHANGED` (70); adding abstract while the class itself has instances rejects with 70 after `CollectAndCreateNewInstances` |
 | Switch a class between class, interface, annotation and enum kinds | Reject with 70 |

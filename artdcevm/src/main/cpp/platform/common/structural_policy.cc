@@ -195,6 +195,31 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
                   "added default method may change calls resolved by " + shadow->second + ": " + method);
   return {};
 }
+// A public interface instance method may switch between abstract and default.
+// A new default is an added default for every implementation; a new abstract
+// declaration needs a concrete implementation in every loaded implementation.
+Decision CheckInterfaceKindChange(const MemberKey& key, uint32_t before, uint32_t after,
+                                  const LoadedHierarchy& hierarchy, bool supported, const Abilities& abilities) {
+  const std::string method = key.first + key.second;
+  if (!supported || (before ^ after) != acc::kAccAbstract || !Virtual(before) || !(before & acc::kAccPublic))
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                  "interface redefinition does not support method modifier changes: " + method);
+  if (after & acc::kAccAbstract) {
+    if (!abilities.interface_abstract_methods)
+      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                    "interface method made abstract requires a verified IfTable accessor: " + method +
+                        (abilities.interface_abstract_unavailable_reason.empty() ? ""
+                         : "; " + abilities.interface_abstract_unavailable_reason));
+    Decision pending;
+    pending.interface_obligations.push_back(key);
+    return pending;
+  }
+  const auto shadow = hierarchy.subtype_shadows.find(key);
+  if (shadow != hierarchy.subtype_shadows.end())
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                  "interface method made default may change calls resolved by " + shadow->second + ": " + method);
+  return {};
+}
 }  // namespace
 
 
@@ -250,7 +275,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   for (const auto& old : live.fields) {
     auto it = new_fields.find({old.name, old.descriptor, old.IsStatic()});
     if (it == new_fields.end()) {
-      if (interface_target || !(owns_member_mapping && retires_fields))
+      if (!(owns_member_mapping && retires_fields) || (interface_target && !interface_members))
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                       "field removed or its type/storage changed: " + old.name + ":" + old.descriptor);
       decision.fields_structural = true;
@@ -266,9 +291,12 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     new_fields.erase(it);
   }
   if (!new_fields.empty()) {
-    if (interface_target)
+    // An interface is initialized before its redefinition, so an added static
+    // starts from its default value; ART never runs an added initializer.
+    if (interface_target && !interface_members)
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                     "interface redefinition does not support added fields");
+    if (interface_target) decision.requires_member_mapping = true;
     decision.fields_structural = true;
   }
 
@@ -280,8 +308,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       if (!owns_member_mapping)
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
                       "unsupported method retirement: " + Describe(old));
-      // An interface's virtual methods own iftable slots in every implementation.
-      if (interface_target && (!interface_members || Virtual(old.access)))
+      // A retired default/abstract declaration also retires the copies its
+      // re-linked implementations no longer carry; their slots go with it.
+      if (interface_target && !interface_members)
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_DELETED,
                       "unsupported interface method retirement: " + Describe(old));
       decision.methods_structural = true;
@@ -291,9 +320,14 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     }
     const uint32_t now = it->second;
     const uint32_t changed = old.access ^ now;
-    if (interface_target && changed)
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
-                    "interface redefinition does not support method modifier changes: " + Describe(old));
+    if (interface_target && changed) {
+      Decision kind = CheckInterfaceKindChange({old.name, old.descriptor}, old.access, now, hierarchy,
+                                               interface_members, abilities);
+      if (kind.error != JVMTI_ERROR_NONE) return kind;
+      decision.requires_member_mapping = true;
+      decision.interface_obligations.insert(decision.interface_obligations.end(),
+          kind.interface_obligations.begin(), kind.interface_obligations.end());
+    }
     if (BreaksVerifiedCallers(old.name, old.access, now))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "verified callers may still invoke the old kind of " + Describe(old));

@@ -20,7 +20,7 @@ ART DCEVM enhances class redefinition on Android. It replaces Java method implem
 
 Dropping existing supertypes, switching a method’s static/instance invoke kind, making a virtual method private, and changing class/interface/annotation/enum kind are unsupported. `RetransformClasses` is outside scope, and cached raw field offsets are not protected. See [LIMITATIONS.en.md](docs/LIMITATIONS.en.md) for complete restrictions, rejection codes and semantics.
 
-On Android 13–16 / API 33–36, interface targets support default/static/private body edits, new public abstract/default/static methods and private instance methods, and static/private deletion or signature changes. They can share atomic batches with related implementations, subclasses or unrelated classes. Every transaction checks its conditions; even body-only edits rebuild affected instances while retaining compatible fields. See [redefining interfaces](docs/LIMITATIONS.en.md#redefining-interfaces).
+On Android 13–16 / API 33–36, interface targets support default/static/private body edits, new public abstract/default/static methods and private instance methods, deletion or signature changes of any method, abstract/default switches, and static field changes. They can share atomic batches with related implementations, subclasses or unrelated classes. Every transaction checks its conditions; even body-only edits rebuild affected instances while retaining compatible fields. See [redefining interfaces](docs/LIMITATIONS.en.md#redefining-interfaces).
 
 ## Quick start
 

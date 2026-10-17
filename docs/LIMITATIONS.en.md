@@ -22,22 +22,24 @@ Member retirement also requires Native-phase thread and named read-barrier check
 
 ## Redefining interfaces
 
-Interface targets support body edits to default, static and private methods, new public abstract/default/static methods and private instance methods, and deletion or signature changes of static/private methods. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
+Interface targets support body edits to default, static and private methods, new public abstract/default/static methods and private instance methods, deletion or signature changes of any method including default/abstract ones, switching an existing public instance method between abstract and default, and adding, deleting or retyping static fields. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
 
 This capability is available only on Android 13 (API 33), Android 14 (API 34), Android 15 (API 35) and Android 16 (API 36) arm64 devices. Other versions disable it with a reason in `capabilities()`. Runtime declarations must still pass probes; a version number alone does not establish availability.
 
 | Rejection for interface targets | JVMTI error code |
 | --- | --- |
 | Adding native or `<clinit>` methods; abstract additions without a valid implementation or with an unverified IfTable accessor; hiding an inherited interface/Object method with a direct method; a default shadowing static/non-public class-chain methods or introducing a default conflict | `METHOD_ADDED` (63) |
-| Deleting or changing signatures of default/abstract methods | `METHOD_DELETED` (67) |
-| Changing fields | `SCHEMA_CHANGED` (64) |
-| Changing method modifiers | `METHOD_MODIFIERS_CHANGED` (71) |
+| Deleting or changing method signatures without member mapping | `METHOD_DELETED` (67) |
+| Field modifier changes; field additions, deletions or type changes without member mapping | `SCHEMA_CHANGED` (64) |
+| Method modifier changes other than abstract/default switches; switching to abstract without a verified IfTable accessor; switching to default where it would shadow static/non-public class-chain methods | `METHOD_MODIFIERS_CHANGED` (71) |
 | Changing parent interfaces | `HIERARCHY_CHANGED` (66) |
 | Changing class modifiers | `CLASS_MODIFIERS_CHANGED` (70) |
 | Interface groups with intersecting subtypes (including unrelated interfaces sharing an implementation), or a structurally edited superclass outside the group, merge into one rebuild in which no structural target's instances cover every concrete member | `HIERARCHY_CHANGED` (66) |
 | An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |
 | A boot interface, a Proxy implementation, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
+
+A deleted default/abstract method retires like an ordinary-class method: bytecode calls through the interface or an implementation, cached reflection, JNI and MethodHandle throw `NoSuchMethodError`, while a same-named method declared by an implementation stays. A signature change retires the old signature and adds the new one. Switching a default to abstract requires, like an abstract addition, a valid implementation in every loaded concrete implementation, otherwise 63; switching abstract to default gives implementations without their own declaration a copied default. The interface is initialized before redefinition, so an added static field keeps its default value and ART does not run an initializer again; callers usually inline constant expressions.
 
 `lastRejection` names the rejected class and reason; failure preserves old behavior. A new default is available to existing instances, even when no implementation DEX was submitted; public class methods and more specific subinterfaces retain precedence. Static/private retirement uses the same bytecode, JNI, reflection and MethodHandle semantics as ordinary classes. Conflict rejections name the implementation and method. Inserting lambdas may renumber synthetic classes; the reload tool must isolate old closures or retain their old bridges, as for ordinary classes. See [interface member evolution](STRUCTURAL_REDEFINE_ENGINE.en.md#interface-member-evolution).
 

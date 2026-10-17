@@ -10,6 +10,7 @@ import android.os.Process;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.InterfaceMethodFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
+import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -922,10 +923,11 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             System.gc(); System.runFinalization(); System.gc();
             scenario.check("afterGc", 42, contract.value());
         });
-        String[] rejectedVariants = {"add", "delete", "signature", "field", "modifiers", "parents"};
-        int[] rejectedCodes = {63, 67, 67, 64, 71, 66};
-        String[] reasons = {"has no concrete public implementation", "method retirement", "method retirement",
-                "added fields", "method modifier changes", "parent changes"};
+        String[] rejectedVariants = {"add", "modifiers", "parents"};
+        int[] rejectedCodes = {63, 63, 66};
+        // Implementation inherits value(): an abstract value() lacks its implementation.
+        String[] reasons = {"has no concrete public implementation", "has no concrete public implementation",
+                "parent changes"};
         String schema = memberSchema(NestedInterfaceHost.Contract.class);
         for (int i = 0; i < rejectedVariants.length; ++i) {
             String variant = "nested-interface-" + rejectedVariants[i];
@@ -945,6 +947,56 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                         DcevmRuntime.capabilities().getString("interfaceRuntime").startsWith("verified: "));
             });
         }
+        // Member evolution of the default: each step is restored to value() == 42.
+        Method cachedValue = NestedInterfaceHost.Contract.class.getMethod("value");
+        runScenario("nested-interface-signature", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-signature");
+            Method resigned = NestedInterfaceHost.Contract.class.getMethod("value", int.class);
+            scenario.check("newSignature", 45, resigned.invoke(contract, 1));
+            scenario.check("newSignatureVirtual", 46, resigned.invoke(instance, 2));
+            scenario.expectError("oldInterfaceCall", NoSuchMethodError.class, contract::value);
+            scenario.expectError("oldVirtualCall", NoSuchMethodError.class, instance::value);
+            scenario.expectError("oldReflection", NoSuchMethodError.class, () -> cachedValue.invoke(contract));
+            scenario.check("marker", 73, instance.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("newSignatureAfterGc", 45, resigned.invoke(contract, 1));
+        });
+        runScenario("nested-interface-restore-signature", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-body");
+            scenario.check("restored", 42, contract.value());
+            scenario.check("restoredVirtual", 42, instance.value());
+            scenario.expectError("retiredReflection", NoSuchMethodError.class, () -> cachedValue.invoke(contract));
+            scenario.check("marker", 73, instance.marker);
+        });
+        runScenario("nested-interface-delete", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-delete");
+            scenario.check("declaredMethods", 0, NestedInterfaceHost.Contract.class.getDeclaredMethods().length);
+            scenario.expectError("interfaceCall", NoSuchMethodError.class, contract::value);
+            scenario.expectError("virtualCall", NoSuchMethodError.class, instance::value);
+            scenario.expectError("newInstanceCall", NoSuchMethodError.class,
+                    () -> new NestedInterfaceHost.Implementation().value());
+            scenario.check("marker", 73, instance.marker);
+        });
+        runScenario("nested-interface-restore-delete", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-body");
+            scenario.check("restored", 42, contract.value());
+            scenario.check("restoredVirtual", 42, instance.value());
+            scenario.check("restoredNew", 42, new NestedInterfaceHost.Implementation().value());
+            scenario.check("marker", 73, instance.marker);
+        });
+        runScenario("nested-interface-field", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-field");
+            // The interface was initialized before redefinition: the added static keeps its default.
+            scenario.check("addedField", 0, NestedInterfaceHost.Contract.class.getField("added").getInt(null));
+            scenario.check("value", 44, contract.value());
+            scenario.check("marker", 73, instance.marker);
+        });
+        runScenario("nested-interface-restore-field", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NestedInterfaceHost.Contract.class}, "nested-interface-body");
+            scenario.check("fieldRetired", 0, NestedInterfaceHost.Contract.class.getFields().length);
+            scenario.check("restored", 42, contract.value());
+            scenario.check("marker", 73, instance.marker);
+        });
         CopiedChild child = new CopiedChild();
         CopiedDefault topLevel = child;
         runScenario("interface-after-nested", 0, scenario -> {
@@ -953,6 +1005,46 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("nestedDispatch", 42, contract.value());
             scenario.check("runtimeAvailable", true,
                     DcevmRuntime.capabilities().getString("interfaceRuntime").startsWith("verified: "));
+        });
+        runInterfaceKindScenarios();
+    }
+
+    // abstract <-> default keeps the method identity.
+    private void runInterfaceKindScenarios() throws Exception {
+        InterfaceKindFixture.Concrete concrete = new InterfaceKindFixture.Concrete();
+        InterfaceKindFixture.Contract contract = concrete;
+        concrete.marker = 7;
+        runScenario("interface-kind-default", 0, scenario -> {
+            scenario.check("requiredBefore", 41, contract.required());
+            // Moving an implementation into a new default is one atomic batch.
+            scenario.redefine(new Class<?>[]{InterfaceKindFixture.Concrete.class, InterfaceKindFixture.Contract.class},
+                    "interface-kind-default", "interface-kind-default");
+            scenario.check("required", 12, contract.required());
+            scenario.check("virtualRequired", 12, concrete.required());
+            scenario.check("newRequired", 12, new InterfaceKindFixture.Concrete().required());
+            scenario.check("optional", 11, contract.optional());
+            scenario.check("defaultFlag", true, InterfaceKindFixture.Contract.class.getMethod("required").isDefault());
+            scenario.check("marker", 7, concrete.marker);
+        });
+        runScenario("interface-kind-abstract-missing", 63, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceKindFixture.Contract.class}, "interface-kind-abstract-missing");
+            scenario.check("rejectionReason", true,
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("has no concrete public implementation"));
+            scenario.check("optionalUnchanged", 11, contract.optional());
+            scenario.check("defaultUnchanged", true, InterfaceKindFixture.Contract.class.getMethod("optional").isDefault());
+            scenario.check("marker", 7, concrete.marker);
+        });
+        runScenario("interface-kind-abstract", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceKindFixture.Contract.class, InterfaceKindFixture.Concrete.class},
+                    "interface-kind-abstract", "interface-kind-abstract");
+            scenario.check("optional", 51, contract.optional());
+            scenario.check("virtualOptional", 51, concrete.optional());
+            scenario.check("abstractFlag", true,
+                    Modifier.isAbstract(InterfaceKindFixture.Contract.class.getMethod("optional").getModifiers()));
+            scenario.check("required", 12, contract.required());
+            scenario.check("marker", 7, concrete.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("optionalAfterGc", 51, contract.optional());
         });
     }
 
