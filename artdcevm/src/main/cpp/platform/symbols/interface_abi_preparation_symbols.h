@@ -6,7 +6,14 @@ namespace artdcevm::symbols::interface_abi_preparation {
 // android-11.0.0_r1 thread.h: pid_t thread_id, rather than uint32_t since 12.
 inline constexpr NamedSymbol kHandleScopeVisitRootsSigned{Library::kArt,
     "_ZN3art6Thread21HandleScopeVisitRootsEPNS_11RootVisitorEi", SymbolTable::kAnyNamed};
-// Older array allocation declarations also require ART's current AllocatorType.
+// Historical allocation names only. The backend prepares JNI arrays while
+// Native and no longer calls these wrappers or chooses ART's allocator.
+inline constexpr NamedSymbol kObjectArrayAlloc{Library::kArt,
+    "_ZN3art6mirror11ObjectArrayINS0_6ObjectEE5AllocEPNS_6ThreadENS_6ObjPtrINS0_5ClassEEEi",
+    SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kClassArrayAlloc{Library::kArt,
+    "_ZN3art6mirror11ObjectArrayINS0_5ClassEE5AllocEPNS_6ThreadENS_6ObjPtrIS2_EEi",
+    SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kObjectArrayAllocWithAllocator{Library::kArt,
     "_ZN3art6mirror11ObjectArrayINS0_6ObjectEE5AllocEPNS_6ThreadENS_6ObjPtrINS0_5ClassEEEiNS_2gc13AllocatorTypeE",
     SymbolTable::kAnyNamed};

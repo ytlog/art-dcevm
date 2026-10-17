@@ -22,6 +22,7 @@
 #include "platform/common/art_hook.h"
 #include "platform/common/class_layout.h"
 #include "platform/common/interface_snapshot.h"
+#include "platform/common/interface_array_roots.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -40,13 +41,12 @@ using LookupCache = void* (*)(void*, TypeIndex, void*, void*);
 using LookupChars = void* (*)(void*, void*, const char*, void*);
 using LookupView = void* (*)(void*, void*, std::string_view, void*);
 using CacheAlloc = void* (*)(ClassRedefinitionPrefix*, Handle);
-using ArrayAlloc = ObjectArray* (*)(void*, void*, int32_t);
 using SetCache = void (*)(void*, void*);
 using Allocate = void* (*)(ClassRedefinitionPrefix*, Handle, Handle, Handle, uint16_t);
 LookupChars lookup_chars = nullptr;
 LookupView lookup_view = nullptr;
 CacheAlloc allocate_cache = nullptr;
-ArrayAlloc allocate_array = nullptr;
+ClassArrayRoots::DecodeGlobal decode_global = nullptr;
 SetCache set_cache = nullptr;
 Allocate allocate_class = nullptr;
 void* original_lookup_referrer = nullptr;
@@ -73,7 +73,7 @@ void Disable(const char* reason) noexcept {
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", reason);
 }
 
-struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; jclass owner = nullptr; };
+struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; jclass owner = nullptr; std::unique_ptr<ClassArrayRoots> arrays; };
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
 // every linked replacement reachable until the result is known, including
 // partially completed allocations that never reach the holder's new_classes.
@@ -89,7 +89,7 @@ struct Linking {
 struct State final : transaction::Part {
   State(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions)
       : jni(jni), env(env), batch_size(count), definitions(definitions) {}
-  ~State() override { if (array_class) jni->DeleteLocalRef(array_class); }
+  ~State() override { if (class_class) jni->DeleteLocalRef(class_class); }
   std::vector<Target> targets;
   JNIEnv* jni;
   jvmtiEnv* env;
@@ -101,7 +101,8 @@ struct State final : transaction::Part {
   const RuntimeThread* thread_layout = nullptr;
   bool runtime_verified = false;
   int selected_release = 0;
-  jclass array_class = nullptr;
+  JavaVM* vm = nullptr;
+  jclass class_class = nullptr;
   std::vector<jclass> shared_ancestors;
   const Target* rejected_target = nullptr;
   const char* rejection = nullptr;
@@ -601,7 +602,7 @@ bool AllocateInterface(ClassRedefinitionPrefix* self, RedefinitionDataIter* data
   State* state = CurrentState();
   const InterfaceRuntime& runtime = *state->runtime;
   Attempt* attempt = state->attempt;
-  if (!state->array_class || !attempt || attempt->driver != self->driver)
+  if (!attempt || attempt->driver != self->driver)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface redefinition requires private array roots");
   const auto reject_holder = [&](const char* reason) {
     Disable(reason);
@@ -618,25 +619,27 @@ ARTDCEVM_TEST(
   verified_release.store(state->selected_release);
   const Target* target = Find(mirror_class(self));
   if (!target) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target unavailable");
+  if (!target->arrays)
+    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface private arrays were not prepared while Native");
   const auto& ordered = target->snapshot.types;
   if (ordered.empty() || Decode(ordered.front()) != mirror_class(self))
     return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target is missing or not first");
   for (jclass klass : ordered)
     if (Status(Decode(klass)) < ClassStatus::kResolved)
       return FailAllocation(self, JVMTI_ERROR_INVALID_CLASS, "interface snapshot contains an unresolved class");
-  if (ordered.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max() - 7))
+  constexpr int32_t kExtraRoots = 6;
+  if (ordered.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max() - kExtraRoots))
     return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition has too many types to root");
   void* thread = self->driver->self;
   if (thread != runtime_thread::Current(Thread()))
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface transaction thread mismatch");
-  Roots roots(thread, ordered.size() + 7);
+  Roots roots(thread, ordered.size() + kExtraRoots);
   std::vector<Handle> old_types;
   for (jclass klass : ordered) old_types.push_back(roots.Add(Decode(klass)));
-  Handle array_class = roots.Add(Decode(state->array_class));
-  Handle old_array = roots.Add(allocate_array(thread, array_class.Get<void>(), static_cast<int32_t>(ordered.size())));
-  if (!old_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition old array allocation failed");
-  Handle new_array = roots.Add(allocate_array(thread, array_class.Get<void>(), static_cast<int32_t>(ordered.size())));
-  if (!new_array.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition new array allocation failed");
+  Handle old_array = roots.Add(target->arrays->Old(decode_global));
+  Handle new_array = roots.Add(target->arrays->New(decode_global));
+  if (!old_array.Get<void>() || !new_array.Get<void>())
+    return reject_holder("interface private array global reference decode failed");
   Assign(ReplacementRoot(*target), new_array.Get<void>());
   for (Handle array : {old_array, new_array})
     if (array.Get<ObjectArray>()->length != static_cast<int32_t>(ordered.size()))
@@ -853,14 +856,14 @@ ARTDCEVM_TEST(
     const bool boot = !loader;
     if (loader) jni->DeleteLocalRef(loader);
     if (status_result != JVMTI_ERROR_NONE) continue;
-    next->targets.push_back({klass, boot, status, {}, {}, nullptr});
+    next->targets.push_back({klass, boot, status, {}, {}, nullptr, nullptr});
   }
-  if (!next->targets.empty() && runtime_thread::Ready() && jni->EnsureLocalCapacity(8) == JNI_OK) {
-    jclass class_class = jni->FindClass("java/lang/Class");
-    jobjectArray array = class_class ? jni->NewObjectArray(0, class_class, nullptr) : nullptr;
-    if (array) next->array_class = jni->GetObjectClass(array);
+  if (!next->targets.empty() && jni->EnsureLocalCapacity(8) == JNI_OK) {
+    if (jni->GetJavaVM(&next->vm) == JNI_OK)
+      next->class_class = jni->FindClass("java/lang/Class");
+    // Resolve Class[] before the subclass-load watch starts.
+    jobjectArray array = next->class_class ? jni->NewObjectArray(0, next->class_class, nullptr) : nullptr;
     if (array) jni->DeleteLocalRef(array);
-    if (class_class) jni->DeleteLocalRef(class_class);
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
 }
@@ -985,6 +988,23 @@ ARTDCEVM_TEST(
     *error = "interface snapshot local reference reservation failed";
     return JVMTI_ERROR_OUT_OF_MEMORY;
   }
+  for (auto& target : next->targets) {
+    if (!next->jni->IsSameObject(target.owner, target.klass)) continue;
+    if (!next->vm || !next->class_class) {
+      *error = target.live.descriptor + ": interface private array JNI services unavailable";
+      return JVMTI_ERROR_NOT_AVAILABLE;
+    }
+    if (target.snapshot.types.size() > static_cast<size_t>(std::numeric_limits<jsize>::max())) {
+      *error = target.live.descriptor + ": interface private arrays are too large";
+      return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    target.arrays = ClassArrayRoots::Create(next->jni, next->vm, next->class_class,
+                                           static_cast<jsize>(target.snapshot.types.size()));
+    if (!target.arrays) {
+      *error = target.live.descriptor + ": interface private array allocation failed while Native";
+      return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+  }
   if (!next->targets.empty())
     timing.snapshot_ns = loaded_ns + std::chrono::duration_cast<std::chrono::nanoseconds>(
         std::chrono::steady_clock::now() - start).count();
@@ -1029,8 +1049,7 @@ void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* no
   new_local_ref = reinterpret_cast<decltype(new_local_ref)>(symbols::Find(kNewLocalRef));
   delete_local_ref = reinterpret_cast<decltype(delete_local_ref)>(symbols::Find(kDeleteLocalRef));
   allocate_cache = reinterpret_cast<CacheAlloc>(symbols::Find(kCreateNewDexCache));
-  allocate_array = reinterpret_cast<ArrayAlloc>(symbols::Find(kClassArrayAlloc));
-  if (!allocate_array) allocate_array = reinterpret_cast<ArrayAlloc>(symbols::Find(kObjectArrayAlloc));
+  decode_global = reinterpret_cast<ClassArrayRoots::DecodeGlobal>(symbols::Find(kDecodeGlobal));
   set_cache = reinterpret_cast<SetCache>(symbols::Find(kSetDexCache));
   allocate_class = reinterpret_cast<Allocate>(symbols::Find(symbols::structural::kAllocateNewClassObject));
   lookup_chars = reinterpret_cast<LookupChars>(symbols::Find(kLookupClassChars));
@@ -1042,7 +1061,7 @@ void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* no
   void* link_class = symbols::Find(kLinkClass);
   set_status_internal = reinterpret_cast<decltype(set_status_internal)>(symbols::Find(kSetStatusInternal));
   if (!services.runtime_thread || !visit_handle_roots || !mirror_class || !find_instance_field || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
-      !allocate_cache || !allocate_array || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) ||
+      !allocate_cache || !decode_global || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) ||
       !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
     reject("interface redefinition named services unavailable");
     return;

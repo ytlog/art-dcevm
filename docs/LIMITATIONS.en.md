@@ -22,6 +22,8 @@ Interface targets support body edits to default, static and private methods, new
 
 This capability is available only on Android 13 (API 33), Android 14 (API 34), Android 15 (API 35) and Android 16 (API 36) arm64 devices. Other versions disable it with a reason in `capabilities()`. Runtime declarations must still pass probes; a version number alone does not establish availability.
 
+Interface groups preallocate their old/new class arrays through Native JNI and retain global references, decoded through a named service during ART allocation. Missing private array-allocation wrappers on the tested Android 11/12 runtimes no longer block this path. Their scope/holder, full interface transactions and failure recovery still require device validation, so both releases remain prepared-only. Offline symbol coverage cannot replace those checks.
+
 `capabilities()` reads the latest probe state without running probes. For `interfaceRuntime`, `unavailable` means the interface runtime is unavailable; `disabled: reason` means it has been disabled, for example because the version, required services or runtime declarations do not match. Interface targets return 98 in either state. `unverified: …` means transaction-time probes have not completed, and `verified: …` means they have passed. After initialization and before an interface transaction completes the runtime probes, `interfaceRedefinition` is false. `unverified` does not mean unsupported and should not block the first transaction. Passing probes does not guarantee acceptance of every edit; the actual transaction result and `lastRejection` remain the final authority.
 
 | Rejection for interface targets | JVMTI error code |

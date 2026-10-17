@@ -110,8 +110,6 @@ def main():
     report = audit.collect_report(args.runtime_lib.resolve(), catalog + extra + shared, combined_hash)
     alternatives = [('kCanNormal', 'kGetNormal'), ('kCanStructural', 'kGetStructural'),
                     ('kLookupClassChars', 'kLookupClassView'),
-                    ('kObjectArrayAlloc', 'kClassArrayAlloc', 'kObjectArrayAllocWithAllocator',
-                     'kClassArrayAllocWithAllocator'),
                     ('kHandleScopeVisitRoots', 'kHandleScopeVisitRootsSigned')]
     optional = {name for group in alternatives for name in group}
     # Only abstract additions on ART 13/14 need this early link-error service.
@@ -119,11 +117,19 @@ def main():
     non_public = ('kThrowNonPublicGlobal', 'kThrowNonPublicLocal', 'kThrowNonPublicUnique')
     optional.update(non_public)
     optional.add('kUseReadBarrier')
+    legacy_allocators = ('kObjectArrayAlloc', 'kClassArrayAlloc',
+                         'kObjectArrayAllocWithAllocator', 'kClassArrayAllocWithAllocator')
+    optional.update(legacy_allocators)
     rows = {}
     for runtime in report['sets']:
         api = int(runtime['label'].split('/')[0].split('-')[1])
         entries = {entry['id']: entry['present'] for entry in runtime['catalog']}
         runtime['nonPublicImplementationLinkError'] = any(entries.get(name) for name in non_public)
+        runtime['arrayAllocation'] = {
+            'strategy': 'Native JNI arrays held by global references',
+            'decodeGlobalAvailable': entries['kDecodeGlobal'],
+            'historicalWrappers': [name for name in legacy_allocators if entries.get(name)],
+            'allocatorSelectionRequired': False}
         missing = [name for name in entries if name not in optional and not entries[name]]
         missing += ['/'.join(group) for group in alternatives if not any(entries.get(name) for name in group)]
         runtime['sourcePreparationMissingServices'] = missing

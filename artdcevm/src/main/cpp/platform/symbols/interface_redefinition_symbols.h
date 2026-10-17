@@ -19,8 +19,7 @@ inline constexpr NamedSymbol kLookupCache{Library::kArt, "_ZN3art11ClassLinker20
 inline constexpr NamedSymbol kLookupClassChars{Library::kArt, "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadEPKcNS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
 inline constexpr NamedSymbol kLookupClassView{Library::kArt, "_ZN3art11ClassLinker11LookupClassEPNS_6ThreadENSt3__117basic_string_viewIcNS3_11char_traitsIcEEEENS_6ObjPtrINS_6mirror11ClassLoaderEEE"};
 inline constexpr NamedSymbol kSetDexCache{Library::kArt, "_ZN3art6mirror5Class11SetDexCacheENS_6ObjPtrINS0_8DexCacheEEE"};
-inline constexpr NamedSymbol kObjectArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_6ObjectEE5AllocEPNS_6ThreadENS_6ObjPtrINS0_5ClassEEEi", SymbolTable::kAnyNamed};
-inline constexpr NamedSymbol kClassArrayAlloc{Library::kArt, "_ZN3art6mirror11ObjectArrayINS0_5ClassEE5AllocEPNS_6ThreadENS_6ObjPtrIS2_EEi", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kDecodeGlobal{Library::kArt, "_ZN3art9JavaVMExt12DecodeGlobalEPv", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kRun{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner3RunEv"};
 inline constexpr NamedSymbol kLinkClass{Library::kArt, "_ZN3art11ClassLinker9LinkClassEPNS_6ThreadEPKcNS_6HandleINS_6mirror5ClassEEENS5_INS6_11ObjectArrayIS7_EEEEPNS_13MutableHandleIS7_EE"};
 // ART 13 rejects a non-public implementation while linking (NO_INLINE in
