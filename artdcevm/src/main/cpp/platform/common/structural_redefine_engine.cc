@@ -38,19 +38,6 @@ using Entry = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 using Check = bool (*)(ClassRedefinitionPrefix*);
 using Record = void (*)(ClassRedefinitionPrefix*);
 
-JavaVM* runtime_vm = nullptr;
-jvmtiEnv* snapshot_env = nullptr;
-Entry structural_entry = nullptr;
-Record record_field = nullptr;
-Record record_method = nullptr;
-void* original_entry = nullptr;
-void* original_class = nullptr;
-void* original_fields = nullptr;
-void* original_methods = nullptr;
-void* original_instances = nullptr;
-void* original_allocate = nullptr;
-class_layout::Services layout_services{};
-// Filled only by Install. Per-transaction probes further restrict these abilities.
 struct ProcessCapabilities {
   bool runtime_thread = false;
   bool member_mapping = false;
@@ -61,21 +48,52 @@ struct ProcessCapabilities {
   bool instance_check = false;
   bool subclass_watch = false;
 };
-ProcessCapabilities capabilities;
-std::vector<void*> hook_tokens;
-// ART takes its own redefinition lock after our Native-state snapshots.
-// Keep snapshots and the transaction together so another routed batch cannot
-// validate against an older definition while waiting for ART's lock.
-std::recursive_mutex transaction_mutex;
-std::mutex report_mutex;
-bool installed = false;
-std::string diagnostic = "engine not installed";
-std::string last_rejection;
+struct RetiredKinds {
+  jobject klass;
+  structural_policy::RetiredMethods methods;
+};
+struct Watch;
+struct Process {
+  JavaVM* runtime_vm = nullptr;
+  jvmtiEnv* snapshot_env = nullptr;
+  Entry structural_entry = nullptr;
+  Record record_field = nullptr;
+  Record record_method = nullptr;
+  void* original_entry = nullptr;
+  void* original_class = nullptr;
+  void* original_fields = nullptr;
+  void* original_methods = nullptr;
+  void* original_instances = nullptr;
+  void* original_allocate = nullptr;
+  class_layout::Services layout_services{};
+  // Filled only by Install. Per-transaction probes further restrict these abilities.
+  ProcessCapabilities capabilities;
+  std::vector<void*> hook_tokens;
+  // ART takes its own redefinition lock after our Native-state snapshots.
+  // Keep snapshots and the transaction together so another routed batch cannot
+  // validate against an older definition while waiting for ART's lock.
+  std::recursive_mutex transaction_mutex;
+  std::mutex report_mutex;
+  bool installed = false;
+  std::string diagnostic = "engine not installed";
+  std::string last_rejection;
+
+  std::vector<RetiredKinds> retired_kinds;
+  std::mutex watch_mutex;
+  std::vector<Watch*> watches;
+  std::atomic<uint64_t> subclass_retries{0};
+
+  member_retirement::ProcessOwner retirement;
+  interface_redefinition::ProcessOwner interfaces;
+};
+// Serializes first construction and reports before Install creates process state.
+std::mutex installation_mutex;
+std::unique_ptr<Process> process;
 
 void Diagnose(const std::string& text, bool rejection = false) {
   {
-    std::lock_guard<std::mutex> lock(report_mutex);
-    (rejection ? last_rejection : diagnostic) = text;
+    std::lock_guard<std::mutex> lock(process->report_mutex);
+    (rejection ? process->last_rejection : process->diagnostic) = text;
   }
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", text.c_str());
 }
@@ -107,14 +125,8 @@ Batch* BatchOf(const transaction::Context* context) {
 // Methods each class retired in committed transactions, guarded by
 // transaction_mutex. ART's reference replacement keeps each global reference
 // on the class's current definition.
-struct RetiredKinds {
-  jobject klass;
-  structural_policy::RetiredMethods methods;
-};
-std::vector<RetiredKinds> retired_kinds;
-
 RetiredKinds* FindRetiredKinds(JNIEnv* jni, jclass klass) {
-  for (RetiredKinds& entry : retired_kinds)
+  for (RetiredKinds& entry : process->retired_kinds)
     if (jni->IsSameObject(entry.klass, klass)) return &entry;
   return nullptr;
 }
@@ -129,7 +141,7 @@ void RecordRetiredKinds(JNIEnv* jni, jclass klass, const std::vector<evolution::
       Diagnose("cannot record the kinds of retired methods");
       return;
     }
-    entry = &retired_kinds.emplace_back(RetiredKinds{root, {}});
+    entry = &process->retired_kinds.emplace_back(RetiredKinds{root, {}});
   }
   for (const auto& method : methods) entry->methods[{method.name, method.descriptor}] = method.access;
 }
@@ -140,13 +152,9 @@ struct Watch {
   std::vector<jobject> targets;  // Global references.
   std::atomic<bool> subclass_loaded{false};
 };
-std::mutex watch_mutex;
-std::vector<Watch*> watches;
-std::atomic<uint64_t> subclass_retries{0};
-
 void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) noexcept {
-  std::lock_guard<std::mutex> lock(watch_mutex);
-  for (Watch* watch : watches)
+  std::lock_guard<std::mutex> lock(process->watch_mutex);
+  for (Watch* watch : process->watches)
     for (jobject target : watch->targets)
       if (!jni->IsSameObject(klass, target) &&
           jni->IsAssignableFrom(klass, static_cast<jclass>(target)))
@@ -160,28 +168,28 @@ class WatchScope {
  public:
   WatchScope(transaction::Context* context, JNIEnv* jni, jint count,
              const jvmtiClassDefinition* definitions) : jni_(jni) {
-    if (!capabilities.subclass_watch) return;
+    if (!process->capabilities.subclass_watch) return;
     for (jint i = 0; i < count; ++i)
       if (jobject target = jni->NewGlobalRef(definitions[i].klass)) watch_.targets.push_back(target);
     if (jni->ExceptionCheck()) jni->ExceptionClear();
     bool first;
     {
-      std::lock_guard<std::mutex> lock(watch_mutex);
-      first = watches.empty();
-      watches.push_back(&watch_);
+      std::lock_guard<std::mutex> lock(process->watch_mutex);
+      first = process->watches.empty();
+      process->watches.push_back(&watch_);
     }
-    if (first) snapshot_env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
+    if (first) process->snapshot_env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
     context->subclass_loaded = &watch_.subclass_loaded;
   }
   ~WatchScope() {
-    if (!capabilities.subclass_watch) return;
+    if (!process->capabilities.subclass_watch) return;
     bool last;
     {
-      std::lock_guard<std::mutex> lock(watch_mutex);
-      watches.erase(std::find(watches.begin(), watches.end(), &watch_));
-      last = watches.empty();
+      std::lock_guard<std::mutex> lock(process->watch_mutex);
+      process->watches.erase(std::find(process->watches.begin(), process->watches.end(), &watch_));
+      last = process->watches.empty();
     }
-    if (last) snapshot_env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
+    if (last) process->snapshot_env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
     for (jobject target : watch_.targets) jni_->DeleteGlobalRef(target);
   }
   WatchScope(const WatchScope&) = delete;
@@ -214,19 +222,19 @@ class LocalClasses {
 
 std::string Signature(jclass klass) {
   char* signature = nullptr;
-  if (!klass || snapshot_env->GetClassSignature(klass, &signature, nullptr) != JVMTI_ERROR_NONE)
+  if (!klass || process->snapshot_env->GetClassSignature(klass, &signature, nullptr) != JVMTI_ERROR_NONE)
     return "<invalid class>";
   std::string result = signature;
-  snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+  process->snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(signature));
   return result;
 }
 
 std::string ErrorName(jvmtiError error) {
   std::string name = "JVMTI_ERROR_" + std::to_string(error);
   char* text = nullptr;
-  if (snapshot_env->GetErrorName(error, &text) == JVMTI_ERROR_NONE) {
+  if (process->snapshot_env->GetErrorName(error, &text) == JVMTI_ERROR_NONE) {
     name = text;
-    snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(text));
+    process->snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(text));
   }
   return name + " (" + std::to_string(error) + ")";
 }
@@ -242,7 +250,7 @@ std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
     const std::string signature = Signature(klass);
     jboolean flag = JNI_FALSE;
     if (result == JVMTI_ERROR_UNMODIFIABLE_CLASS && klass) {
-      if (snapshot_env->IsModifiableClass(klass, &flag) == JVMTI_ERROR_NONE && !flag)
+      if (process->snapshot_env->IsModifiableClass(klass, &flag) == JVMTI_ERROR_NONE && !flag)
         return signature + ": ART reports the class as unmodifiable; " + ErrorName(result);
     }
     classes += (classes.empty() ? "" : ", ") + signature;
@@ -253,7 +261,7 @@ std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
 
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
                             transaction::Context* context) {
-  const jvmtiError result = structural_entry(env, count, definitions);
+  const jvmtiError result = process->structural_entry(env, count, definitions);
   if (std::string reason = interface_redefinition::TakeRejection(); !reason.empty()) Diagnose(reason, true);
   // A rejection decided after allocation (CollectAndCreateNewInstances).
   if (std::string late = std::exchange(context->rejection, {}); !late.empty()) Diagnose(late, true);
@@ -284,32 +292,32 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   Batch& batch = *BatchOf(context);
   if (!context->enclosing) {
     // lastRejection describes the latest standard-entry transaction only.
-    std::lock_guard<std::mutex> lock(report_mutex);
-    last_rejection.clear();
+    std::lock_guard<std::mutex> lock(process->report_mutex);
+    process->last_rejection.clear();
   }
   // ART retains responsibility for arguments, caller capabilities and the
   // ClassFileLoadHook. Snapshots precede its ScopedObjectAccess transition.
   if (count <= 0 || !definitions) return InvokeStructural(env, count, definitions, context);
   JNIEnv* jni = nullptr;
-  if (runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
+  if (process->runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
   runtime_thread::Probe(jni);
-  interface_redefinition::Begin(jni, snapshot_env, count, definitions);
+  interface_redefinition::Begin(jni, process->snapshot_env, count, definitions);
   // ART rejects a missing or unmodifiable target before any validator runs;
   // do not load types for a batch it will not consider.
   for (jint i = 0; i < count; ++i) {
     jint access = 0;
     if (definitions[i].klass &&
-        snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
+        process->snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
         (access & evolution::kAccInterface)) {
-      if (capabilities.interface_runtime && interface_redefinition::Available()) continue;
+      if (process->capabilities.interface_runtime && interface_redefinition::Available()) continue;
       Diagnose(Signature(definitions[i].klass) + ": " + interface_redefinition::RuntimeState(), true);
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
     jboolean modifiable = JNI_TRUE;
     if (!definitions[i].klass ||
-        (snapshot_env->IsModifiableClass(definitions[i].klass, &modifiable) == JVMTI_ERROR_NONE &&
+        (process->snapshot_env->IsModifiableClass(definitions[i].klass, &modifiable) == JVMTI_ERROR_NONE &&
          !modifiable))
       return InvokeStructural(env, count, definitions, context);
   }
@@ -325,7 +333,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     const auto reject = [&](const std::string& reason) {
       Diagnose(Signature(definitions[i].klass) + ": " + reason, true);
     };
-    const int read = live_schema::ReadLiveSchema(snapshot_env, jni, definitions[i].klass,
+    const int read = live_schema::ReadLiveSchema(process->snapshot_env, jni, definitions[i].klass,
                                                 &snapshot.live, &error);
     if (read != JVMTI_ERROR_NONE) { reject(error); return static_cast<jvmtiError>(read); }
     if (snapshot.live.access & evolution::kAccInterface) {
@@ -336,7 +344,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     }
     if (const RetiredKinds* earlier = FindRetiredKinds(jni, definitions[i].klass))
       snapshot.retired = earlier->methods;
-    result = hierarchy_snapshot::Prepare(snapshot_env, jni, definitions[i], &snapshot,
+    result = hierarchy_snapshot::Prepare(process->snapshot_env, jni, definitions[i], &snapshot,
                                           &batch.type_roots, &error);
     if (result != JVMTI_ERROR_NONE) { reject(error); return result; }
     interface_redefinition::Describe(definitions[i].klass, snapshot.live);
@@ -355,9 +363,9 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   // A subclass prepared from here on is missing from the snapshot and may be
   // missing from ART's recreated subclasses: fail this attempt instead.
   WatchScope watch(context, jni, count, definitions);
-  LocalClasses loaded(snapshot_env, jni);
+  LocalClasses loaded(process->snapshot_env, jni);
   const auto loaded_start = std::chrono::steady_clock::now();
-  result = snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
+  result = process->snapshot_env->GetLoadedClasses(&loaded.count, &loaded.classes);
   // Failures without a reason here are described by Route.
   if (result != JVMTI_ERROR_NONE) return result;
   std::string interface_error;
@@ -370,7 +378,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   }
   hierarchy_snapshot::LoadedIndex index;
   std::string hierarchy_error;
-  result = hierarchy_snapshot::BuildIndex(snapshot_env, jni, loaded.count, loaded.classes,
+  result = hierarchy_snapshot::BuildIndex(process->snapshot_env, jni, loaded.count, loaded.classes,
                                            ordinary_targets, interface_targets, &index,
                                            &hierarchy_error);
   if (result != JVMTI_ERROR_NONE) { Diagnose(hierarchy_error, true); return result; }
@@ -382,10 +390,10 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
         Diagnose(snapshot.live.descriptor + ": interface subtype group was not captured", true);
         return JVMTI_ERROR_INTERNAL;
       }
-      result = hierarchy_snapshot::CollectInterfaceSubclasses(snapshot_env, jni, klass, *group,
+      result = hierarchy_snapshot::CollectInterfaceSubclasses(process->snapshot_env, jni, klass, *group,
                                                                 &snapshot, &error);
     } else {
-      result = hierarchy_snapshot::CollectSubclasses(snapshot_env, jni, klass,
+      result = hierarchy_snapshot::CollectSubclasses(process->snapshot_env, jni, klass,
                                                       index.subtypes[ordinary_indices.at(klass)], &snapshot, &error);
     }
     if (result != JVMTI_ERROR_NONE) {
@@ -393,7 +401,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       return result;
     }
   }
-  if (capabilities.retirement) {
+  if (process->capabilities.retirement) {
     // Build the permanent roots while Native, before ART's no-failure point.
     // Root all affected loaded subclasses: each replacement ClassExt retains
     // its own obsolete chain, including native ArtMethod storage and DexCache.
@@ -418,21 +426,21 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
 // class definition. Such an attempt fails before ART's no-failure point and
 // leaves the class loaded, so the next attempt includes it.
 jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) noexcept try {
-  std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
+  std::lock_guard<std::recursive_mutex> transaction_lock(process->transaction_mutex);
   constexpr int kAttempts = 3;
   for (int attempt = 1;; ++attempt) {
     bool subclass_loaded = false;
     const jvmtiError result = RouteOnce(env, count, definitions, &subclass_loaded);
     if (result == JVMTI_ERROR_NONE) return result;
     if (subclass_loaded && attempt < kAttempts) {
-      subclass_retries.fetch_add(1);
+      process->subclass_retries.fetch_add(1);
       continue;
     }
     // Every failure names its classes, whichever check rejected it.
     bool explained;
     {
-      std::lock_guard<std::mutex> lock(report_mutex);
-      explained = !last_rejection.empty();
+      std::lock_guard<std::mutex> lock(process->report_mutex);
+      explained = !process->last_rejection.empty();
     }
     if (!explained) Diagnose(DescribeFailure(count, definitions, result), true);
     return result;
@@ -444,23 +452,23 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
 bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   transaction::Context* context = transaction::Current();
   Batch* batch = BatchOf(context);
-  if (!batch) return reinterpret_cast<Check>(original_class)(self);
+  if (!batch) return reinterpret_cast<Check>(process->original_class)(self);
   batch->decisions.erase(self);
   const auto found = batch->classes.find(self->klass);
   if (found == batch->classes.end() || !self->dex_file || !self->dex_file->begin)
-    return reinterpret_cast<Check>(original_class)(self);
+    return reinterpret_cast<Check>(process->original_class)(self);
   evolution::ClassSchema incoming;
   std::string error;
   if (!evolution::ReadClassDeclarations(DexViewOf(*self->dex_file), &incoming, &error)) {
     Diagnose("CheckClass DEX fallback: " + error);
-    return reinterpret_cast<Check>(original_class)(self);
+    return reinterpret_cast<Check>(process->original_class)(self);
   }
   if (incoming.descriptor != found->second.live.descriptor)
-    return reinterpret_cast<Check>(original_class)(self);
+    return reinterpret_cast<Check>(process->original_class)(self);
   auto& snapshot = found->second;
   structural_policy::Abilities abilities;
   const auto thread = runtime_thread::Ready();
-  abilities.member_mapping = capabilities.member_mapping &&
+  abilities.member_mapping = process->capabilities.member_mapping &&
       class_layout::VerifyTarget(thread, self, snapshot.live);
   for (auto& [descriptor, type] : snapshot.hierarchy.added_interfaces) {
     uint32_t access = 0;
@@ -475,10 +483,10 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       superclass->access = access;
   }
   abilities.field_retirement =
-      abilities.member_mapping && capabilities.field_retirement;
-  abilities.instance_check = capabilities.instance_check && thread.has_value();
+      abilities.member_mapping && process->capabilities.field_retirement;
+  abilities.instance_check = process->capabilities.instance_check && thread.has_value();
   abilities.superclass_change =
-      abilities.member_mapping && capabilities.superclass_change;
+      abilities.member_mapping && process->capabilities.superclass_change;
   // The snapshot carries the interface group's facts, the mapping rejects new
   // default conflicts, and retirement roots cover the group: an interface
   // target may evolve its members whenever the engine owns the mapping.
@@ -538,23 +546,23 @@ bool CheckFields(ClassRedefinitionPrefix* self) noexcept {
   if (Batch* batch = BatchOf(transaction::Current())) {
     const auto found = batch->decisions.find(self);
     if (found != batch->decisions.end()) {
-      if (found->second.fields_structural) record_field(self);
+      if (found->second.fields_structural) process->record_field(self);
       return true;
     }
   }
-  return reinterpret_cast<Check>(original_fields)(self);
+  return reinterpret_cast<Check>(process->original_fields)(self);
 }
 
 bool CheckMethods(ClassRedefinitionPrefix* self) noexcept {
   if (Batch* batch = BatchOf(transaction::Current())) {
     const auto found = batch->decisions.find(self);
     if (found != batch->decisions.end()) {
-      if (found->second.methods_structural) record_method(self);
+      if (found->second.methods_structural) process->record_method(self);
       batch->decisions.erase(found);
       return true;
     }
   }
-  return reinterpret_cast<Check>(original_methods)(self);
+  return reinterpret_cast<Check>(process->original_methods)(self);
 }
 
 // ART links the target's new class under the old superclass it passes here
@@ -567,12 +575,12 @@ void* AllocateNewClassObject(ClassRedefinitionPrefix* self, abi::arm64::Handle o
   const transaction::Context* context = transaction::Current();
   const transaction::Requirements* target = context ? context->Find(self) : nullptr;
   if (target && target->superclass && super_class.reference &&
-      old_class.Get<void>() == layout_services.mirror_class(self)) {
-    if (void* superclass = class_layout::DecodeClass(layout_services.mirror_class, self, target->superclass))
+      old_class.Get<void>() == process->layout_services.mirror_class(self)) {
+    if (void* superclass = class_layout::DecodeClass(process->layout_services.mirror_class, self, target->superclass))
       *const_cast<uint32_t*>(super_class.reference) = class_layout::Reference(superclass);
   }
   using Function = void* (*)(ClassRedefinitionPrefix*, abi::arm64::Handle, abi::arm64::Handle, abi::arm64::Handle, uint16_t);
-  return reinterpret_cast<Function>(original_allocate)(self, old_class, super_class, cache, index);
+  return reinterpret_cast<Function>(process->original_allocate)(self, old_class, super_class, cache, index);
 }
 
 bool CheckInstances(const runtime_thread::VerifiedThread& thread,
@@ -581,7 +589,7 @@ bool CheckInstances(const runtime_thread::VerifiedThread& thread,
   for (const auto& [target, requirements] : context->targets) {
     if (!requirements.no_instances) continue;
     const auto* instances = data.OldInstances();
-    const uint32_t reference = class_layout::Reference(layout_services.mirror_class(target));
+    const uint32_t reference = class_layout::Reference(process->layout_services.mirror_class(target));
     for (int32_t i = 0; instances && i < instances->length; ++i) {
       const auto* instance = class_layout::Element<abi::arm64::Object>(thread, instances, i);
       if (instance && instance->klass == reference)
@@ -603,7 +611,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
     return context->Reject(self, JVMTI_ERROR_INTERNAL,
         named("a subtype of a redefined class was loaded during the transaction"));
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
-  if (!reinterpret_cast<Function>(original_instances)(self, data)) return false;
+  if (!reinterpret_cast<Function>(process->original_instances)(self, data)) return false;
   // Corrupt only the transaction-private holder; cleanup roots are independent.
   ARTDCEVM_TEST(
     if (ARTDCEVM_FAULT_IF(4, interface_redefinition::IsTarget(self) && data->Classes(true))) {
@@ -647,20 +655,20 @@ bool PrepareLayoutServices(JNIEnv* jni, std::string* failure) {
   using namespace symbols::structural;
   struct Required { symbols::NamedSymbol name; void** address; };
   const Required required[] = {
-      {kFindDeclaredStaticField, HookSlot(&layout_services.find_static_field)},
-      {kFindDeclaredInstanceField, HookSlot(&layout_services.find_declared_instance_field)},
-      {kClassRedefinitionGetMirrorClass, HookSlot(&layout_services.mirror_class)},
-      {kFindInstanceField, HookSlot(&layout_services.find_instance_field)}};
+      {kFindDeclaredStaticField, HookSlot(&process->layout_services.find_static_field)},
+      {kFindDeclaredInstanceField, HookSlot(&process->layout_services.find_declared_instance_field)},
+      {kClassRedefinitionGetMirrorClass, HookSlot(&process->layout_services.mirror_class)},
+      {kFindInstanceField, HookSlot(&process->layout_services.find_instance_field)}};
   for (const auto& entry : required) {
     *entry.address = symbols::Find(entry.name);
     if (!*entry.address) { *failure = std::string("missing ") + entry.name.name; return false; }
   }
   if (!jni) { *failure = "no JNIEnv for the JNI guards"; return false; }
-  if (layout_services.class_type) return true;
+  if (process->layout_services.class_type) return true;
   jclass local = jni->FindClass("java/lang/Class");
-  layout_services.class_type = local ? static_cast<jclass>(jni->NewGlobalRef(local)) : nullptr;
+  process->layout_services.class_type = local ? static_cast<jclass>(jni->NewGlobalRef(local)) : nullptr;
   if (local) jni->DeleteLocalRef(local);
-  if (layout_services.class_type) return true;
+  if (process->layout_services.class_type) return true;
   jni->ExceptionClear();
   *failure = "exception classes unavailable";
   return false;
@@ -668,10 +676,10 @@ bool PrepareLayoutServices(JNIEnv* jni, std::string* failure) {
 
 bool RollBack(std::string* failure, size_t count = SIZE_MAX) {
   bool removed_all = true;
-  for (size_t i = std::min(count, hook_tokens.size()); i-- > 0;) {
-    if (!hook_tokens[i]) continue;
-    const int error = shadowhook_unhook(hook_tokens[i]);
-    if (error == 0) hook_tokens[i] = nullptr;
+  for (size_t i = std::min(count, process->hook_tokens.size()); i-- > 0;) {
+    if (!process->hook_tokens[i]) continue;
+    const int error = shadowhook_unhook(process->hook_tokens[i]);
+    if (error == 0) process->hook_tokens[i] = nullptr;
     else {
       *failure += std::string("; rollback failed: ") + shadowhook_to_errmsg(error);
       removed_all = false;
@@ -683,11 +691,15 @@ bool RollBack(std::string* failure, size_t count = SIZE_MAX) {
 
 jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
                    const member_retirement::FieldPlaceholders& placeholders) {
-  // Route cannot observe hooks until their final JNI table and capabilities publish.
-  std::lock_guard<std::recursive_mutex> transaction_lock(transaction_mutex);
   {
-    std::lock_guard<std::mutex> lock(report_mutex);
-    if (installed) return JVMTI_ERROR_NONE;
+    std::lock_guard<std::mutex> installation_lock(installation_mutex);
+    if (!process) process = std::make_unique<Process>();
+  }
+  // Route cannot observe hooks until their final JNI table and capabilities publish.
+  std::lock_guard<std::recursive_mutex> transaction_lock(process->transaction_mutex);
+  {
+    std::lock_guard<std::mutex> lock(process->report_mutex);
+    if (process->installed) return JVMTI_ERROR_NONE;
   }
   if (!vm || !env) {
     Diagnose("JavaVM or JVMTI environment unavailable");
@@ -723,11 +735,11 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   }
   std::string rollback = "previous partial installation";
   if (!RollBack(&rollback)) { Diagnose(rollback); return JVMTI_ERROR_INTERNAL; }
-  runtime_vm = vm;
-  snapshot_env = env;
-  structural_entry = reinterpret_cast<Entry>(addresses[1]);
-  record_field = reinterpret_cast<Record>(addresses[5]);
-  record_method = reinterpret_cast<Record>(addresses[6]);
+  process->runtime_vm = vm;
+  process->snapshot_env = env;
+  process->structural_entry = reinterpret_cast<Entry>(addresses[1]);
+  process->record_field = reinterpret_cast<Record>(addresses[5]);
+  process->record_method = reinterpret_cast<Record>(addresses[6]);
   std::vector<Hook> replacements;
   ProcessCapabilities prepared;
   runtime_thread::Prepare();
@@ -738,8 +750,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
   std::vector<Hook> retirement_hooks;
   bool mapping_ready = PrepareLayoutServices(jni, &failure);
-  if (mapping_ready) mapping_ready = member_retirement::Prepare({layout_services.find_instance_field}, &retirement_hooks, &failure);
-  if (mapping_ready) mapping_ready = member_mapping::Prepare(layout_services, &retirement_hooks, &failure);
+  if (mapping_ready && !process->retirement)
+    process->retirement = member_retirement::CreateProcess();
+  if (mapping_ready) mapping_ready = member_retirement::Prepare({process->layout_services.find_instance_field}, &retirement_hooks, &failure);
+  if (mapping_ready) mapping_ready = member_mapping::Prepare(process->layout_services, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = verification_redirect::Prepare(
       {interface_redefinition::IsAffected, interface_redefinition::VerificationClass,
        interface_redefinition::VerificationError, interface_redefinition::ObserveClassLinker},
@@ -747,8 +761,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   if (mapping_ready) {
     struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
     const Required decisions[] = {
-        {kCollectAndCreateNewInstances, HookAddress(CollectAndCreateNewInstances), &original_instances},
-        {kAllocateNewClassObject, HookAddress(AllocateNewClassObject), &original_allocate}};
+        {kCollectAndCreateNewInstances, HookAddress(CollectAndCreateNewInstances), &process->original_instances},
+        {kAllocateNewClassObject, HookAddress(AllocateNewClassObject), &process->original_allocate}};
     for (const auto& decision : decisions) {
       void* address = symbols::Find(decision.symbol);
       if (!address) {
@@ -760,9 +774,9 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     }
   }
   if (mapping_ready) {
-    class_layout::Prepare(layout_services);
-    interface_dispatch::Prepare(jni, {layout_services.find_declared_instance_field,
-                                      layout_services.mirror_class, layout_services.class_type});
+    class_layout::Prepare(process->layout_services);
+    interface_dispatch::Prepare(jni, {process->layout_services.find_declared_instance_field,
+                                      process->layout_services.mirror_class, process->layout_services.class_type});
     prepared.member_mapping = true;
     prepared.retirement = true;
     prepared.instance_check = true;
@@ -774,22 +788,23 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     // Native Thread probing never overwrites this installation failure.
     class_layout::Report("unavailable: " + failure);
   }
+  if (!process->interfaces) process->interfaces = interface_redefinition::CreateProcess();
   interface_redefinition::Prepare({prepared.superclass_change, prepared.runtime_thread,
-      layout_services.mirror_class, layout_services.find_instance_field}, &replacements, &interface_note);
+      process->layout_services.mirror_class, process->layout_services.find_instance_field}, &replacements, &interface_note);
   prepared.interface_runtime = interface_redefinition::Available();
   const size_t retirement_hook_count = replacements.size();
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
-      {addresses[2], reinterpret_cast<void*>(CheckClass), &original_class, names[2].name},
-      {addresses[3], reinterpret_cast<void*>(CheckFields), &original_fields, names[3].name},
-      {addresses[4], reinterpret_cast<void*>(CheckMethods), &original_methods, names[4].name},
-      {addresses[0], reinterpret_cast<void*>(Route), &original_entry, names[0].name}};
+      {addresses[2], reinterpret_cast<void*>(CheckClass), &process->original_class, names[2].name},
+      {addresses[3], reinterpret_cast<void*>(CheckFields), &process->original_fields, names[3].name},
+      {addresses[4], reinterpret_cast<void*>(CheckMethods), &process->original_methods, names[4].name},
+      {addresses[0], reinterpret_cast<void*>(Route), &process->original_entry, names[0].name}};
   replacements.insert(replacements.end(), std::begin(validators), std::end(validators));
-  hook_tokens.resize(replacements.size(), nullptr);
+  process->hook_tokens.resize(replacements.size(), nullptr);
   for (size_t i = 0; i < replacements.size(); ++i) {
     const Hook& hook = replacements[i];
-    hook_tokens[i] = shadowhook_hook_sym_addr(hook.target, hook.replacement, hook.original);
-    if (!hook_tokens[i]) {
+    process->hook_tokens[i] = shadowhook_hook_sym_addr(hook.target, hook.replacement, hook.original);
+    if (!process->hook_tokens[i]) {
       const int error = shadowhook_get_errno();
       std::string failure = std::string("hook installation failed: ") + hook.name + ": " +
           shadowhook_to_errmsg(error);
@@ -814,7 +829,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     class_layout::Prepare({});
     class_layout::Report("unavailable: " + failure);
     interface_redefinition::Prepare({false, prepared.runtime_thread,
-        layout_services.mirror_class, layout_services.find_instance_field},
+        process->layout_services.mirror_class, process->layout_services.find_instance_field},
         &replacements, &interface_note);
   }
   // The engine's own environment carries no other events.
@@ -825,25 +840,32 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   std::string field_note;
   if (prepared.retirement)
     member_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);
-  std::lock_guard<std::mutex> lock(report_mutex);
+  std::lock_guard<std::mutex> lock(process->report_mutex);
   prepared.field_retirement = prepared.retirement && member_retirement::FieldRetirementAvailable();
-  capabilities = prepared;
-  installed = true;
-  diagnostic = !capabilities.retirement
+  process->capabilities = prepared;
+  process->installed = true;
+  process->diagnostic = !process->capabilities.retirement
       ? "ART structural transaction with additions and modifier changes; members cannot retire"
-      : capabilities.field_retirement
+      : process->capabilities.field_retirement
           ? "ART structural transaction with method and field retirement"
           : "ART structural transaction with method retirement; fields cannot retire";
   for (const auto* note : {&retirement_note, &field_note, &interface_note})
-    if (!note->empty()) diagnostic += "; " + *note;
+    if (!note->empty()) process->diagnostic += "; " + *note;
   return JVMTI_ERROR_NONE;
 }
 
 std::string Capabilities() {
-  std::lock_guard<std::mutex> lock(report_mutex);
-  const std::string supported = installed ? "true" : "false";
-  const bool methods = installed && capabilities.retirement;
-  const bool fields = methods && capabilities.field_retirement;
+  Process* selected;
+  {
+    std::lock_guard<std::mutex> installation_lock(installation_mutex);
+    selected = process.get();
+  }
+  Process empty;
+  Process& state = selected ? *selected : empty;
+  std::lock_guard<std::mutex> lock(state.report_mutex);
+  const std::string supported = state.installed ? "true" : "false";
+  const bool methods = state.installed && state.capabilities.retirement;
+  const bool fields = methods && state.capabilities.field_retirement;
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
   const auto interface_timing = interface_redefinition::LastTiming();
@@ -853,17 +875,17 @@ std::string Capabilities() {
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
-          (methods && capabilities.superclass_change ? "true" : "false") +
+          (methods && state.capabilities.superclass_change ? "true" : "false") +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +
       ",\"jniRetirementGuards\":" +
           std::to_string(member_retirement::JniRetirementGuardHits()) +
-      ",\"subclassLoadRetries\":" + std::to_string(subclass_retries.load()) +
-      ",\"interfaceRedefinition\":" + (installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
+      ",\"subclassLoadRetries\":" + std::to_string(state.subclass_retries.load()) +
+      ",\"interfaceRedefinition\":" + (state.installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
       ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
       ",\"interfaceAbstractMethodAddition\":" +
-          (installed && interface_state.rfind("verified: ", 0) == 0 &&
+          (state.installed && interface_state.rfind("verified: ", 0) == 0 &&
            dispatch_state.rfind("verified: ", 0) == 0 && interface_redefinition::AbstractLinkErrorsAvailable()
                ? "true" : "false") +
       ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(dispatch_state) +
@@ -872,7 +894,7 @@ std::string Capabilities() {
       ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +
       ",\"memberDeletion\":" + field_retirement + ",\"memberTypeChange\":" + field_retirement +
       ",\"hierarchyChange\":false,"
-      "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(diagnostic) +
-      ",\"lastRejection\":" + QuoteJsonMutf8(last_rejection) + "}";
+      "\"fullDcevmComplete\":false,\"diagnostic\":" + QuoteJsonMutf8(state.diagnostic) +
+      ",\"lastRejection\":" + QuoteJsonMutf8(state.last_rejection) + "}";
 }
 }  // namespace artdcevm::structural_redefine

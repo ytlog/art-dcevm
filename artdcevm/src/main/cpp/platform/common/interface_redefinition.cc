@@ -44,33 +44,38 @@ using LookupView = void* (*)(void*, void*, std::string_view, void*);
 using CacheAlloc = void* (*)(ClassRedefinitionPrefix*, Handle);
 using SetCache = void (*)(void*, void*);
 using Allocate = void* (*)(ClassRedefinitionPrefix*, Handle, Handle, Handle, uint16_t);
-LookupChars lookup_chars = nullptr;
-LookupView lookup_view = nullptr;
-CacheAlloc allocate_cache = nullptr;
-ClassArrayRoots::DecodeGlobal decode_global = nullptr;
-SetCache set_cache = nullptr;
-Allocate allocate_class = nullptr;
-void* original_lookup_referrer = nullptr;
-void* original_lookup_cache = nullptr;
-Mirror mirror_class = nullptr;
-ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
-Ensure ensure_initialized = nullptr;
-jobject (*new_local_ref)(JNIEnv*, void*) = nullptr;
-void (*delete_local_ref)(JNIEnv*, jobject) = nullptr;
-std::atomic<void*> class_linker{nullptr};
-void* original_normal[2]{};
-void* original_structural[2]{};
-void* original_finish = nullptr;
-void* original_run = nullptr;
-void* original_link_class = nullptr;
-void* original_non_public = nullptr;
-void (*set_status_internal)(void*, ClassStatus) = nullptr;
-bool available = false;
-std::atomic<const char*> disabled_reason{nullptr};
-std::atomic<int> verified_release{0};
-HandleScopeVisitors visit_handle_roots;
+}  // namespace
+struct Process {
+  LookupChars lookup_chars = nullptr;
+  LookupView lookup_view = nullptr;
+  CacheAlloc allocate_cache = nullptr;
+  ClassArrayRoots::DecodeGlobal decode_global = nullptr;
+  SetCache set_cache = nullptr;
+  Allocate allocate_class = nullptr;
+  void* original_lookup_referrer = nullptr;
+  void* original_lookup_cache = nullptr;
+  Mirror mirror_class = nullptr;
+  ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
+  Ensure ensure_initialized = nullptr;
+  jobject (*new_local_ref)(JNIEnv*, void*) = nullptr;
+  void (*delete_local_ref)(JNIEnv*, jobject) = nullptr;
+  std::atomic<void*> class_linker{nullptr};
+  void* original_normal[2]{};
+  void* original_structural[2]{};
+  void* original_finish = nullptr;
+  void* original_run = nullptr;
+  void* original_link_class = nullptr;
+  void* original_non_public = nullptr;
+  void (*set_status_internal)(void*, ClassStatus) = nullptr;
+  bool available = false;
+  std::atomic<const char*> disabled_reason{nullptr};
+  std::atomic<int> verified_release{0};
+  HandleScopeVisitors visit_handle_roots;
+};
+namespace {
+Process* process = nullptr;  // Borrowed from Install; hooks share this single state.
 void Disable(const char* reason) noexcept {
-  disabled_reason.store(reason);
+  process->disabled_reason.store(reason);
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", reason);
 }
 
@@ -122,8 +127,8 @@ thread_local Timing timing;
 struct JniFailure {};
 class LocalRef {
  public:
-  explicit LocalRef(void* object) : reference_(new_local_ref(CurrentState()->jni, object)) {}
-  ~LocalRef() { delete_local_ref(CurrentState()->jni, reference_); }
+  explicit LocalRef(void* object) : reference_(process->new_local_ref(CurrentState()->jni, object)) {}
+  ~LocalRef() { process->delete_local_ref(CurrentState()->jni, reference_); }
   jobject Get() const { return reference_; }
  private:
   jobject reference_;
@@ -131,7 +136,7 @@ class LocalRef {
 void* Decode(jclass klass) {
   RedefinerPrefix driver{nullptr, 0, nullptr, runtime_thread::Current(Thread())};
   ClassRedefinitionPrefix lookup{&driver, klass, nullptr};
-  return mirror_class(&lookup);
+  return process->mirror_class(&lookup);
 }
 Target* Find(void* klass) {
   State* state = CurrentState();
@@ -197,7 +202,7 @@ bool VerifyScopes(const InterfaceRuntime& layout, const RuntimeThread& thread_la
       ? capacity : Field<uint32_t>(scope, layout.scope_size);
   if (capacity != 1 || size != 1) return false;
   ScopeRoots observed(scope, capacity);
-  if (!visit_handle_roots.Visit(layout.scope_thread_id_signed, thread, &observed,
+  if (!process->visit_handle_roots.Visit(layout.scope_thread_id_signed, thread, &observed,
                                Field<uint32_t>(thread, thread_layout.tid))) return false;
   return observed.Matches(layout, scope, target.reference, size);
 }
@@ -208,7 +213,7 @@ const char* SelectRuntime(Handle klass, const Target& target) {
   State* state = CurrentState();
   if (!runtime_thread::Ready()) {
     Disable("interface Thread declaration did not match JNI environment/tid");
-    return disabled_reason.load();
+    return process->disabled_reason.load();
   }
   RedefinerPrefix driver{nullptr, 0, nullptr, runtime_thread::Current(Thread())};
   ClassRedefinitionPrefix context{&driver, target.klass, nullptr};
@@ -223,11 +228,11 @@ const char* SelectRuntime(Handle klass, const Target& target) {
     const auto* thread_layout = runtime_thread::LayoutFor(Thread(), release);
     if (!thread_layout) continue;
 ARTDCEVM_TEST(
-    if (ARTDCEVM_FAULT(13)) { Disable("interface Thread probe rejected injected mismatch"); return disabled_reason.load(); }
+    if (ARTDCEVM_FAULT(13)) { Disable("interface Thread probe rejected injected mismatch"); return process->disabled_reason.load(); }
 )
     if (!VerifyScopes(*candidate, *thread_layout, driver.self, klass)) continue;
 ARTDCEVM_TEST(
-    if (ARTDCEVM_FAULT(14)) { Disable("interface HandleScope probe rejected injected mismatch"); return disabled_reason.load(); }
+    if (ARTDCEVM_FAULT(14)) { Disable("interface HandleScope probe rejected injected mismatch"); return process->disabled_reason.load(); }
 )
     state->runtime = candidate;
     state->thread_layout = thread_layout;
@@ -237,12 +242,12 @@ ARTDCEVM_TEST(
   }
   if (!supported_candidate) return "interface target has no supported Class runtime candidate";
   Disable("interface HandleScope/Thread declarations did not match verified Class candidates");
-  return disabled_reason.load();
+  return process->disabled_reason.load();
 }
 enum class PointerMarker { kClear, kMarked, kUnavailable };
 bool NamedReference(void* object, std::string_view name, std::string_view descriptor, void** value) {
   void* type = runtime_thread::Read(Thread(), static_cast<Object*>(object)->klass);
-  const auto* field = find_instance_field(type, name, descriptor);
+  const auto* field = process->find_instance_field(type, name, descriptor);
   if (!field) return false;
   *value = runtime_thread::Read(Thread(), __atomic_load_n(&Field<uint32_t>(object, field->offset), __ATOMIC_ACQUIRE));
   return true;
@@ -266,10 +271,10 @@ PointerMarker CheckPointerMarker(void* klass) {
   return PointerMarker::kClear;
 }
 jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spelling) noexcept try {
-  void* original = structural ? original_structural[spelling] : original_normal[spelling];
+  void* original = structural ? process->original_structural[spelling] : process->original_normal[spelling];
   if (const State* state = CurrentState(); state && !state->targets.empty() && !state->thread) {
     Disable("interface Thread declaration did not match JNI environment/tid");
-    return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
+    return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, process->disabled_reason.load());
   }
   void* object = klass.Get<void>();
   Target* target = Find(object);
@@ -277,7 +282,7 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   State* state = CurrentState();
   state->rejected_target = target;
   state->rejection_class = nullptr;
-  if (!Available()) return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, disabled_reason.load());
+  if (!Available()) return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, process->disabled_reason.load());
   if (const char* reason = SelectRuntime(klass, *target))
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, reason);
   if ((Status(object) >= ClassStatus::kInitialized) !=
@@ -285,7 +290,7 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, "interface initialization state changed since snapshot");
   if (target->boot)
     return Reject(message, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface redefinition rejects boot interfaces");
-  void* linker = class_linker.load();
+  void* linker = process->class_linker.load();
   if (!linker)
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, "interface redefinition ClassLinker unavailable");
 ARTDCEVM_TEST(
@@ -310,7 +315,7 @@ ARTDCEVM_TEST(
     void* thread = runtime_thread::Current(Thread());
     if (Status(object) == ClassStatus::kInitializing && Field<uint32_t>(object, state->runtime->clinit_thread_id) == Field<uint32_t>(thread, ThreadLayout().tid))
       return Reject(message, JVMTI_ERROR_INTERNAL, "interface redefinition rejects redefinition during initialization");
-    if (!ensure_initialized(linker, thread, klass, true, true)) {
+    if (!process->ensure_initialized(linker, thread, klass, true, true)) {
       // Thread::ClearException() in runtime/thread.h is this assignment.
       Field<void*>(thread, ThreadLayout().exception) = nullptr;
       return Reject(message, JVMTI_ERROR_INVALID_CLASS, "interface redefinition target failed initialization");
@@ -389,7 +394,7 @@ void DiscardClass(void* klass) {
       status == ClassStatus::kErrorResolved) {
     // Unpublished classes have no copied statics or initializer to preserve.
     // kErrorResolved would still enter the next heap subtype scan.
-    set_status_internal(klass, ClassStatus::kErrorUnresolved);
+    process->set_status_internal(klass, ClassStatus::kErrorUnresolved);
 ARTDCEVM_TEST(
     fault_injection::Increment(fault_injection::Counter::kDiscardedClasses);
 )
@@ -418,7 +423,7 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
   using Function = jvmtiError (*)(RedefinerPrefix*);
   State* state = CurrentState();
   if (!state || state->targets.empty())
-    return reinterpret_cast<Function>(original_run)(driver);
+    return reinterpret_cast<Function>(process->original_run)(driver);
   if (!runtime_thread::Ready() || !state->runtime_verified) {
     driver->result = JVMTI_ERROR_NOT_AVAILABLE;
     state->rejection = "interface transaction entered Run without completed runtime probes";
@@ -426,7 +431,7 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
   }
   if (driver->self != runtime_thread::Current(Thread())) {
     Disable("interface Redefiner Thread declaration mismatch");
-    state->rejection = disabled_reason.load();
+    state->rejection = process->disabled_reason.load();
     driver->result = JVMTI_ERROR_NOT_AVAILABLE;
     return JVMTI_ERROR_NOT_AVAILABLE;
   }
@@ -438,7 +443,7 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
 ARTDCEVM_TEST(
     fault_injection::Set(fault_injection::Counter::kValidatedGroups, 0);
 )
-    const jvmtiError result = reinterpret_cast<Function>(original_run)(driver);
+    const jvmtiError result = reinterpret_cast<Function>(process->original_run)(driver);
     next.committed = result == JVMTI_ERROR_NONE;
     return result;
   } catch (const std::bad_alloc&) {
@@ -459,7 +464,7 @@ void NonPublicImplementation(void* klass, ArtMethod* implementation, ArtMethod* 
   if (state && state->linking && state->attempt && state->attempt->pending.Get<void>() == klass)
     state->attempt->non_public = {{implementation, declaration}, state->linking->index};
   using Function = void (*)(void*, ArtMethod*, ArtMethod*);
-  reinterpret_cast<Function>(original_non_public)(klass, implementation, declaration);
+  reinterpret_cast<Function>(process->original_non_public)(klass, implementation, declaration);
 }
 
 bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
@@ -468,7 +473,7 @@ bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
   State* state = CurrentState();
   const Linking* linking = state ? state->linking : nullptr;
   if (linking && !descriptor) Assign(state->attempt->pending, klass.Get<void>());
-  const bool result = reinterpret_cast<Function>(original_link_class)(
+  const bool result = reinterpret_cast<Function>(process->original_link_class)(
       linker, thread, descriptor, klass, interfaces, output);
   // Capture the resolved class before AllocateNewClassObject's JNI-ID array
   // allocations. Those can fail after linking and return nullptr to Finish.
@@ -504,8 +509,8 @@ ARTDCEVM_TEST(
   // Unlike DoLookupResolvedType, descriptor lookup does not write the cache.
   // A redirected entry must remain empty, so later inline cache probes cannot
   // find an old interface and bypass this hook during the same link.
-  void* old = lookup_view ? lookup_view(linker, runtime_thread::Current(Thread()), type, loader)
-                         : lookup_chars(linker, runtime_thread::Current(Thread()), type.c_str(), loader);
+  void* old = process->lookup_view ? process->lookup_view(linker, runtime_thread::Current(Thread()), type, loader)
+                         : process->lookup_chars(linker, runtime_thread::Current(Thread()), type.c_str(), loader);
   for (size_t i = 0; i < linking->old_types->size(); ++i)
     if ((*linking->old_types)[i].Get<void>() == old)
       return runtime_thread::Read(Thread(), linking->new_types.Get<ObjectArray>()->elements[i]);
@@ -518,18 +523,18 @@ ARTDCEVM_TEST(
 }
 void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) noexcept {
   if (void* object = Redirect(linker, index, cache, loader)) return object;
-  return reinterpret_cast<LookupCache>(original_lookup_cache)(linker, index, cache, loader);
+  return reinterpret_cast<LookupCache>(process->original_lookup_cache)(linker, index, cache, loader);
 }
 void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
   if (const State* state = CurrentState(); state && state->linking) {
     if (void* object = Redirect(linker, index, runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->dex_cache)),
                                runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->class_loader)))) return object;
   }
-  return reinterpret_cast<LookupReferrer>(original_lookup_referrer)(linker, index, referrer);
+  return reinterpret_cast<LookupReferrer>(process->original_lookup_referrer)(linker, index, referrer);
 }
 bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char* why) noexcept {
   State* state = CurrentState();
-  state->rejected_target = Find(mirror_class(self));
+  state->rejected_target = Find(process->mirror_class(self));
   state->rejection_class = nullptr;
   state->rejection = why;
   Field<void*>(runtime_thread::Current(Thread()), ThreadLayout().exception) = nullptr;
@@ -564,7 +569,7 @@ bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, Hol
       reinterpret_cast<uintptr_t>(definitions[2]) < reinterpret_cast<uintptr_t>(definitions[1]) ||
       reinterpret_cast<uintptr_t>(self) != reinterpret_cast<uintptr_t>(definitions[0]) +
           data->index * runtime.redefinition_size ||
-      Slot(*data, 4) != mirror_class(self))
+      Slot(*data, 4) != process->mirror_class(self))
     return reject_holder("interface holder redefinitions declaration mismatch");
   auto& initialized = Field<std::vector<bool>>(data->holder, runtime.initialized);
   auto& structural = Field<std::vector<bool>>(data->holder, runtime.actually_structural);
@@ -586,7 +591,7 @@ bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, Hol
       return reject_holder("interface holder element prefix declaration mismatch");
     RedefinitionDataIter item{i, data->holder};
     auto* cache = static_cast<DexCache*>(Slot(item, 3));
-    if (Slot(item, 4) != mirror_class(context) || !cache ||
+    if (Slot(item, 4) != process->mirror_class(context) || !cache ||
         cache->dex_file != reinterpret_cast<uintptr_t>(context->dex_file))
       return reject_holder("interface holder Class/DEX-cache slots declaration mismatch");
   }
@@ -618,13 +623,13 @@ ARTDCEVM_TEST(
   auto& initial = *holder.initial;
   if (initialized[data->index] || !structural[data->index] || !initial[data->index])
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface target requires an unallocated structural transaction");
-  verified_release.store(state->selected_release);
-  const Target* target = Find(mirror_class(self));
+  process->verified_release.store(state->selected_release);
+  const Target* target = Find(process->mirror_class(self));
   if (!target) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target unavailable");
   if (!target->arrays)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface private arrays were not prepared while Native");
   const auto& ordered = target->snapshot.types;
-  if (ordered.empty() || Decode(ordered.front()) != mirror_class(self))
+  if (ordered.empty() || Decode(ordered.front()) != process->mirror_class(self))
     return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target is missing or not first");
   for (jclass klass : ordered)
     if (Status(Decode(klass)) < ClassStatus::kResolved)
@@ -638,8 +643,8 @@ ARTDCEVM_TEST(
   Roots roots(thread, ordered.size() + kExtraRoots);
   std::vector<Handle> old_types;
   for (jclass klass : ordered) old_types.push_back(roots.Add(Decode(klass)));
-  Handle old_array = roots.Add(target->arrays->Old(decode_global));
-  Handle new_array = roots.Add(target->arrays->New(decode_global));
+  Handle old_array = roots.Add(target->arrays->Old(process->decode_global));
+  Handle new_array = roots.Add(target->arrays->New(process->decode_global));
   if (!old_array.Get<void>() || !new_array.Get<void>())
     return reject_holder("interface private array global reference decode failed");
   Assign(ReplacementRoot(*target), new_array.Get<void>());
@@ -684,7 +689,7 @@ ARTDCEVM_TEST(
       // CreateNewDexCache reads only driver_ and dex_file_. This non-owning
       // source prefix does not swap or destroy ART's owning DexFile pointer.
       ClassRedefinitionPrefix context{self->driver, nullptr, dex};
-      Assign(cache, allocate_cache(&context, loader));
+      Assign(cache, process->allocate_cache(&context, loader));
     }
     if (!cache.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition private DexCache allocation failed");
     const DexFilePrefix* expected_dex = batch_index >= 0 ? allocator->dex_file
@@ -697,7 +702,7 @@ ARTDCEVM_TEST(
     void* replacement;
     {
       LinkingScope active(state, &scope);
-      replacement = allocate_class(allocator, old_types[i], superclass, cache,
+      replacement = process->allocate_class(allocator, old_types[i], superclass, cache,
           batch_index >= 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(old_types[i].Get<void>(), runtime.dex_class_def_index)));
     }
     if (attempt->error != JVMTI_ERROR_NONE)
@@ -712,7 +717,7 @@ ARTDCEVM_TEST(
         self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
       return false;  // ART recorded its error and cleared the Java exception.
     }
-    if (batch_index < 0) set_cache(replacement, original_cache.Get<void>());
+    if (batch_index < 0) process->set_cache(replacement, original_cache.Get<void>());
 ARTDCEVM_TEST(
     // Transfer failure after linking, now outside the callback and its locks.
     if (ARTDCEVM_FAULT(12)) throw JniFailure{};
@@ -751,8 +756,8 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage
             RedefinitionDataIter* data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
   try {
-    const Target* target = Available() ? AffectedTarget(mirror_class(self)) : nullptr;
-    if (!target) return reinterpret_cast<Function>(original_finish)(self, storage, data);
+    const Target* target = Available() ? AffectedTarget(process->mirror_class(self)) : nullptr;
+    if (!target) return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
     HolderView holder;
     if (!VerifyHolder(self, data, &holder)) return false;
     if ((*holder.initialized)[data->index]) return true;
@@ -777,17 +782,19 @@ ARTDCEVM_TEST(
 
 }  // namespace
 
-void ObserveClassLinker(void* linker) { class_linker.store(linker); }
-bool Available() { return available && disabled_reason.load() == nullptr; }
+void ObserveClassLinker(void* linker) { process->class_linker.store(linker); }
+bool Available() { return process && process->available && process->disabled_reason.load() == nullptr; }
 bool AbstractLinkErrorsAvailable() {
+  if (!process) return false;
   const State* state = CurrentState();
-  const int release = state ? state->selected_release : verified_release.load();
-  return UsesLinkedIfTable(release) || original_non_public != nullptr;
+  const int release = state ? state->selected_release : process->verified_release.load();
+  return UsesLinkedIfTable(release) || process->original_non_public != nullptr;
 }
 std::string RuntimeState() {
-  if (const char* reason = disabled_reason.load()) return std::string("disabled: ") + reason;
-  if (!available) return "unavailable";
-  const int release = verified_release.load();
+  if (!process) return "unavailable";
+  if (const char* reason = process->disabled_reason.load()) return std::string("disabled: ") + reason;
+  if (!process->available) return "unavailable";
+  const int release = process->verified_release.load();
   return release ? "verified: android" + std::to_string(release) + " Class/Thread/HandleScope/holder probes"
                  : "unverified: interface runtime declarations";
 }
@@ -800,13 +807,13 @@ std::string TakeRejection() {
   if (state->rejection_class) return *state->rejection_class + ": " + reason;
   return target ? target->live.descriptor + ": " + reason : std::string(reason);
 }
-bool IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(mirror_class(self)); }
-bool IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedTarget(mirror_class(self)); }
+bool IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(process->mirror_class(self)); }
+bool IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedTarget(process->mirror_class(self)); }
 bool SharesImplementationGroup(ClassRedefinitionPrefix* self) {
   const State* state = CurrentState();
   if (!state) return false;
   for (jclass ancestor : state->shared_ancestors)
-    if (Decode(ancestor) == mirror_class(self)) return true;
+    if (Decode(ancestor) == process->mirror_class(self)) return true;
   return false;
 }
 void* VerificationClass(void* linker, std::string_view descriptor, Handle loader) noexcept try {
@@ -818,11 +825,11 @@ ARTDCEVM_TEST(
   // LookupClass observes the loader's table without publishing replacements or
   // caching them in any old DEX. The caller limits this to CheckVerification.
   void* old;
-  if (lookup_view) {
-    old = lookup_view(linker, runtime_thread::Current(Thread()), descriptor, loader.Get<void>());
+  if (process->lookup_view) {
+    old = process->lookup_view(linker, runtime_thread::Current(Thread()), descriptor, loader.Get<void>());
   } else {
     const std::string name(descriptor);
-    old = lookup_chars(linker, runtime_thread::Current(Thread()), name.c_str(), loader.Get<void>());
+    old = process->lookup_chars(linker, runtime_thread::Current(Thread()), name.c_str(), loader.Get<void>());
   }
   for (const auto& target : state->targets) {
     auto* replacements = ReplacementRoot(target).Get<ObjectArray>();
@@ -1012,13 +1019,19 @@ ARTDCEVM_TEST(
         std::chrono::steady_clock::now() - start).count();
   return JVMTI_ERROR_NONE;
 }
+ProcessOwner CreateProcess() {
+  ProcessOwner owner(new Process);
+  process = owner.get();
+  return owner;
+}
+void ProcessDeleter::operator()(Process* state) const { delete state; }
 void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* note) {
-  available = false;
+  process->available = false;
   ARTDCEVM_TEST(fault_injection::InterfacePrepared(false);)
-  disabled_reason.store(nullptr);
-  verified_release.store(0);
+  process->disabled_reason.store(nullptr);
+  process->verified_release.store(0);
   const auto reject = [&](const char* reason) {
-    disabled_reason.store(reason);
+    process->disabled_reason.store(reason);
     *note = reason;
   };
   const int api = android_get_device_api_level();
@@ -1044,28 +1057,28 @@ void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* no
     return;
   }
   using namespace symbols::interface_redefinition;
-  visit_handle_roots.unsigned_ids = reinterpret_cast<HandleScopeVisitors::Unsigned>(symbols::Find(kHandleScopeVisitRoots));
-  visit_handle_roots.signed_ids = reinterpret_cast<HandleScopeVisitors::Signed>(symbols::Find(kHandleScopeVisitRootsSigned));
-  mirror_class = services.mirror_class;
-  find_instance_field = services.find_instance_field;
-  ensure_initialized = reinterpret_cast<Ensure>(symbols::Find(kEnsureInitialized));
-  new_local_ref = reinterpret_cast<decltype(new_local_ref)>(symbols::Find(kNewLocalRef));
-  delete_local_ref = reinterpret_cast<decltype(delete_local_ref)>(symbols::Find(kDeleteLocalRef));
-  allocate_cache = reinterpret_cast<CacheAlloc>(symbols::Find(kCreateNewDexCache));
-  decode_global = reinterpret_cast<ClassArrayRoots::DecodeGlobal>(symbols::Find(kDecodeGlobal));
-  set_cache = reinterpret_cast<SetCache>(symbols::Find(kSetDexCache));
-  allocate_class = reinterpret_cast<Allocate>(symbols::Find(symbols::structural::kAllocateNewClassObject));
-  lookup_chars = reinterpret_cast<LookupChars>(symbols::Find(kLookupClassChars));
-  lookup_view = reinterpret_cast<LookupView>(symbols::Find(kLookupClassView));
+  process->visit_handle_roots.unsigned_ids = reinterpret_cast<HandleScopeVisitors::Unsigned>(symbols::Find(kHandleScopeVisitRoots));
+  process->visit_handle_roots.signed_ids = reinterpret_cast<HandleScopeVisitors::Signed>(symbols::Find(kHandleScopeVisitRootsSigned));
+  process->mirror_class = services.mirror_class;
+  process->find_instance_field = services.find_instance_field;
+  process->ensure_initialized = reinterpret_cast<Ensure>(symbols::Find(kEnsureInitialized));
+  process->new_local_ref = reinterpret_cast<decltype(process->new_local_ref)>(symbols::Find(kNewLocalRef));
+  process->delete_local_ref = reinterpret_cast<decltype(process->delete_local_ref)>(symbols::Find(kDeleteLocalRef));
+  process->allocate_cache = reinterpret_cast<CacheAlloc>(symbols::Find(kCreateNewDexCache));
+  process->decode_global = reinterpret_cast<ClassArrayRoots::DecodeGlobal>(symbols::Find(kDecodeGlobal));
+  process->set_cache = reinterpret_cast<SetCache>(symbols::Find(kSetDexCache));
+  process->allocate_class = reinterpret_cast<Allocate>(symbols::Find(symbols::structural::kAllocateNewClassObject));
+  process->lookup_chars = reinterpret_cast<LookupChars>(symbols::Find(kLookupClassChars));
+  process->lookup_view = reinterpret_cast<LookupView>(symbols::Find(kLookupClassView));
   void* referrer_lookup = symbols::Find(kLookupReferrer);
   void* cache_lookup = symbols::Find(kLookupCache);
   void* finish = symbols::Find(kFinishNewClassAllocations);
   void* run = symbols::Find(kRun);
   void* link_class = symbols::Find(kLinkClass);
-  set_status_internal = reinterpret_cast<decltype(set_status_internal)>(symbols::Find(kSetStatusInternal));
-  if (!services.runtime_thread || !visit_handle_roots.Available() || !mirror_class || !find_instance_field || !ensure_initialized || !new_local_ref || !delete_local_ref || !finish ||
-      !allocate_cache || !decode_global || !set_cache || !allocate_class || (!lookup_chars && !lookup_view) ||
-      !referrer_lookup || !cache_lookup || !run || !link_class || !set_status_internal) {
+  process->set_status_internal = reinterpret_cast<decltype(process->set_status_internal)>(symbols::Find(kSetStatusInternal));
+  if (!services.runtime_thread || !process->visit_handle_roots.Available() || !process->mirror_class || !process->find_instance_field || !process->ensure_initialized || !process->new_local_ref || !process->delete_local_ref || !finish ||
+      !process->allocate_cache || !process->decode_global || !process->set_cache || !process->allocate_class || (!process->lookup_chars && !process->lookup_view) ||
+      !referrer_lookup || !cache_lookup || !run || !link_class || !process->set_status_internal) {
     reject("interface redefinition named services unavailable");
     return;
   }
@@ -1076,24 +1089,24 @@ void Prepare(const Services& services, std::vector<Hook>* hooks, std::string* no
   bool modes[2]{};
   for (size_t i = 0; i < 4; ++i) {
     if (void* address = symbols::Find(names[i])) {
-      resolved.push_back({address, replacements[i], i < 2 ? &original_normal[i] : &original_structural[i - 2], names[i].name});
+      resolved.push_back({address, replacements[i], i < 2 ? &process->original_normal[i] : &process->original_structural[i - 2], names[i].name});
       modes[i / 2] = true;
     }
   }
   if (!modes[0] || !modes[1]) { reject("interface redefinition admission names unavailable"); return; }
-  resolved.push_back({finish, reinterpret_cast<void*>(Finish), &original_finish, kFinishNewClassAllocations.name});
-  resolved.push_back({run, reinterpret_cast<void*>(Run), &original_run, kRun.name});
-  resolved.push_back({link_class, reinterpret_cast<void*>(LinkClass), &original_link_class, kLinkClass.name});
-  resolved.push_back({referrer_lookup, reinterpret_cast<void*>(LookupByReferrer), &original_lookup_referrer, kLookupReferrer.name});
-  resolved.push_back({cache_lookup, reinterpret_cast<void*>(LookupByCache), &original_lookup_cache, kLookupCache.name});
+  resolved.push_back({finish, reinterpret_cast<void*>(Finish), &process->original_finish, kFinishNewClassAllocations.name});
+  resolved.push_back({run, reinterpret_cast<void*>(Run), &process->original_run, kRun.name});
+  resolved.push_back({link_class, reinterpret_cast<void*>(LinkClass), &process->original_link_class, kLinkClass.name});
+  resolved.push_back({referrer_lookup, reinterpret_cast<void*>(LookupByReferrer), &process->original_lookup_referrer, kLookupReferrer.name});
+  resolved.push_back({cache_lookup, reinterpret_cast<void*>(LookupByCache), &process->original_lookup_cache, kLookupCache.name});
   for (const auto& name : {kThrowNonPublicGlobal, kThrowNonPublicLocal, kThrowNonPublicUnique}) {
     if (void* address = symbols::Find(name)) {
-      resolved.push_back({address, reinterpret_cast<void*>(NonPublicImplementation), &original_non_public, name.name});
+      resolved.push_back({address, reinterpret_cast<void*>(NonPublicImplementation), &process->original_non_public, name.name});
       break;
     }
   }
   hooks->insert(hooks->end(), resolved.begin(), resolved.end());
-  available = true;
+  process->available = true;
   ARTDCEVM_TEST(fault_injection::InterfacePrepared(true);)
   *note = "interface redefinition prepared; Class/Thread/HandleScope/holder runtime probes required";
 }

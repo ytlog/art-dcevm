@@ -197,10 +197,16 @@ int main(int argc, char** argv) {
     tooling.GetObjectHashCode = Hash; tooling.IsInterface = IsInterface;
     tooling.GetClassStatus = Status; tooling.Deallocate = Deallocate;
     tooling.SetEventNotificationMode = Events;
+    const auto cold = structural_redefine::Capabilities();
+    Require(cold.find("\"installed\":false") != std::string::npos &&
+            cold.find("engine not installed") != std::string::npos,
+            "Cold capability report requires constructed hook state");
     const auto result = structural_redefine::Install(&vm, &env, {});
     if (mode == 1) {
       Require(result == JVMTI_ERROR_INTERNAL && set_calls == 0 && active.empty(),
               "Failed inline install changed JNI table or retained hooks");
+      Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE && set_calls == 1,
+              "Retry after rollback did not reuse process state");
     } else {
       Require(result == JVMTI_ERROR_NONE, "Optional retirement failure changed initialization error");
       const auto caps = structural_redefine::Capabilities();

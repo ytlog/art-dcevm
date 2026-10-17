@@ -1,4 +1,5 @@
 #pragma once
+#include <memory>
 #include <jni.h>
 #include <jvmti.h>
 #include <vector>
@@ -10,6 +11,11 @@
 #include "platform/common/art_hook.h"
 
 namespace artdcevm::interface_redefinition {
+struct Process;
+struct ProcessDeleter { void operator()(Process*) const; };
+using ProcessOwner = std::unique_ptr<Process, ProcessDeleter>;
+// Constructed and owned only by structural_redefine::Install.
+ProcessOwner CreateProcess();
 struct Services {
   bool verifier_redirect;
   bool runtime_thread;
