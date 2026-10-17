@@ -108,7 +108,7 @@ The following conflicts reject the transaction:
 
 ## ART's own restrictions
 
-- Ordinary class structural redefinition retains ART's checks: arrays, primitive types, proxy classes, `java.lang.String`, mirror classes, `java.lang.Thread` and its subclasses cannot be redefined. A class cannot be redefined while its initializer is executing on the current thread. Classes with pointer-form JNI IDs cannot undergo structural changes.
+- Ordinary class structural redefinition retains ART's checks: arrays, primitive types, proxy classes, `java.lang.String`, mirror classes, and `java.lang.Thread` itself and its supertypes cannot be redefined. Application subclasses of `Thread` can be: a started thread keeps its object identity, name, ID, interruption and join, and an executing `run()` frame continues the old body. A class cannot be redefined while its initializer is executing on the current thread. Classes with pointer-form JNI IDs cannot undergo structural changes.
 - Raw field offsets cached by `sun.misc.Unsafe`, `Atomic*FieldUpdater` and similar APIs bypass ART's entry points. Any structural redefinition that changes the instance layout, including adding fields, invalidates those offsets.
 
 ## Process-wide effects

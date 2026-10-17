@@ -104,7 +104,7 @@
 
 ## ART 自身的限制
 
-- 普通类结构重定义沿用 ART 的检查：数组、基本类型、代理类、`java.lang.String`、mirror 类、`java.lang.Thread` 及其子类不可重定义；在本线程类初始化过程中不能重定义该类；存在指针形式 JNI ID 的类不能做结构变化。
+- 普通类结构重定义沿用 ART 的检查：数组、基本类型、代理类、`java.lang.String`、mirror 类，以及 `java.lang.Thread` 本身和它的父类型不可重定义；应用自己的 `Thread` 子类可以重定义，已启动线程的对象身份、名称、ID、中断与 join 保持不变，正在执行的 `run()` 帧继续执行旧方法体；在本线程类初始化过程中不能重定义该类；存在指针形式 JNI ID 的类不能做结构变化。
 - `sun.misc.Unsafe`、`Atomic*FieldUpdater` 等缓存的原始字段 offset 不经过 ART 的任何入口；任何改变实例布局的结构重定义（包括新增字段）都会使其失效。
 
 ## 进程内的副作用

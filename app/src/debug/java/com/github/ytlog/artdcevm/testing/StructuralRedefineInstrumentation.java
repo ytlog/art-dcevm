@@ -54,6 +54,7 @@ import com.github.ytlog.artdcevm.fixture.StorageSubject;
 import com.github.ytlog.artdcevm.fixture.SuperChild;
 import com.github.ytlog.artdcevm.fixture.SuperMiddle;
 import com.github.ytlog.artdcevm.fixture.SuperSubject;
+import com.github.ytlog.artdcevm.fixture.ThreadSubclassFixture;
 import com.github.ytlog.artdcevm.fixture.ToolHost;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
@@ -153,6 +154,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
+            else if ("thread-subclass".equals(isolated)) runThreadSubclassScenario();
             else if (isolated.startsWith("interface-abstract-reject-"))
                 runAbstractRejectionScenario(isolated.substring("interface-abstract-reject-".length()));
             else throw new IllegalArgumentException("Unsupported isolated scenario");
@@ -332,6 +334,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
         runRetypeScenarios();
+        runThreadSubclassScenario();
     }
 
     // A reference field whose declared type changes keeps an old value that
@@ -372,6 +375,49 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("staticKept", true, RetypeFixture.Subject.label == label);
             scenario.check("mismatchNull", true, subject.mismatch == null);
             scenario.check("staticMismatchNull", true, RetypeFixture.Subject.staticMismatch == null);
+        });
+    }
+
+    // A started thread blocked in run() and an unstarted one of an application
+    // Thread subclass keep their identity, native peer and field values.
+    private void runThreadSubclassScenario() throws Exception {
+        ThreadSubclassFixture running = new ThreadSubclassFixture("dcevm-thread-running");
+        ThreadSubclassFixture idle = new ThreadSubclassFixture("dcevm-thread-idle");
+        running.kept = 17;
+        idle.kept = 23;
+        running.start();
+        running.started.await();
+        long runningId = running.getId();
+        runScenario("thread-subclass", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{ThreadSubclassFixture.class}, "thread-subclass-add");
+            Method added = ThreadSubclassFixture.class.getMethod("addedValue");
+            scenario.check("runningKept", 17, running.kept);
+            scenario.check("runningName", "dcevm-thread-running", running.getName());
+            scenario.check("runningId", runningId, running.getId());
+            scenario.check("runningAlive", true, running.isAlive());
+            scenario.check("runningAdded", 5, added.invoke(running));
+            running.interrupt();
+            running.join(10_000);
+            scenario.check("runningFinished", false, running.isAlive());
+            scenario.check("runningInterrupted", true, running.interrupted);
+            scenario.check("runningSelf", true, running.observedSelf == running);
+            // The obsolete run() frame continues and resolves value() to the new body.
+            scenario.check("runningResult", 2, running.result);
+            scenario.check("idleKept", 23, idle.kept);
+            scenario.check("idleState", Thread.State.NEW.name(), idle.getState().name());
+            idle.release.countDown();
+            idle.start();
+            idle.join(10_000);
+            scenario.check("idleFinished", false, idle.isAlive());
+            scenario.check("idleSelf", true, idle.observedSelf == idle);
+            scenario.check("idleResult", 25, idle.result);
+            ThreadSubclassFixture created = new ThreadSubclassFixture("dcevm-thread-new");
+            created.release.countDown();
+            created.start();
+            created.join(10_000);
+            scenario.check("newResult", 25, created.result);
+            Runtime.getRuntime().gc();
+            scenario.check("afterGc", 17, running.kept);
         });
     }
 

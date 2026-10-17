@@ -37,7 +37,7 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
   --scenario-group full --checkjni-mode checkjni
 ```
 
-`ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` helps isolate abstract additions and does not replace full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
+`ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` helps isolate abstract additions and `thread-subclass` runs the application `Thread` subclass scenario alone; neither replaces full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
 
 ## Recovery and fault isolation
 

@@ -200,6 +200,7 @@ SCENARIOS = (
     ("field-types", ["field-types"], 0),
     ("field-retype", ["field-retype"], 0),
     ("field-retype-restore", ["field-retype-restore"], 0),
+    ("thread-subclass", ["thread-subclass-add"], 0),
 )
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
@@ -656,6 +657,11 @@ class RunFailure(RuntimeError):
     """A safe failure message; raw command details stay in local evidence."""
 
 
+REQUIRED_CHECKS["thread-subclass"] = {
+    "runningKept": 17, "runningName": "dcevm-thread-running", "runningAlive": True, "runningAdded": 5,
+    "runningFinished": False, "runningInterrupted": True, "runningSelf": True, "runningResult": 2,
+    "idleKept": 23, "idleState": "NEW", "idleFinished": False, "idleSelf": True, "idleResult": 25,
+    "newResult": 25, "afterGc": 17}
 REQUIRED_CHECKS.update({'interface-abstract-dependent-missing': {'methodNamed': True,
                                           'classNamed': True,
                                           'missingImplementation': True,
@@ -854,6 +860,8 @@ def scenario_sequence(scenario_group):
         return SCENARIOS
     if scenario_group == "interface-abstract":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
+    if scenario_group == "thread-subclass":
+        return tuple(item for item in SCENARIOS if item[0] == "thread-subclass")
     if scenario_group == "ordinary":
         # Match the contiguous interface-target block in runScenarios. Ordinary
         # classes adding interfaces remain part of the ordinary suite.
@@ -1028,7 +1036,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")

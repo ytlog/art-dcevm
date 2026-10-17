@@ -37,7 +37,7 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
   --scenario-group full --checkjni-mode checkjni
 ```
 
-`ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
+`ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，`thread-subclass` 单独运行应用 `Thread` 子类场景，二者都不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
 
 ## 失败恢复与故障隔离
 
