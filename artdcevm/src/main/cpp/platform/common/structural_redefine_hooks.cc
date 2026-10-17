@@ -11,6 +11,7 @@
 
 namespace artdcevm::structural_redefine::detail {
 bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
+  interface_redefinition::Backend* interfaces = InterfaceBackend();
   transaction::Context* context = transaction::Current();
   Batch* batch = BatchOf(context);
   if (!batch) return reinterpret_cast<Check>(process->original_class)(self);
@@ -54,12 +55,12 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   abilities.interface_members = abilities.member_mapping;
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
-      interface_dispatch::Available(*thread, self, (process->interface_backend && process->interface_backend->AbstractLinkErrorsAvailable()));
+      interface_dispatch::Available(*thread, self, (interfaces && interfaces->AbstractLinkErrorsAvailable()));
   if (!abilities.interface_abstract_methods)
     abilities.interface_abstract_unavailable_reason = interface_dispatch::State();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
-  const bool interface_target = (process->interface_backend && process->interface_backend->IsTarget(self));
+  const bool interface_target = (interfaces && interfaces->IsTarget(self));
   if (interface_target) {
     if (decision.error == JVMTI_ERROR_NONE && !abilities.member_mapping) {
       decision.error = JVMTI_ERROR_NOT_AVAILABLE;
@@ -70,7 +71,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   }
   if (decision.error == JVMTI_ERROR_NONE &&
       (decision.methods_structural || decision.fields_structural) &&
-      (process->interface_backend && process->interface_backend->SharesImplementationGroup(self))) {
+      (interfaces && interfaces->SharesImplementationGroup(self))) {
     decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
     decision.reason = "structural class target overlaps the interface implementation group";
   }
@@ -93,7 +94,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
   requirements.redirect_verification =
-      decision.superclass_changed || (process->interface_backend && process->interface_backend->IsAffected(self));
+      decision.superclass_changed || (interfaces && interfaces->IsAffected(self));
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     batch->retires_members = true;
   snapshot.retiring = decision.retired_methods;
@@ -162,12 +163,13 @@ bool CheckInstances(const runtime_thread::VerifiedThread& thread,
   return true;
 }
 bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) noexcept try {
+  interface_redefinition::Backend* interfaces = InterfaceBackend();
   auto* context = transaction::Current();
   const auto* target = context ? context->Find(self) : nullptr;
   const auto named = [&](const char* reason) {
     return (target ? target->descriptor + ": " : "") + reason;
   };
-  if (ARTDCEVM_FAULT_IF(3, (process->interface_backend && process->interface_backend->IsTarget(self)) && data->Classes(true)))
+  if (ARTDCEVM_FAULT_IF(3, (interfaces && interfaces->IsTarget(self)) && data->Classes(true)))
     return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY, named("injected instance allocation failure"));
   const Batch* batch = BatchOf(context);
   if (batch && batch->subclass_loaded && batch->subclass_loaded->load())
@@ -177,7 +179,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   if (!reinterpret_cast<Function>(process->original_instances)(self, data)) return false;
   // Corrupt only the transaction-private holder; cleanup roots are independent.
   ARTDCEVM_TEST(
-    if (ARTDCEVM_FAULT_IF(4, (process->interface_backend && process->interface_backend->IsTarget(self)) && data->Classes(true))) {
+    if (ARTDCEVM_FAULT_IF(4, (interfaces && interfaces->IsTarget(self)) && data->Classes(true))) {
       fault_injection::CorruptHolder(*data);
     }
   )
@@ -193,7 +195,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
           named("the new superclass was not applied"));
     std::string rejection;
-    if ((process->interface_backend && !process->interface_backend->Check(*thread, self, *data, &rejection)) ||
+    if ((interfaces && !interfaces->Check(*thread, self, *data, &rejection)) ||
         !member_mapping::CheckDefaultConflicts(*data, &rejection))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                              std::move(rejection));

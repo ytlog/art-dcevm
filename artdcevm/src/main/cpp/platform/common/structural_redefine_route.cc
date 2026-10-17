@@ -150,7 +150,8 @@ std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
                             transaction::Context* context) {
   const jvmtiError result = process->structural_entry(env, count, definitions);
-  if (std::string reason = process->interface_backend ? process->interface_backend->TakeRejection() : std::string{}; !reason.empty()) Diagnose(reason, true);
+  interface_redefinition::Backend* interfaces = InterfaceBackend();
+  if (std::string reason = interfaces ? interfaces->TakeRejection() : std::string{}; !reason.empty()) Diagnose(reason, true);
   // A rejection decided after allocation (CollectAndCreateNewInstances).
   if (std::string late = std::exchange(context->rejection, {}); !late.empty()) Diagnose(late, true);
   if (result == JVMTI_ERROR_NONE && count > 0) {
@@ -174,6 +175,7 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
 
 jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
                      bool* subclass_loaded) {
+  interface_redefinition::Backend* interfaces = InterfaceBackend();
   transaction::Scope scope;
   transaction::Context* context = &scope.context();
   context->batch = std::make_unique<Batch>();
@@ -192,7 +194,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   batch.jni = jni;
   runtime_thread::Probe(jni);
   verification_redirect::Begin();
-  if (process->interface_backend) process->interface_backend->Begin(jni, process->snapshot_env, count, definitions);
+  if (interfaces) interfaces->Begin(jni, process->snapshot_env, count, definitions);
   // ART rejects a missing or unmodifiable target before any validator runs;
   // do not load types for a batch it will not consider.
   for (jint i = 0; i < count; ++i) {
@@ -200,8 +202,8 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     if (definitions[i].klass &&
         process->snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
         (access & evolution::kAccInterface)) {
-      if (process->interface_backend && process->interface_backend->Available()) continue;
-      Diagnose(Signature(definitions[i].klass) + ": " + (process->interface_backend ? process->interface_backend->RuntimeState() : process->interface_runtime), true);
+      if (interfaces && interfaces->Available()) continue;
+      Diagnose(Signature(definitions[i].klass) + ": " + (interfaces ? interfaces->RuntimeState() : process->interface_runtime), true);
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
     jboolean modifiable = JNI_TRUE;
@@ -236,7 +238,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     result = hierarchy_snapshot::Prepare(process->snapshot_env, jni, definitions[i], &snapshot,
                                           &batch.type_roots, &error);
     if (result != JVMTI_ERROR_NONE) { reject(error); return result; }
-    if (process->interface_backend) process->interface_backend->Describe(definitions[i].klass, snapshot.live);
+    if (interfaces) interfaces->Describe(definitions[i].klass, snapshot.live);
     batch.classes.emplace(definitions[i].klass, std::move(snapshot));
   }
   // ART recreates a target's subclasses under its new class and treats each
@@ -260,8 +262,8 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   std::string interface_error;
   const uint64_t loaded_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - loaded_start).count();
-  result = process->interface_backend ?
-      process->interface_backend->Capture(loaded.count, loaded.classes, loaded_ns, &interface_error) : JVMTI_ERROR_NONE;
+  result = interfaces ?
+      interfaces->Capture(loaded.count, loaded.classes, loaded_ns, &interface_error) : JVMTI_ERROR_NONE;
   if (result != JVMTI_ERROR_NONE) {
     Diagnose(interface_error, true);
     return result;
@@ -275,7 +277,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   for (auto& [klass, snapshot] : batch.classes) {
     std::string error;
     if (snapshot.live.access & evolution::kAccInterface) {
-      const std::vector<jclass>* group = process->interface_backend ? process->interface_backend->GroupTypes(klass) : nullptr;
+      const std::vector<jclass>* group = interfaces ? interfaces->GroupTypes(klass) : nullptr;
       if (!group) {
         Diagnose(snapshot.live.descriptor + ": interface subtype group was not captured", true);
         return JVMTI_ERROR_INTERNAL;

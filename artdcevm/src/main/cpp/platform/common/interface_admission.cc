@@ -118,12 +118,11 @@ PointerMarker CheckPointerMarker(void* klass) {
   }
   return PointerMarker::kClear;
 }
-}  // namespace detail
-jvmtiError RuntimeBackend::Admit(Handle klass, std::string* message, bool structural, size_t spelling) noexcept try {
-  void* original = structural ? state_.original_structural[spelling] : state_.original_normal[spelling];
+jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spelling) noexcept try {
+  void* original = structural ? process->original_structural[spelling] : process->original_normal[spelling];
   if (const State* state = CurrentState(); state && !state->targets.empty() && !state->thread) {
     Disable("interface Thread declaration did not match JNI environment/tid");
-    return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, state_.disabled_reason.load());
+    return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, process->disabled_reason.load());
   }
   void* object = klass.Get<void>();
   Target* target = Find(object);
@@ -131,7 +130,7 @@ jvmtiError RuntimeBackend::Admit(Handle klass, std::string* message, bool struct
   State* state = CurrentState();
   state->rejected_target = target;
   state->rejection_class = nullptr;
-  if (!process->backend->Available()) return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, state_.disabled_reason.load());
+  if (!RuntimeAvailable()) return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, process->disabled_reason.load());
   if (const char* reason = SelectRuntime(klass, *target))
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, reason);
   if ((Status(object) >= ClassStatus::kInitialized) !=
@@ -139,7 +138,7 @@ jvmtiError RuntimeBackend::Admit(Handle klass, std::string* message, bool struct
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, "interface initialization state changed since snapshot");
   if (target->boot)
     return Reject(message, JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface redefinition rejects boot interfaces");
-  void* linker = state_.class_linker.load();
+  void* linker = process->class_linker.load();
   if (!linker)
     return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, "interface redefinition ClassLinker unavailable");
 ARTDCEVM_TEST(
@@ -164,7 +163,7 @@ ARTDCEVM_TEST(
     void* thread = runtime_thread::Current(Thread());
     if (Status(object) == ClassStatus::kInitializing && Field<uint32_t>(object, state->runtime->clinit_thread_id) == Field<uint32_t>(thread, ThreadLayout().tid))
       return Reject(message, JVMTI_ERROR_INTERNAL, "interface redefinition rejects redefinition during initialization");
-    if (!state_.ensure_initialized(linker, thread, klass, true, true)) {
+    if (!process->ensure_initialized(linker, thread, klass, true, true)) {
       // Thread::ClearException() in runtime/thread.h is this assignment.
       Field<void*>(thread, ThreadLayout().exception) = nullptr;
       return Reject(message, JVMTI_ERROR_INVALID_CLASS, "interface redefinition target failed initialization");
@@ -179,11 +178,10 @@ ARTDCEVM_TEST(
     Field<void*>(runtime_thread::Current(Thread()), ThreadLayout().exception) = nullptr;
   return ArtHookExceptionError();
 }
-namespace detail {
-jvmtiError NormalCan(Handle klass, std::string* message) noexcept { return process->backend->Admit(klass, message, false, 0); }
-jvmtiError NormalGet(Handle klass, std::string* message) noexcept { return process->backend->Admit(klass, message, false, 1); }
-jvmtiError StructuralCan(Handle klass, std::string* message) noexcept { return process->backend->Admit(klass, message, true, 0); }
-jvmtiError StructuralGet(Handle klass, std::string* message) noexcept { return process->backend->Admit(klass, message, true, 1); }
+jvmtiError NormalCan(Handle klass, std::string* message) noexcept { return Admit(klass, message, false, 0); }
+jvmtiError NormalGet(Handle klass, std::string* message) noexcept { return Admit(klass, message, false, 1); }
+jvmtiError StructuralCan(Handle klass, std::string* message) noexcept { return Admit(klass, message, true, 0); }
+jvmtiError StructuralGet(Handle klass, std::string* message) noexcept { return Admit(klass, message, true, 1); }
 }  // namespace detail
 
 }  // namespace artdcevm::interface_redefinition

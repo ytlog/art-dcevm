@@ -48,6 +48,12 @@ bool PrepareLayoutServices(JNIEnv* jni, std::string* failure) {
   return false;
 }
 
+// The engine and verification redirection see the same backend, or neither does.
+void PublishInterfaceBackend(interface_redefinition::Backend* backend) {
+  process->interface_backend.store(backend, std::memory_order_release);
+  verification_redirect::BindInterfaceBackend(backend);
+}
+
 bool RollBack(std::string* failure, size_t count = SIZE_MAX) {
   bool removed_all = true;
   for (size_t i = std::min(count, process->hook_tokens.size()); i-- > 0;) {
@@ -125,13 +131,9 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
   std::vector<Hook> retirement_hooks;
   bool mapping_ready = PrepareLayoutServices(jni, &failure);
-  if (mapping_ready && !process->retirement)
-    process->retirement = member_retirement::CreateProcess();
   if (mapping_ready) mapping_ready = member_retirement::Prepare({process->layout_services.find_instance_field}, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = member_mapping::Prepare(process->layout_services, &retirement_hooks, &failure);
-  if (mapping_ready) mapping_ready = verification_redirect::Prepare(
-      {},
-      &retirement_hooks, &failure);
+  if (mapping_ready) mapping_ready = verification_redirect::Prepare(&retirement_hooks, &failure);
   if (mapping_ready) {
     struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
     const Required decisions[] = {
@@ -162,11 +164,9 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     // Native Thread probing never overwrites this installation failure.
     class_layout::Report("unavailable: " + failure);
   }
-  if (!process->interfaces) process->interfaces = interface_redefinition::CreateProcess();
-  process->interface_backend = interface_redefinition::Prepare(*process->interfaces,
+  PublishInterfaceBackend(interface_redefinition::Prepare(
       {prepared.superclass_change, prepared.runtime_thread,
-      process->layout_services.mirror_class, process->layout_services.find_instance_field}, &replacements, &interface_note, &process->interface_runtime);
-  verification_redirect::BindInterfaceBackend(process->interface_backend);
+      process->layout_services.mirror_class, process->layout_services.find_instance_field}, &replacements, &interface_note, &process->interface_runtime));
   const size_t retirement_hook_count = replacements.size();
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
@@ -203,11 +203,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     retirement_note = "method retirement unavailable: " + failure;
     class_layout::Prepare({});
     class_layout::Report("unavailable: " + failure);
-    process->interface_backend = interface_redefinition::Prepare(*process->interfaces,
+    PublishInterfaceBackend(interface_redefinition::Prepare(
         {false, prepared.runtime_thread,
         process->layout_services.mirror_class, process->layout_services.find_instance_field},
-        &replacements, &interface_note, &process->interface_runtime);
-    verification_redirect::BindInterfaceBackend(process->interface_backend);
+        &replacements, &interface_note, &process->interface_runtime));
   }
   // The engine's own environment carries no other events.
   jvmtiEventCallbacks callbacks{};

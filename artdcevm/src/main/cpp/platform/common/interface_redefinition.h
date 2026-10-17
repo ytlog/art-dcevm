@@ -1,5 +1,4 @@
 #pragma once
-#include <memory>
 #include <jni.h>
 #include <jvmti.h>
 #include <vector>
@@ -13,11 +12,6 @@
 namespace artdcevm::runtime_thread { class VerifiedThread; }
 
 namespace artdcevm::interface_redefinition {
-struct Process;
-struct ProcessDeleter { void operator()(Process*) const; };
-using ProcessOwner = std::unique_ptr<Process, ProcessDeleter>;
-// Constructed and owned only by structural_redefine::Install.
-ProcessOwner CreateProcess();
 struct Services {
   bool verifier_redirect;
   bool runtime_thread;
@@ -54,14 +48,14 @@ struct Backend {
   // Current-thread verification only: lookup by loader without cache writes.
   virtual void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept = 0;
   virtual jvmtiError VerificationError() noexcept = 0;
-  // Admission and failure cleanup stay within their original ART hook boundaries.
-  virtual jvmtiError Admit(abi::arm64::Handle, std::string*, bool structural, size_t spelling) noexcept = 0;
-  virtual void Discard() = 0;
+  // Interface dispatch acceptance before ART's no-failure point.
   virtual bool Check(const runtime_thread::VerifiedThread&, abi::arm64::ClassRedefinitionPrefix*,
                      const abi::arm64::RedefinitionDataIter&, std::string*) = 0;
 };
-// Prepare the process state and publish a backend only when named services are
-// available. The unavailable report preserves the existing capability text.
-Backend* Prepare(Process&, const Services&, std::vector<Hook>*, std::string* note,
+// Prepare the module's process-lived state, created on the first call, and
+// return its backend only when named services are available. The backend keeps
+// its identity across later calls. The unavailable report preserves the
+// existing capability text.
+Backend* Prepare(const Services&, std::vector<Hook>*, std::string* note,
                  std::string* unavailable_report);
 }  // namespace artdcevm::interface_redefinition

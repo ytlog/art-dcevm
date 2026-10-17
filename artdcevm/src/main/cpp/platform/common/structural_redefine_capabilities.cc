@@ -19,9 +19,10 @@ std::string Capabilities() {
   const bool fields = methods && state.capabilities.field_retirement;
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
-  const auto interface_timing = state.interface_backend ? state.interface_backend->LastTiming() : interface_redefinition::Timing{};
+  interface_redefinition::Backend* interfaces = state.interface_backend.load(std::memory_order_acquire);
+  const auto interface_timing = interfaces ? interfaces->LastTiming() : interface_redefinition::Timing{};
   // Both capability fields describe the same probe snapshot, including disablement.
-  const std::string interface_state = state.interface_backend ? state.interface_backend->RuntimeState() : state.interface_runtime;
+  const std::string interface_state = interfaces ? interfaces->RuntimeState() : state.interface_runtime;
   const std::string dispatch_state = interface_dispatch::State();
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
@@ -37,7 +38,7 @@ std::string Capabilities() {
       ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
       ",\"interfaceAbstractMethodAddition\":" +
           (state.installed && interface_state.rfind("verified: ", 0) == 0 &&
-           dispatch_state.rfind("verified: ", 0) == 0 && (state.interface_backend && state.interface_backend->AbstractLinkErrorsAvailable())
+           dispatch_state.rfind("verified: ", 0) == 0 && (interfaces && interfaces->AbstractLinkErrorsAvailable())
                ? "true" : "false") +
       ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(dispatch_state) +
       ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +

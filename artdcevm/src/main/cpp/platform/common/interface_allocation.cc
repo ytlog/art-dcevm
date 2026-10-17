@@ -83,7 +83,7 @@ void Discard(const Attempt& next) {
 class AttemptScope {
  public:
   AttemptScope(State* state, Attempt* next) : state_(state), previous_(std::exchange(state->attempt, next)) {}
-  ~AttemptScope() { process->backend->Discard(); state_->attempt = previous_; }
+  ~AttemptScope() { Discard(*state_->attempt); state_->attempt = previous_; }
  private:
   State* state_;
   Attempt* previous_;
@@ -425,7 +425,7 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage
             RedefinitionDataIter* data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
   try {
-    const Target* target = process->backend->Available() ? AffectedTarget(process->mirror_class(self)) : nullptr;
+    const Target* target = RuntimeAvailable() ? AffectedTarget(process->mirror_class(self)) : nullptr;
     if (!target) return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
     HolderView holder;
     if (!VerifyHolder(self, data, &holder)) return false;
@@ -450,7 +450,6 @@ ARTDCEVM_TEST(
 }
 
 }  // namespace detail
-void RuntimeBackend::Discard() { detail::Discard(*CurrentState()->attempt); }
 bool RuntimeBackend::Check(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
                     const RedefinitionDataIter& data, std::string* rejection) {
   return interface_dispatch::Check(thread, self, data, rejection);

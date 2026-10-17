@@ -25,8 +25,6 @@ struct Requirements {
   // ART's own mapping cannot commit the change: fail the transaction, before
   // ART's no-failure point, when a later probe disables the engine's mapping.
   bool member_mapping = false;
-  // Shared by engine allocation/acceptance and member mapping's copy plan.
-  // Keeping it here avoids a dependency from mapping back to engine internals.
   // Link the target's new class under this superclass (a global reference that
   // outlives the transaction), which extends the old superclass.
   jclass superclass = nullptr;

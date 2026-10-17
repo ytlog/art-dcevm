@@ -79,7 +79,9 @@ struct Process {
   jobject (*original_constructor_new_instance)(JNIEnv*, jobject, jobjectArray) = nullptr;
 };
 namespace {
-Process* process = nullptr;  // Borrowed from Install.
+// Created by the first Prepare and kept for the process lifetime: installed
+// guards may still run after Install rolls back or degrades.
+Process* process = nullptr;
 
 // JVMTI-requested field IDs and their ArtFields, while resolving placeholders.
 thread_local std::map<jfieldID, const void*>* field_capture = nullptr;
@@ -569,14 +571,8 @@ ArtField* Visitor::VisitField(ArtField* field, const ReflectionSourceInfo& info)
   }
 }
 
-ProcessOwner CreateProcess() {
-  ProcessOwner owner(new Process);
-  process = owner.get();
-  return owner;
-}
-void ProcessDeleter::operator()(Process* state) const { delete state; }
-
 bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* failure) {
+  if (!process) process = new Process;
   process->prepared = false;
   process->find_instance_field = services.find_instance_field;
   using namespace symbols::structural;

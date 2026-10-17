@@ -9,19 +9,19 @@ void Disable(const char* reason) noexcept {
   process->disabled_reason.store(reason);
   __android_log_write(ANDROID_LOG_WARN, "ART-DCEVM", reason);
 }
-
+bool RuntimeAvailable() { return process->available && process->disabled_reason.load() == nullptr; }
 }  // namespace detail
-void RuntimeBackend::ObserveClassLinker(void* linker) { state_.class_linker.store(linker); }
-bool RuntimeBackend::Available() { return state_.available && state_.disabled_reason.load() == nullptr; }
+void RuntimeBackend::ObserveClassLinker(void* linker) { process->class_linker.store(linker); }
+bool RuntimeBackend::Available() { return RuntimeAvailable(); }
 bool RuntimeBackend::AbstractLinkErrorsAvailable() {
   const State* state = CurrentState();
-  const int release = state ? state->selected_release : state_.verified_release.load();
-  return UsesLinkedIfTable(release) || state_.original_non_public != nullptr;
+  const int release = state ? state->selected_release : process->verified_release.load();
+  return UsesLinkedIfTable(release) || process->original_non_public != nullptr;
 }
 std::string RuntimeBackend::RuntimeState() {
-  if (const char* reason = state_.disabled_reason.load()) return std::string("disabled: ") + reason;
-  if (!state_.available) return "unavailable";
-  const int release = state_.verified_release.load();
+  if (const char* reason = process->disabled_reason.load()) return std::string("disabled: ") + reason;
+  if (!process->available) return "unavailable";
+  const int release = process->verified_release.load();
   return release ? "verified: android" + std::to_string(release) + " Class/Thread/HandleScope/holder probes"
                  : "unverified: interface runtime declarations";
 }
@@ -34,13 +34,13 @@ std::string RuntimeBackend::TakeRejection() {
   if (state->rejection_class) return *state->rejection_class + ": " + reason;
   return target ? target->live.descriptor + ": " + reason : std::string(reason);
 }
-bool RuntimeBackend::IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(state_.mirror_class(self)); }
-bool RuntimeBackend::IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedTarget(state_.mirror_class(self)); }
+bool RuntimeBackend::IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(process->mirror_class(self)); }
+bool RuntimeBackend::IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedTarget(process->mirror_class(self)); }
 bool RuntimeBackend::SharesImplementationGroup(ClassRedefinitionPrefix* self) {
   const State* state = CurrentState();
   if (!state) return false;
   for (jclass ancestor : state->shared_ancestors)
-    if (Decode(ancestor) == state_.mirror_class(self)) return true;
+    if (Decode(ancestor) == process->mirror_class(self)) return true;
   return false;
 }
 void* RuntimeBackend::VerificationClass(void* linker, std::string_view descriptor, Handle loader) noexcept try {
@@ -52,11 +52,11 @@ ARTDCEVM_TEST(
   // LookupClass observes the loader's table without publishing replacements or
   // caching them in any old DEX. The caller limits this to CheckVerification.
   void* old;
-  if (state_.lookup_view) {
-    old = state_.lookup_view(linker, runtime_thread::Current(Thread()), descriptor, loader.Get<void>());
+  if (process->lookup_view) {
+    old = process->lookup_view(linker, runtime_thread::Current(Thread()), descriptor, loader.Get<void>());
   } else {
     const std::string name(descriptor);
-    old = state_.lookup_chars(linker, runtime_thread::Current(Thread()), name.c_str(), loader.Get<void>());
+    old = process->lookup_chars(linker, runtime_thread::Current(Thread()), name.c_str(), loader.Get<void>());
   }
   for (const auto& target : state->targets) {
     auto* replacements = ReplacementRoot(target).Get<ObjectArray>();
@@ -73,12 +73,6 @@ jvmtiError RuntimeBackend::VerificationError() noexcept {
   const State* state = CurrentState();
   return state && state->attempt ? state->attempt->error : JVMTI_ERROR_NONE;
 }
-ProcessOwner CreateProcess() {
-  ProcessOwner owner(new Process);
-  process = owner.get();
-  return owner;
-}
-void ProcessDeleter::operator()(Process* state) const { delete state; }
 void PrepareProcess(const Services& services, std::vector<Hook>* hooks, std::string* note) {
   process->available = false;
   ARTDCEVM_TEST(fault_injection::InterfacePrepared(false);)
@@ -164,21 +158,20 @@ void PrepareProcess(const Services& services, std::vector<Hook>* hooks, std::str
   ARTDCEVM_TEST(fault_injection::InterfacePrepared(true);)
   *note = "interface redefinition prepared; Class/Thread/HandleScope/holder runtime probes required";
 }
-Backend* Prepare(Process& state, const Services& services, std::vector<Hook>* hooks,
+Backend* Prepare(const Services& services, std::vector<Hook>* hooks,
                  std::string* note, std::string* unavailable_report) {
-  // The owner is constructed by Install before the hook table is prepared.
-  process = &state;
+  if (!process) process = new Process;
   PrepareProcess(services, hooks, note);
-  if (const char* reason = state.disabled_reason.load())
+  if (const char* reason = process->disabled_reason.load())
     *unavailable_report = std::string("disabled: ") + reason;
   else
     *unavailable_report = "unavailable";
-  const bool ready = state.available && state.disabled_reason.load() == nullptr;
+  const bool ready = RuntimeAvailable();
   // Hooks already on an ART stack may still hold the published backend while
   // Install rolls back or degrades. Keep its identity for the process lifetime;
   // only the engine's optional view becomes null when services are unavailable.
-  if (ready && !state.backend) state.backend = std::make_unique<RuntimeBackend>(state);
-  return ready ? state.backend.get() : nullptr;
+  if (ready && !process->backend) process->backend = std::make_unique<RuntimeBackend>();
+  return ready ? process->backend.get() : nullptr;
 }
 
 }  // namespace artdcevm::interface_redefinition

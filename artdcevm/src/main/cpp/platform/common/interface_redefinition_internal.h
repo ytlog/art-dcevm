@@ -73,7 +73,6 @@ struct Process {
   std::unique_ptr<Backend> backend;
 };
 struct RuntimeBackend final : Backend {
-  explicit RuntimeBackend(Process& state) : state_(state) {}
   bool Available() override;
   bool AbstractLinkErrorsAvailable() override;
   Timing LastTiming() override;
@@ -89,17 +88,13 @@ struct RuntimeBackend final : Backend {
   bool SharesImplementationGroup(abi::arm64::ClassRedefinitionPrefix* self) override;
   void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept override;
   jvmtiError VerificationError() noexcept override;
-  // Admission and failure cleanup stay within their original ART hook boundaries.
-  jvmtiError Admit(abi::arm64::Handle, std::string*, bool structural, size_t spelling) noexcept override;
-  void Discard() override;
   bool Check(const runtime_thread::VerifiedThread&, abi::arm64::ClassRedefinitionPrefix*,
-                     const abi::arm64::RedefinitionDataIter&, std::string*) override;
-
- private:
-  Process& state_;
+             const abi::arm64::RedefinitionDataIter&, std::string*) override;
 };
 namespace detail {
-extern Process* process;  // Borrowed from Install.
+// Created by the first Prepare and kept for the process lifetime: installed
+// hooks may still be on an ART stack after Install rolls back or degrades.
+extern Process* process;
 struct Target { jclass klass; bool boot; jint status; TypeSnapshot snapshot; evolution::ClassSchema live; jclass owner = nullptr; std::unique_ptr<ClassArrayRoots> arrays; };
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
 // every linked replacement reachable until the result is known, including
@@ -178,6 +173,8 @@ inline jvmtiError Reject(std::string* message, jvmtiError error, const char* why
 }
 
 void Disable(const char*) noexcept;
+// Named services are prepared and no runtime probe disabled the backend.
+bool RuntimeAvailable();
 Handle ReplacementRoot(const Target&);
 const Target* AffectedTarget(void*);
 jvmtiError NormalCan(Handle, std::string*) noexcept;

@@ -63,13 +63,16 @@ struct Process {
   std::vector<Watch*> watches;
   std::atomic<uint64_t> subclass_retries{0};
 
-  member_retirement::ProcessOwner retirement;
-  interface_redefinition::ProcessOwner interfaces;
-  interface_redefinition::Backend* interface_backend = nullptr;
+  // Published by Install; hooks read it without the transaction lock.
+  std::atomic<interface_redefinition::Backend*> interface_backend{nullptr};
   std::string interface_runtime = "unavailable";
 };
 extern std::mutex installation_mutex;
 extern std::unique_ptr<Process> process;
+// The published interface backend, or null. Load once per use site.
+inline interface_redefinition::Backend* InterfaceBackend() {
+  return process->interface_backend.load(std::memory_order_acquire);
+}
 struct Snapshot : hierarchy_snapshot::Snapshot {
   // Methods retired earlier, and declarations this transaction retires.
   structural_policy::RetiredMethods retired;

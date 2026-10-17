@@ -16,13 +16,13 @@
 namespace artdcevm::interface_redefinition { struct Backend; }
 namespace artdcevm::verification_redirect {
 
-struct Services { interface_redefinition::Backend* interfaces = nullptr; };
+// The interface backend Install published, or null; the only way to set it.
 void BindInterfaceBackend(interface_redefinition::Backend*);
 // Allocate the verification Part while the standard entry is still Native.
 void Begin();
 // Resolve the CheckVerification and FindClass hooks by name. False with
 // `failure` when CheckVerification is missing; `hooks` is then unchanged.
-bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* failure);
+bool Prepare(std::vector<Hook>* hooks, std::string* failure);
 // Either FindClass spelling is hooked, so verification can be redirected.
 bool ResolvesClasses();
 }  // namespace artdcevm::verification_redirect

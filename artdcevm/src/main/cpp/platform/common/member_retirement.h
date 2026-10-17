@@ -1,5 +1,4 @@
 #pragma once
-#include <memory>
 #include <jni.h>
 #include <jvmti.h>
 #include <cstdint>
@@ -16,11 +15,6 @@
 // class; the guards throw before new code can use it through JNI, reflection,
 // MethodHandle or VarHandle.
 namespace artdcevm::member_retirement {
-struct Process;
-struct ProcessDeleter { void operator()(Process*) const; };
-using ProcessOwner = std::unique_ptr<Process, ProcessDeleter>;
-// Constructed and owned only by structural_redefine::Install.
-ProcessOwner CreateProcess();
 
 struct Services {
   abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view);
