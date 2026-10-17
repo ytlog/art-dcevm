@@ -6,8 +6,8 @@
 #include "platform/abi/arm64/android15/redefinition.h"
 
 namespace artdcevm::abi::arm64::android15 {
-// Source preparation only. RuntimeFor deliberately does not select this profile.
-inline constexpr InterfaceRuntime kPreparedInterfaceRuntime =
+// Android 15 uses a sized HandleScope and separate Class field arrays.
+inline constexpr InterfaceRuntime kInterfaceRuntime =
     InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder>(offsetof(HandleScopeHeader, size));
 inline constexpr bool kHandleScopeThreadIdSigned = false;
 }  // namespace artdcevm::abi::arm64::android15

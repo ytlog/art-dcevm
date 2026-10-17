@@ -3,7 +3,7 @@
 #include "platform/abi/arm64/common/redefinition.h"
 
 namespace artdcevm::abi::arm64::android15 {
-// ti_redefine.h: 3 trailing bools, last has_virtuals_. Prepared only.
+// ti_redefine.h: 3 trailing bools, last has_virtuals_.
 using ClassRedefinition = ClassRedefinitionLayout<3>;
 static_assert(sizeof(ClassRedefinition) == 72);
 static_assert(offsetof(ClassRedefinition, original_dex_file) == 48);

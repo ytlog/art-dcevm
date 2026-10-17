@@ -41,7 +41,7 @@ def read_runtime_table():
               if status == 'kDeviceVerified']
     active_apis = [api for _, first, last, _, _, status in entries if status == 'kDeviceVerified'
                    for api in range(int(first), int(last) + 1)]
-    if active != [13, 14, 16] or active_apis != [33, 34, 36]:
+    if active != [13, 14, 15, 16] or active_apis != [33, 34, 35, 36]:
         raise ValueError('Unverified source preparation was added to runtime selection')
     return entries, versions, active
 
@@ -72,7 +72,7 @@ def main():
         offsets = expected[v]
         profile = f'kInterfaceRuntimes[{index}]'
         lines.append(f'static_assert({profile}.runtime == &android{v}::{name});')
-        lines.append(f'static_assert(UsesLinkedIfTable({v}) == {str(v == 16).lower()});')
+        lines.append(f'static_assert(UsesLinkedIfTable({v}) == {str(v in (15, 16)).lower()});')
         selected = f'{profile}.runtime' if status == 'kDeviceVerified' else 'nullptr'
         lines.append(f'static_assert(RuntimeFor({v}) == {selected});')
         for member, value in zip(('tid', 'is_gc_marking', 'jni_env', 'top_handle_scope'), offsets[:4]):
@@ -85,7 +85,7 @@ def main():
         lines.append(f'static_assert(RuntimeFor({release}) == nullptr);')
     for api in range(-1, 41):
         lines.append(f'static_assert(IsDeviceVerifiedInterfaceApi({api}) == '
-                     f'{str(api in (33, 34, 36)).lower()});')
+                     f'{str(api in (33, 34, 35, 36)).lower()});')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(123) == 123);')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(0xff000123) == 0);')
     source = out / 'profiles.cc'

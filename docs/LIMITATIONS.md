@@ -20,7 +20,7 @@
 
 接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，以及删除或改签名 static/private 方法。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
 
-此能力仅在 Android 13（API 33）、Android 14（API 34）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
+此能力仅在 Android 13（API 33）、Android 14（API 34）、Android 15（API 35）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
 
 `capabilities()` 只读取最近的探测状态，不触发探测。`interfaceRuntime` 的 `unavailable` 表示接口运行时不可用；`disabled: 原因` 表示已停用，例如版本、必需服务或运行时声明不匹配；这两种状态下接口目标以 98 拒绝。`unverified: …` 表示事务内探测尚未完成，`verified: …` 表示探测已通过。初始化后、首次接口事务完成运行时探测前，`interfaceRedefinition` 为 false；`unverified` 不等于不支持，不应据此拦截首次事务。探测通过也不保证每种修改都被接受，最终以具体事务结果和 `lastRejection` 为准。
 
