@@ -152,7 +152,7 @@ Android 13/API 33、Android 14/API 34 与 Android 16/API 36 的 arm64 接口目�
 
 合法分派必须为 public、非 static/private/abstract、非冲突、非 obsolete／已退役目标，且真实 DEX 名称与完整 descriptor 相同。已有／同批实现、继承实现与 ART 选中的更具体 default 可接受；bridge 必须真实存在。失败以 63 整批拒绝，`lastRejection` 写出接口方法和具体类；访问器不匹配也以 63 拒绝并报告探测原因。验收紧邻 default 冲突检查，位于 `CollectAndCreateNewInstances` 的计划阶段、不可失败边界之前，沿用现有废弃类清理和重试路径。`interfaceAbstractDispatch` 报告最近的访问器探测状态；每次事务重新检查。
 
-分派验证独立放在 `interface_dispatch`：它持有只读布局探测、逐条件验收和错误格式化；`structural_redefine_engine` 在成员计划之后的提交前检查中调度它，映射模块不依赖分派模块。两者复用 `art_method_identity.h` 的有界 DEX 身份读取。ART 13 的 `LinkInterfaceMethods` 与 ART 14 的 `LinkMethodsHelper::FindCopiedMethodsForInterface` 对非 public 实现在 IfTable 形成之前调用固定源码的 `ThrowIllegalAccessErrorForImplementingMethod`。`interface_redefinition` 通过该命名 NO_INLINE 服务观察实际选择的方法对，在链接锁内只记录原生元数据和已有 HandleScope 根，原服务照常执行；分配返回失败、离开锁后，验证模块按候选接口身份和完整 descriptor 生成 63 的拒绝原因。不截取异常文本、不按名称猜实现，也不放宽 ART 链接。该服务在 ART 13、14 不可定位时仅禁用新增 abstract，并在能力与拒绝原因中说明；ART 16 使用已链接 IfTable 验收。
+分派验证独立放在 `interface_dispatch`：它持有只读布局探测、逐条件验收和错误格式化；`structural_redefine_engine` 在成员计划之后的提交前检查中调度它，映射模块不依赖分派模块。两者复用 `art_method_identity.h` 的有界 DEX 身份读取。ART 13 的 `LinkInterfaceMethods` 对非 public 实现在 IfTable 形成之前调用固定源码的 `ThrowIllegalAccessErrorForImplementingMethod`。`interface_redefinition` 通过该命名 NO_INLINE 服务观察实际选择的方法对，在链接锁内只记录原生元数据和已有 HandleScope 根，原服务照常执行；分配返回失败、离开锁后，验证模块按候选接口身份和完整 descriptor 生成 63 的拒绝原因。不截取异常文本、不按名称猜实现，也不放宽 ART 链接。该服务在 ART 13 不可定位时仅禁用新增 abstract，并在能力与拒绝原因中说明。ART 14 的 `AssignVTableIndexes` 筛选非 public 类方法；`FindCopiedMethodsForInterface` 的早期错误调用只用于接口声明，不能泛化为具体类选择。其已验证配置保守保留命名服务要求；ART 16 使用已链接 IfTable 验收。
 
 专项回归还覆盖更具体的 abstract 遮住远处 default、同批移除最后实现、多组中后一组拒绝、映射计划后故障，以及快照后晚加载缺失实现与连续加载耗尽重试。失败前后分别调用缓存的反射、MethodHandle、JNI ID 和预热字节码；修正或撤回后再次提交。`interfaceAbstractMethodAddition` 是细分探测状态，不能替代逐事务验收。
 
@@ -262,7 +262,7 @@ holder 所有版本都是 Handle array、redefinitions vector 指针、initializ
 | --- | --- | --- |
 | Android 11 / API 30 | 普通类及 Thread 已真机验证；接口未启用 | Motorola G20 的普通／CheckJNI 完整普通类场景、Thread 拒绝及 GC 压力通过；仍需安全取得 ART allocator 的命名服务或三参数数组分配包装器，以及 signed 根遍历、scope/holder、完整接口事务和失败清理验证 |
 | Android 12、12L / API 31–32 | 两 API 的普通类及 Thread 已真机验证；接口未启用 | Pixel 6/API 31、Pixel 6a/API 32 的两模式第一阶段均通过；仍需确认必需命名分配服务，验证旧 Thread 排列所关联的 scope/holder 和完整接口事务 |
-| Android 14 / API 34 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、声明探测与 abort 恢复；Pixel 8 的 Compose `interface abstract batch` 通过。保持 `linked_iftable_acceptance=false`，由命名的早期链接错误服务把非 public 实现转换为 63 |
+| Android 14 / API 34 | 普通类及接口 CC/CMC 已真机验证；已启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 均通过普通／CheckJNI 完整场景（每次 146 项）、声明探测与 abort 恢复；Pixel 8 的 Compose `interface abstract batch` 通过。保持已验证的保守配置 `linked_iftable_acceptance=false` 及可用命名错误服务，非 public 实现场景返回 63 |
 | Android 15 / API 35 | 普通类 CC/CMC 已验证；接口待验，未启用 | Galaxy S21 的 CC、Pixel 8 的 CMC 两模式第一阶段均通过，成员映射选择 android15；仍需验证 16 字节 scope、三标志 redefinition、分离 Class 字段数组和完整接口事务 |
 | Android 17 / API 37 | 普通类分代 CMC 已验证；CC 与接口待验，未启用 | Pixel 11、Galaxy Z Fold8 的分代 CMC 两模式第一阶段均通过；仍需实际 CC 配置，以及 tid/hash 复用槽、合并 Class 字段数组、映射和接口失败清理验证 |
 
