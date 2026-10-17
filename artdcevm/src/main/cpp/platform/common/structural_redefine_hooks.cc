@@ -179,7 +179,9 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
     return context->Reject(self, JVMTI_ERROR_INTERNAL,
         named("a subtype of a redefined class was loaded during the transaction"));
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
-  if (!reinterpret_cast<Function>(process->original_instances)(self, data)) return false;
+  const auto collect = reinterpret_cast<Function>(process->original_instances);
+  if (!collect(self, data)) return false;
+  if (interfaces && !interfaces->CompleteInstances(self, data, collect)) return false;
   // Corrupt only the transaction-private holder; cleanup roots are independent.
   ARTDCEVM_TEST(
     if (ARTDCEVM_FAULT_IF(4, (interfaces && interfaces->IsTarget(self)) && data->Classes(true))) {

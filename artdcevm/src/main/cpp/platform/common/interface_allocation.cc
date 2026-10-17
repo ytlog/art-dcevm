@@ -438,9 +438,9 @@ void ChooseMembers(Group& group, const HolderView& holder) {
   }
   group.uses_extended = extended;
   // ART's initial structural entries are the ones it collects instances for.
-  const auto& owners = group.Current().owners;
-  for (size_t i = 0; group.owner < 0 && i < owners.size(); ++i) {
-    const int32_t entry = Entry(holder, owners[i].first);
+  const auto& orderings = group.Current().orderings;
+  for (size_t i = 0; group.owner < 0 && i < orderings.size(); ++i) {
+    const int32_t entry = Entry(holder, orderings[i].owner);
     if (entry >= 0 && (*holder.structural)[entry] && (*holder.initial)[entry] && !(*holder.initialized)[entry])
       group.owner = static_cast<int32_t>(i);
   }
@@ -460,15 +460,11 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage
     if (!group.uses_extended) ChooseMembers(group, holder);
     if (AffectedGroup(klass) != &group)
       return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
-    if (group.owner < 0) {
-      FailAllocation(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                     "interface rebuild has no structural target whose instances cover every member");
-      state->rejection_class = &state->targets[group.leader].live.descriptor;
-      return false;
-    }
+    if (group.owner < 0)
+      return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface rebuild has no structural owner entry");
     // ART sorts by superclass depth, not interface dependencies. The first
     // affected entry delegates the complete group to its owner.
-    const int32_t entry = Entry(holder, group.Current().owners[group.owner].first);
+    const int32_t entry = Entry(holder, group.Current().orderings[group.owner].owner);
 ARTDCEVM_TEST(
     fault_injection::Set(fault_injection::Counter::kAllocationOrder, data->index < entry ? 1 : 0);
 )
@@ -481,7 +477,95 @@ ARTDCEVM_TEST(
   }
 }
 
+// ART's CollectAndCreateNewInstances collects instances of the owner entry's
+// class and allocates their replacements. For each further root of the
+// rebuild, run it again with that root as the entry's class, then keep each
+// instance from the round of the first root its class is assignable to, so
+// every instance is migrated once. Only ART allocates the replacements; the
+// merged arrays are allocated through public JNI on this Runnable thread.
+bool CollectInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
+                      bool (*collect)(ClassRedefinitionPrefix*, RedefinitionDataIter*)) {
+  State* state = CurrentState();
+  if (!state || !state->attempt) return true;
+  const Ordering* ordering = nullptr;
+  for (const auto& group : state->groups)
+    if (group.owner >= 0 && group.Current().orderings[group.owner].owner == self->klass)
+      ordering = &group.Current().orderings[group.owner];
+  if (!ordering || ordering->rounds.empty()) return true;
+  if (!state->object_class)
+    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface instance merge JNI services unavailable");
+  using Slots = RedefinitionDataIter;
+  const auto& types = ordering->snapshot.types;
+  Roots roots(runtime_thread::Current(Thread()), types.size() + 1 + 2 * (ordering->rounds.size() + 1));
+  std::vector<Handle> classes;
+  for (jclass type : types) classes.push_back(roots.Add(Decode(type)));
+  const Handle owner = roots.Add(Slot(*data, Slots::kSlotMirrorClass));
+  std::vector<std::pair<int32_t, std::pair<Handle, Handle>>> results;
+  results.push_back({0, {roots.Add(Slot(*data, Slots::kSlotOldInstanceObjects)),
+                         roots.Add(Slot(*data, Slots::kSlotNewInstanceObjects))}});
+  for (int32_t round : ordering->rounds) {
+    // Roots are batch references; decode by identity, not by JNI reference.
+    SetSlot(*data, Slots::kSlotMirrorClass, Decode(ordering->roots[round]));
+    const bool collected = collect(self, data);
+    SetSlot(*data, Slots::kSlotMirrorClass, owner.Get<void>());
+    if (!collected) return false;  // ART recorded its error.
+    results.push_back({round, {roots.Add(Slot(*data, Slots::kSlotOldInstanceObjects)),
+                               roots.Add(Slot(*data, Slots::kSlotNewInstanceObjects))}});
+  }
+  // Class pointers are read again after the rounds' allocations.
+  std::unordered_map<void*, int32_t> first_root;
+  for (size_t i = 0; i < types.size(); ++i) first_root[classes[i].Get<void>()] = ordering->first_root[i];
+  const auto kept = [&](int32_t round, ObjectArray* olds, int32_t i) {
+    void* instance = runtime_thread::Read(Thread(), olds->elements[i]);
+    const auto found = first_root.find(runtime_thread::Read(Thread(), static_cast<Object*>(instance)->klass));
+    return found != first_root.end() && found->second == round;
+  };
+  int32_t total = 0;
+  for (const auto& [round, arrays] : results)
+    for (int32_t i = 0; i < arrays.first.Get<ObjectArray>()->length; ++i) total += kept(round, arrays.first.Get<ObjectArray>(), i);
+  JNIEnv* jni = state->jni;
+  jobjectArray merged[2] = {jni->NewObjectArray(total, state->object_class, nullptr),
+                            jni->NewObjectArray(total, state->object_class, nullptr)};
+  if (!merged[0] || !merged[1]) {
+    jni->ExceptionClear();
+    for (jobjectArray array : merged) if (array) jni->DeleteLocalRef(array);
+    return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface instance merge allocation failed");
+  }
+  int32_t position = 0;
+  for (const auto& [round, arrays] : results) {
+    for (int32_t i = 0; i < arrays.first.Get<ObjectArray>()->length; ++i) {
+      if (!kept(round, arrays.first.Get<ObjectArray>(), i)) continue;
+      for (int side = 0; side < 2; ++side) {
+        const Handle source = side ? arrays.second : arrays.first;
+        LocalRef element(runtime_thread::Read(Thread(), source.Get<ObjectArray>()->elements[i]));
+        jni->SetObjectArrayElement(merged[side], position, element.Get());
+      }
+      ++position;
+    }
+  }
+  const bool stored = !jni->ExceptionCheck();
+  jni->ExceptionClear();
+  // The holder array is rooted by ART; publish the merged arrays into it.
+  LocalRef holder(data->holder->array.Get<void>());
+  for (int side = 0; stored && side < 2; ++side)
+    jni->SetObjectArrayElement(static_cast<jobjectArray>(holder.Get()),
+        Slots::kNumSlots * data->index + (side ? Slots::kSlotNewInstanceObjects : Slots::kSlotOldInstanceObjects),
+        merged[side]);
+  const bool published = stored && !jni->ExceptionCheck();
+  jni->ExceptionClear();
+  for (jobjectArray array : merged) jni->DeleteLocalRef(array);
+  if (!published) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface instance merge transfer failed");
+  return true;
+}
 }  // namespace detail
+bool RuntimeBackend::CompleteInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
+                                       bool (*collect)(ClassRedefinitionPrefix*, RedefinitionDataIter*)) noexcept try {
+  return !RuntimeAvailable() || detail::CollectInstances(self, data, collect);
+} catch (const std::bad_alloc&) {
+  return detail::FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface instance merge native allocation failed");
+} catch (...) {
+  return detail::FailAllocation(self, ArtHookExceptionError(), "interface instance merge failed");
+}
 bool RuntimeBackend::Check(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
                     const RedefinitionDataIter& data, std::string* rejection) {
   return interface_dispatch::Check(thread, self, data, rejection);

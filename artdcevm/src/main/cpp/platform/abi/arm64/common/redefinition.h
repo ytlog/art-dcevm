@@ -68,6 +68,7 @@ struct RedefinitionDataIter {
   static constexpr int32_t kSlotMirrorClass = 4;
   static constexpr int32_t kSlotNewClassObject = 8;
   static constexpr int32_t kSlotOldInstanceObjects = 9;
+  static constexpr int32_t kSlotNewInstanceObjects = 10;
   static constexpr int32_t kSlotOldClasses = 11;
   static constexpr int32_t kSlotNewClasses = 12;
   ObjectArray* Slot(int32_t slot) const {

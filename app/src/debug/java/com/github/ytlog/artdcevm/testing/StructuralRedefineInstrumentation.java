@@ -612,25 +612,31 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 .getConstructor().newInstance();
         MultiInterfaceFixture.Left sharedLeft = (MultiInterfaceFixture.Left) shared;
         MultiInterfaceFixture.Right sharedRight = (MultiInterfaceFixture.Right) shared;
-        runScenario("multi-interface-shared-reject", 66, scenario -> {
-            scenario.expectRejectionBy(MultiInterfaceFixture.Left.class);
+        shared.getClass().getField("marker").setInt(shared, 37);
+        runScenario("multi-interface-shared", 0, scenario -> {
+            // No interface covers every instance: ART collects each root's instances.
             scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class, MultiInterfaceFixture.Right.class},
                     "multi-interface-body", "multi-interface-body");
-            // ART collects only the owner's instances; RightImpl is not a Left.
-            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("share a subtype"));
-            scenario.check("leftUnchanged", 13, left.leftValue());
-            scenario.check("rightUnchanged", 23, right.rightValue());
-            scenario.check("sharedLeft", 13, sharedLeft.leftValue());
-            scenario.check("sharedRight", 23, sharedRight.rightValue());
-            scenario.check("newSharedLeft", 13, ((MultiInterfaceFixture.Left) shared.getClass().getConstructor().newInstance()).leftValue());
-            scenario.check("newSharedRight", 23, ((MultiInterfaceFixture.Right) shared.getClass().getConstructor().newInstance()).rightValue());
+            scenario.check("left", 12, left.leftValue());
+            scenario.check("right", 22, right.rightValue());
+            scenario.check("sharedLeft", 12, sharedLeft.leftValue());
+            scenario.check("sharedRight", 22, sharedRight.rightValue());
+            scenario.check("newSharedLeft", 12, ((MultiInterfaceFixture.Left) shared.getClass().getConstructor().newInstance()).leftValue());
+            scenario.check("newSharedRight", 22, ((MultiInterfaceFixture.Right) shared.getClass().getConstructor().newInstance()).rightValue());
+            scenario.check("sharedMarker", 37, shared.getClass().getField("marker").getInt(shared));
+            scenario.check("leftMarker", 73, left.marker);
+            scenario.check("rightMarker", 79, right.marker);
+            scenario.check("allocatedOnce", 5, InterfaceAbortInstrumentation.allocatedTypes());
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("rightAfterGc", 22, right.rightValue());
+            scenario.check("sharedRightAfterGc", 22, sharedRight.rightValue());
         });
         runScenario("multi-interface-after-shared", 0, scenario -> {
-            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class}, "multi-interface-body");
-            scenario.check("left", 12, left.leftValue());
-            scenario.check("rightUnchanged", 23, right.rightValue());
-            scenario.check("sharedLeft", 12, sharedLeft.leftValue());
-            scenario.check("sharedRight", 23, sharedRight.rightValue());
+            scenario.redefine(new Class<?>[]{MultiInterfaceFixture.Left.class}, "multi-interface-next");
+            scenario.check("left", 13, left.leftValue());
+            scenario.check("rightUnchanged", 22, right.rightValue());
+            scenario.check("sharedLeft", 13, sharedLeft.leftValue());
+            scenario.check("sharedRight", 22, sharedRight.rightValue());
         });
         MultiInterfaceFixture.CoveredLeftOnly coveredOnly = new MultiInterfaceFixture.CoveredLeftOnly();
         MultiInterfaceFixture.CoveredBoth coveredBoth = new MultiInterfaceFixture.CoveredBoth();
@@ -708,17 +714,24 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         Object other = Class.forName("com.github.ytlog.artdcevm.fixture.InterfaceOverlapFixture$OtherImplementation")
                 .getConstructor().newInstance();
         InterfaceOverlapFixture.Contract otherContract = (InterfaceOverlapFixture.Contract) other;
-        runScenario("interface-overlap-uncovered", 66, scenario -> {
-            scenario.expectRejectionBy(InterfaceOverlapFixture.Contract.class);
+        InterfaceOverlapFixture.Parent plainParent = new InterfaceOverlapFixture.Parent();
+        InterfaceOverlapFixture.Parent.class.getField("added").setInt(plainParent, 61);
+        runScenario("interface-overlap-uncovered", 0, scenario -> {
+            // Neither Contract nor Parent covers every instance: ART collects both.
             scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class, InterfaceOverlapFixture.Parent.class},
                     "interface-overlap-uncovered", "interface-overlap-uncovered");
-            scenario.check("rejectionReason", true,
-                    DcevmRuntime.capabilities().getString("lastRejection").contains("cover every member"));
-            scenario.check("unchangedParent", superclassSchema, memberSchema(InterfaceOverlapFixture.Parent.class));
-            scenario.check("interfaceUnchanged", 34, contract.value());
-            scenario.check("otherUnchanged", 34, otherContract.value());
-            scenario.check("parentUnchanged", 23, instance.parentValue());
+            scenario.check("interfaceAfter", 36, contract.value());
+            scenario.check("otherAfter", 36, otherContract.value());
+            scenario.check("parentAfter", 23, instance.parentValue());
+            scenario.check("existingAnother", 0L, InterfaceOverlapFixture.Parent.class.getField("another").getLong(instance));
+            scenario.check("newAnother", 29L, InterfaceOverlapFixture.Parent.class.getField("another")
+                    .getLong(new InterfaceOverlapFixture.Implementation()));
+            scenario.check("plainAdded", 61, InterfaceOverlapFixture.Parent.class.getField("added").getInt(plainParent));
+            scenario.check("plainAnother", 0L, InterfaceOverlapFixture.Parent.class.getField("another").getLong(plainParent));
+            scenario.check("plainValue", 23, plainParent.parentValue());
             scenario.check("marker", 73, instance.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("plainAfterGc", 61, InterfaceOverlapFixture.Parent.class.getField("added").getInt(plainParent));
         });
     }
 

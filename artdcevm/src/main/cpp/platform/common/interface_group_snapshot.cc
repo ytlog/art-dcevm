@@ -30,6 +30,7 @@ ARTDCEVM_TEST(
   if (!next->targets.empty() && jni->EnsureLocalCapacity(8) == JNI_OK) {
     if (jni->GetJavaVM(&next->vm) == JNI_OK)
       next->class_class = jni->FindClass("java/lang/Class");
+    if (next->vm) next->object_class = jni->FindClass("java/lang/Object");
     // Resolve Class[] before the subclass-load watch starts.
     jobjectArray array = next->class_class ? jni->NewObjectArray(0, next->class_class, nullptr) : nullptr;
     if (array) jni->DeleteLocalRef(array);
@@ -96,35 +97,50 @@ struct Sets {
     if (left != right) parent[std::max(left, right)] = std::min(left, right);
   }
 };
-// ART collects only instances of the owner entry's class: an owner must be a
-// supertype of every concrete member, or a member's instances keep the old class.
-// members->snapshot already leads with candidates[0], the group leader.
-jvmtiError FindOwners(JNIEnv* jni, jvmtiEnv* env, const jclass* loaded, const std::vector<jint>& positions,
-                      const std::vector<jclass>& candidates, Members* members, std::string* error) {
-  std::vector<jclass> concrete;
+// One order per candidate owner. ART collects only instances of the owner
+// entry's class; every other root whose types have instances is a further
+// collection round. Owners that cover every concrete member come first.
+jvmtiError BuildOrderings(JNIEnv* jni, jvmtiEnv* env, const jclass* loaded, const std::vector<jint>& positions,
+                          const std::vector<jclass>& candidates, Members* members, std::string* error) {
+  std::vector<bool> concrete;
   for (jclass type : members->snapshot.types) {
     jint access = 0;
     const jvmtiError result = env->GetClassModifiers(type, &access);
     if (result != JVMTI_ERROR_NONE) { *error = "interface snapshot member modifiers unavailable"; return result; }
-    if (!(access & (evolution::kAccInterface | evolution::kAccAbstract))) concrete.push_back(type);
+    concrete.push_back(!(access & (evolution::kAccInterface | evolution::kAccAbstract)));
   }
+  std::vector<Ordering> covering, partial;
   for (jclass candidate : candidates) {
-    bool covers = true;
-    for (size_t i = 0; covers && i < concrete.size(); ++i) covers = jni->IsAssignableFrom(concrete[i], candidate);
-    if (jni->ExceptionCheck()) {
-      jni->ExceptionClear();
-      *error = "interface rebuild owner check failed";
-      return JVMTI_ERROR_INTERNAL;
-    }
-    if (!covers) continue;
+    Ordering ordering{candidate, {}, {candidate}, {}, {}};
+    for (jclass other : candidates)
+      if (other != candidate) ordering.roots.push_back(other);
     if (candidate == candidates.front()) {
-      members->owners.emplace_back(candidate, members->snapshot);
-      continue;
+      ordering.snapshot = members->snapshot;
+    } else {
+      const jvmtiError result = OrderTypes(jni, env, candidate, loaded, positions, &ordering.snapshot, error);
+      if (result != JVMTI_ERROR_NONE) return result;
     }
-    members->owners.emplace_back(candidate, TypeSnapshot{});
-    const jvmtiError result = OrderTypes(jni, env, candidate, loaded, positions, &members->owners.back().second, error);
-    if (result != JVMTI_ERROR_NONE) return result;
+    std::vector<bool> collected(ordering.roots.size());
+    for (jclass type : ordering.snapshot.types) {
+      int32_t first = -1;
+      for (size_t k = 0; first < 0 && k < ordering.roots.size(); ++k)
+        if (jni->IsAssignableFrom(type, ordering.roots[k])) first = static_cast<int32_t>(k);
+      if (jni->ExceptionCheck() || first < 0) {
+        jni->ExceptionClear();
+        *error = "interface rebuild root check failed";
+        return JVMTI_ERROR_INTERNAL;
+      }
+      ordering.first_root.push_back(first);
+      // Positions in the shared snapshot, which lists the same types.
+      for (size_t i = 0; i < members->snapshot.types.size(); ++i)
+        if (members->snapshot.types[i] == type && concrete[i]) collected[first] = true;
+    }
+    for (size_t k = 1; k < collected.size(); ++k)
+      if (collected[k]) ordering.rounds.push_back(static_cast<int32_t>(k));
+    (ordering.rounds.empty() ? covering : partial).push_back(std::move(ordering));
   }
+  members->orderings = std::move(covering);
+  for (auto& ordering : partial) members->orderings.push_back(std::move(ordering));
   return JVMTI_ERROR_NONE;
 }
 std::vector<jint> Union(std::vector<jint> left, const std::vector<jint>& right) {
@@ -236,20 +252,14 @@ ARTDCEVM_TEST(
       if (next->targets[root].group == g) candidates.push_back(next->targets[root].klass);
     jvmtiError result = OrderTypes(jni, next->env, leader.klass, loaded, core[g], &group.core.snapshot, error);
     if (result == JVMTI_ERROR_NONE)
-      result = FindOwners(jni, next->env, loaded, core[g], candidates, &group.core, error);
+      result = BuildOrderings(jni, next->env, loaded, core[g], candidates, &group.core, error);
     if (result == JVMTI_ERROR_NONE && !group.ancestors.empty()) {
       result = OrderTypes(jni, next->env, leader.klass, loaded, extended[g], &group.extended.snapshot, error);
       candidates.insert(candidates.end(), group.ancestors.begin(), group.ancestors.end());
       if (result == JVMTI_ERROR_NONE)
-        result = FindOwners(jni, next->env, loaded, extended[g], candidates, &group.extended, error);
+        result = BuildOrderings(jni, next->env, loaded, extended[g], candidates, &group.extended, error);
     }
     if (result != JVMTI_ERROR_NONE) return result;
-    // Without an ancestor no structural owner can join at allocation.
-    if (group.ancestors.empty() && group.core.owners.empty()) {
-      *error = leader.live.descriptor +
-          ": unrelated interface groups share a subtype, and no target's instances cover every member";
-      return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-    }
     if (!leader.boot) {
       result = VerifyJniIdMode(next->env, group.core.snapshot, &jvmtiEnv::GetClassMethods,
                                &indexed_jni_ids, error);

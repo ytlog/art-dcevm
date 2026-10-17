@@ -50,6 +50,11 @@ struct Backend {
   // Current-thread verification only: lookup by loader without cache writes.
   virtual void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept = 0;
   virtual jvmtiError VerificationError() noexcept = 0;
+  // After ART's instance collection for an entry: a rebuild whose owner does
+  // not cover every member collects the other roots' instances too.
+  virtual bool CompleteInstances(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*,
+                                 bool (*collect)(abi::arm64::ClassRedefinitionPrefix*,
+                                                 abi::arm64::RedefinitionDataIter*)) noexcept = 0;
   // Interface dispatch acceptance before ART's no-failure point.
   virtual bool Check(const runtime_thread::VerifiedThread&, abi::arm64::ClassRedefinitionPrefix*,
                      const abi::arm64::RedefinitionDataIter&, std::string*) = 0;

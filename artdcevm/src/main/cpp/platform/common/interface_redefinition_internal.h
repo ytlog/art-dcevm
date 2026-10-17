@@ -88,6 +88,8 @@ struct RuntimeBackend final : Backend {
   bool IsAffected(abi::arm64::ClassRedefinitionPrefix* self) override;
   bool SharesImplementationGroup(abi::arm64::ClassRedefinitionPrefix* self) override;
   void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept override;
+  bool CompleteInstances(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*,
+                         bool (*)(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*)) noexcept override;
   jvmtiError VerificationError() noexcept override;
   bool Check(const runtime_thread::VerifiedThread&, abi::arm64::ClassRedefinitionPrefix*,
              const abi::arm64::RedefinitionDataIter&, std::string*) override;
@@ -97,13 +99,23 @@ namespace detail {
 // hooks may still be on an ART stack after Install rolls back or degrades.
 extern Process* process;
 struct Target { jclass klass; bool boot; jint status; evolution::ClassSchema live; size_t group = 0; };
+// The array order with one candidate owner first, as ART's holder slots
+// require. ART's CollectAndCreateNewInstances collects only instances of the
+// owner entry's class; `roots` lists the owner, then every other root, and
+// each type's first root is the earliest one it is assignable to. A root in
+// `rounds` is the first root of a concrete member: its instances are
+// collected again by ART with that root as the entry's class.
+struct Ordering {
+  jclass owner;
+  TypeSnapshot snapshot;
+  std::vector<jclass> roots;
+  std::vector<int32_t> first_root;
+  std::vector<int32_t> rounds;
+};
 // One rebuild's types (leader first) and their Native-created private arrays.
-// ART's CollectAndCreateNewInstances collects only instances of the owner
-// entry's class, so each owner covers every concrete member; owners holds the
-// order that puts each such candidate first, as ART's holder slots require.
 struct Members {
   TypeSnapshot snapshot;
-  std::vector<std::pair<jclass, TypeSnapshot>> owners;
+  std::vector<Ordering> orderings;  // One per candidate owner, covering ones first.
   std::unique_ptr<ClassArrayRoots> arrays;
 };
 // One interface rebuild: every interface target whose loaded subtypes overlap
@@ -116,14 +128,14 @@ struct Group {
   Members core;                  // The interface roots' subtypes.
   Members extended;              // With ancestor subtrees; empty without ancestors.
   std::optional<bool> uses_extended;  // Fixed by the group's allocation.
-  int32_t owner = -1;                 // Index into the chosen members' owners.
+  int32_t owner = -1;                 // Index into the chosen members' orderings.
   // Before allocation chooses, the widest candidate membership.
   const Members& Current() const {
     return uses_extended ? (*uses_extended ? extended : core) : ancestors.empty() ? core : extended;
   }
   // After allocation: the array order of the chosen owner.
   const TypeSnapshot* Allocated() const {
-    return owner < 0 ? nullptr : &Current().owners[owner].second;
+    return owner < 0 ? nullptr : &Current().orderings[owner].snapshot;
   }
 };
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
@@ -141,7 +153,10 @@ struct Linking {
 struct State final : transaction::Part {
   State(JNIEnv* jni, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions)
       : jni(jni), env(env), batch_size(count), definitions(definitions) {}
-  ~State() override { if (class_class) jni->DeleteLocalRef(class_class); }
+  ~State() override {
+    if (class_class) jni->DeleteLocalRef(class_class);
+    if (object_class) jni->DeleteLocalRef(object_class);
+  }
   std::vector<Target> targets;
   std::vector<Group> groups;
   JNIEnv* jni;
@@ -156,6 +171,7 @@ struct State final : transaction::Part {
   int selected_release = 0;
   JavaVM* vm = nullptr;
   jclass class_class = nullptr;
+  jclass object_class = nullptr;
   const Target* rejected_target = nullptr;
   const char* rejection = nullptr;
   const std::string* rejection_class = nullptr;
