@@ -432,7 +432,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | 确有版本差异的声明 | `platform/abi/arm64/android11`–`android17/` |
 | 命名符号与 ShadowHook 查找 | `platform/symbols/` |
 
-依赖由引擎向下组成有向无环图。`hierarchy_snapshot` 与 `schema_snapshot` 同属公开 JNI/JVMTI 层：前者只依赖后者、策略类型与 `evolution`，通过参数接收环境和根容器，不读取引擎全局状态，也不依赖布局、线程、映射或接口内部实现。目标清单独立于可能被嵌套预加载事务清空的声明快照，保活仍覆盖原始提交批次。每次尝试在 `GetLoadedClasses` 之后建立一次身份索引与直接父类图；同名类及哈希碰撞用 `IsSameObject` 区分。按父类边收集普通目标的子类型（含目标），保留已加载顺序和 PREPARED 状态，策略只读取已准备的子类；保活根复用全部状态的受影响类型并集。接口策略继续接收原 `GroupTypes`，保活并集仍包含可赋值给接口的全部已加载类型。`Probe`、`Begin`、监视器建立及失败重试时序不变。`Install` 组装服务与能力，提交前检查调用布局、映射和分派检查；`verification_redirect` 通过显式服务接收接口查询。`interface_redefinition` 使用分派诊断、快照、布局和运行时登记表；映射使用布局读取与退役守卫，不调用接口模块。布局与分派读取依赖 `runtime_thread`，后者只依赖事务上下文、底层 ABI 表、命名服务与生产构建为空的故障接口。版本顺序与 ABI 表不依赖公共实现或符号。事务上下文只持有模块私有状态与要求，不调用任何模块。故障实现、计数器及全部 `InterfaceAbortInstrumentation` JNI 导出位于 app Debug 源文件，生产模块只有会被擦除的故障／计数宏。实例迁移、引用改写、去优化与缓存失效仍由 ART 执行。
+依赖由引擎向下组成有向无环图。`hierarchy_snapshot` 与 `schema_snapshot` 同属公开 JNI/JVMTI 层：前者只依赖后者、策略类型与 `evolution`，通过参数接收环境和根容器，不读取引擎全局状态，也不依赖布局、线程、映射或接口内部实现。目标清单独立于可能被嵌套预加载事务清空的声明快照，保活仍覆盖原始提交批次。每次尝试在 `GetLoadedClasses` 之后只遍历一次已加载类，用 JNI `IsAssignableFrom` 判断每个普通目标的子类型（含目标），同时产出全部状态的受影响类型并集供保活使用。可赋值关系按类身份区分不同加载器的同名类，无需对全部已加载类取 identity hash 或建立父类图。子类型列表保留已加载顺序和 PREPARED 标记，重叠目标共用一次类状态读取，策略只读取已准备的子类。接口策略继续接收原 `GroupTypes`，保活并集仍包含可赋值给接口的全部已加载类型。`Probe`、`Begin`、监视器建立及失败重试时序不变。`Install` 组装服务与能力，提交前检查调用布局、映射和分派检查；`verification_redirect` 通过显式服务接收接口查询。`interface_redefinition` 使用分派诊断、快照、布局和运行时登记表；映射使用布局读取与退役守卫，不调用接口模块。布局与分派读取依赖 `runtime_thread`，后者只依赖事务上下文、底层 ABI 表、命名服务与生产构建为空的故障接口。版本顺序与 ABI 表不依赖公共实现或符号。事务上下文只持有模块私有状态与要求，不调用任何模块。故障实现、计数器及全部 `InterfaceAbortInstrumentation` JNI 导出位于 app Debug 源文件，生产模块只有会被擦除的故障／计数宏。实例迁移、引用改写、去优化与缓存失效仍由 ART 执行。
 
 ```mermaid
 flowchart TD

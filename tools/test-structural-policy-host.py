@@ -142,6 +142,12 @@ void MappingRequirements() {
               continue;
             }
             ++accepted;
+            policy::Abilities instance_only;
+            instance_only.instance_check = abilities.instance_check;
+            const bool legacy_requirement = abilities.member_mapping &&
+                policy::Evaluate(before, incoming, hierarchy, instance_only).error != JVMTI_ERROR_NONE;
+            Require(result.requires_member_mapping == legacy_requirement,
+                    "mapping requirement differs from the legacy two-Evaluate formula");
             Require(result.requires_member_mapping == mapping_change, "wrong mapping requirement");
           }
         }

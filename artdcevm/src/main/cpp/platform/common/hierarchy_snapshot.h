@@ -23,8 +23,8 @@ struct LoadedIndex {
   // Union for all targets, including interface targets and unprepared types.
   std::vector<jclass> affected;
 };
-// Builds one identity index and direct superclass graph per attempt. Hash
-// collisions are resolved with IsSameObject, never by descriptor/loader name.
+// Scans loaded classes once, sharing JNI assignability checks between ordinary
+// subtype lists and the all-status retention union without assigning identity hashes.
 // Interface targets are used only for the all-status retention union; their
 // policy facts continue to come from the caller's unchanged interface groups.
 jvmtiError BuildIndex(jvmtiEnv* env, JNIEnv* jni, jint count, const jclass* loaded,

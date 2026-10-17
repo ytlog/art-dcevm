@@ -2,7 +2,6 @@
 #include "platform/common/schema_snapshot.h"
 #include <algorithm>
 #include <string_view>
-#include <unordered_map>
 
 namespace artdcevm::hierarchy_snapshot {
 namespace {
@@ -395,79 +394,27 @@ jvmtiError BuildIndex(jvmtiEnv* env, JNIEnv* jni, jint count, const jclass* load
   };
   LoadedIndex next;
   next.subtypes.resize(ordinary_targets.size());
-  std::vector<std::vector<size_t>> owners(count);
-  jvmtiError result = JVMTI_ERROR_NONE;
-  if (!ordinary_targets.empty()) {
-    // JVMTI identity hashes avoid Java allocation/boxing per entry. Equal hashes
-    // are only buckets: JNI identity resolves collisions and defining loaders.
-    std::unordered_map<jint, std::vector<jint>> identities;
-    for (jint i = 0; i < count; ++i) {
-      jint hash = 0;
-      const auto result = env->GetObjectHashCode(loaded[i], &hash);
-      if (result != JVMTI_ERROR_NONE) return fail(result, "GetObjectHashCode failed");
-      identities[hash].push_back(i);
-    }
-    const auto lookup = [&](jclass klass, jint* position) -> jvmtiError {
-      *position = -1;
-      if (!klass) return JVMTI_ERROR_NONE;
-      jint hash = 0;
-      const auto result = env->GetObjectHashCode(klass, &hash);
-      if (result != JVMTI_ERROR_NONE) return result;
-      const auto bucket = identities.find(hash);
-      if (bucket != identities.end())
-        for (jint i : bucket->second)
-          if (jni->IsSameObject(klass, loaded[i])) { *position = i; break; }
-      return JVMTI_ERROR_NONE;
-    };
-    std::vector<std::vector<jint>> children(count);
-    // Interfaces are reference types assignable to Object even though JNI's
-    // GetSuperclass returns null for them. Include that edge for Object targets.
-    LocalReference object(jni);
-    object.value = jni->FindClass("java/lang/Object");
-    if (!object.value) return fail(JVMTI_ERROR_INTERNAL, "java.lang.Object unavailable");
-    jint object_index = -1;
-    result = lookup(static_cast<jclass>(object.value), &object_index);
-    if (result != JVMTI_ERROR_NONE) return fail(result, "GetObjectHashCode failed");
-    for (jint i = 0; i < count; ++i) {
-      LocalReference parent(jni);
-      parent.value = jni->GetSuperclass(loaded[i]);
-      if (jni->ExceptionCheck()) return fail(JVMTI_ERROR_INTERNAL, "GetSuperclass raised an exception");
-      jint position = -1;
-      result = lookup(static_cast<jclass>(parent.value), &position);
-      if (result != JVMTI_ERROR_NONE) return fail(result, "GetObjectHashCode failed");
-      if (!parent.value && object_index >= 0) {
-        jboolean is_interface = JNI_FALSE;
-        result = env->IsInterface(loaded[i], &is_interface);
-        if (result != JVMTI_ERROR_NONE) return fail(result, "IsInterface failed");
-        if (is_interface) position = object_index;
-      }
-      if (position >= 0) children[position].push_back(i);
-    }
-    for (size_t target = 0; target < ordinary_targets.size(); ++target) {
-      jint position = -1;
-      result = lookup(ordinary_targets[target], &position);
-      if (result != JVMTI_ERROR_NONE) return fail(result, "GetObjectHashCode failed");
-      if (position < 0) continue;  // Same retention/fact scope as GetLoadedClasses.
-      std::vector<jint> pending{position};
-      for (size_t head = 0; head < pending.size(); ++head) {
-        const jint current = pending[head];
-        owners[current].push_back(target);
-        pending.insert(pending.end(), children[current].begin(), children[current].end());
-      }
-    }
-  }
   for (jint i = 0; i < count; ++i) {
-    bool affected = !owners[i].empty();
-    for (jclass target : interface_targets)
-      if (!affected) affected = jni->IsAssignableFrom(loaded[i], target);
-    if (!affected) continue;
-    next.affected.push_back(loaded[i]);
-    if (owners[i].empty()) continue;
-    jint status = 0;
-    result = env->GetClassStatus(loaded[i], &status);
-    if (result != JVMTI_ERROR_NONE) return fail(result, "GetClassStatus failed");
-    for (size_t target : owners[i])
-      next.subtypes[target].push_back({loaded[i], (status & JVMTI_CLASS_STATUS_PREPARED) != 0});
+    bool affected = false;
+    bool prepared = false;
+    for (size_t target = 0; target < ordinary_targets.size(); ++target) {
+      if (!jni->IsAssignableFrom(loaded[i], ordinary_targets[target])) continue;
+      // Read status once for all matching ordinary targets. Retention includes
+      // every status; only policy facts use the PREPARED bit.
+      if (!affected) {
+        jint status = 0;
+        const auto result = env->GetClassStatus(loaded[i], &status);
+        if (result != JVMTI_ERROR_NONE) return fail(result, "GetClassStatus failed");
+        prepared = (status & JVMTI_CLASS_STATUS_PREPARED) != 0;
+      }
+      next.subtypes[target].push_back({loaded[i], prepared});
+      affected = true;
+    }
+    for (jclass target : interface_targets) {
+      if (affected) break;
+      affected = jni->IsAssignableFrom(loaded[i], target);
+    }
+    if (affected) next.affected.push_back(loaded[i]);
   }
   *output = std::move(next);
   return JVMTI_ERROR_NONE;

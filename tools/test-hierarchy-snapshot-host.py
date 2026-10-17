@@ -27,8 +27,9 @@ struct Type : _jclass {
        jint identity_hash = 7) : parent(p), interface(itf), status(state), hash(identity_hash) {}
 };
 Type object;
-int superclass_reads = 0, assignability_reads = 0, status_reads = 0, method_reads = 0;
+int superclass_reads = 0, assignability_reads = 0, status_reads = 0, method_reads = 0, hash_reads = 0;
 bool fail_hash = false;
+jclass fail_status = nullptr;
 void Require(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); }
 jclass JNICALL Super(JNIEnv*, jclass c) { ++superclass_reads; return static_cast<Type*>(c)->parent; }
 jclass JNICALL Find(JNIEnv*, const char*) { return &object; }
@@ -42,6 +43,7 @@ jboolean JNICALL Assign(JNIEnv*, jclass c, jclass target) {
   return static_cast<Type*>(c)->interface && target == &object;
 }
 jvmtiError JNICALL Hash(jvmtiEnv*, jobject c, jint* hash) {
+  ++hash_reads;
   if (fail_hash) return JVMTI_ERROR_INTERNAL;
   *hash = static_cast<Type*>(c)->hash; return JVMTI_ERROR_NONE;
 }
@@ -49,7 +51,9 @@ jvmtiError JNICALL Interface(jvmtiEnv*, jclass c, jboolean* value) {
   *value = static_cast<Type*>(c)->interface; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Status(jvmtiEnv*, jclass c, jint* status) {
-  ++status_reads; *status = static_cast<Type*>(c)->status; return JVMTI_ERROR_NONE;
+  ++status_reads;
+  if (c == fail_status) return JVMTI_ERROR_INTERNAL;
+  *status = static_cast<Type*>(c)->status; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Loader(jvmtiEnv*, jclass c, jobject* loader) {
   *loader = static_cast<Type*>(c)->loader; return JVMTI_ERROR_NONE;
@@ -93,7 +97,8 @@ int main() {
       return hierarchy_snapshot::BuildIndex(&env, &jni, 10, loaded, classes, interfaces, &index, &reason);
     };
     Require(build({&first, &child, &second}) == JVMTI_ERROR_NONE, "index rejected valid hierarchy");
-    Require(superclass_reads == 10 && assignability_reads == 0, "ordinary index repeats loaded/target comparisons");
+    Require(superclass_reads == 0 && hash_reads == 0 && assignability_reads == 30 && status_reads == 6,
+            "scan builds a graph, assigns hashes, repeats assignability or rereads overlapping status");
     Require(index.subtypes[0].size() == 5 && index.subtypes[1].size() == 2 &&
         index.subtypes[2].size() == 1, "loader identity, overlapping targets or target inclusion changed");
     Require(index.subtypes[0][0].klass == &grandchild && !index.subtypes[0][1].prepared,
@@ -113,9 +118,21 @@ int main() {
     const int previous = superclass_reads;
     Require(build({}, {&contract}) == JVMTI_ERROR_NONE && index.affected.size() == 3 &&
             superclass_reads == previous, "interface-only retention lost unprepared/error types or builds an unused class graph");
+    // Hash service failure cannot affect this scan or assign identity hashes to
+    // any loaded class, even with overlapping ordinary and interface targets.
     fail_hash = true;
-    Require(build({&first}) == JVMTI_ERROR_INTERNAL && reason == "GetObjectHashCode failed",
-            "index lookup failure was lost");
+    Require(build({&first, &child}, {&contract}) == JVMTI_ERROR_NONE && hash_reads == 0 &&
+            index.affected.size() == 6, "scan requested identity hashes");
+    const auto previous_affected = index.affected;
+    const auto previous_subtypes = index.subtypes;
+    fail_status = &error;
+    Require(build({&first}) == JVMTI_ERROR_INTERNAL && reason == "GetClassStatus failed" &&
+            index.affected == previous_affected && index.subtypes.size() == previous_subtypes.size() &&
+            index.subtypes[0].size() == previous_subtypes[0].size(),
+            "status failure was lost or published a partial index");
+    fail_status = nullptr;
+    Require(build({}) == JVMTI_ERROR_NONE && index.affected.empty() && index.subtypes.empty(),
+            "empty targets retained a previous index");
     std::cout << "Hierarchy snapshot identity, status, retention and traversal PASS\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }
