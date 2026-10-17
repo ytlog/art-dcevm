@@ -16,6 +16,18 @@ using abi::RedefinitionDataIter;
 using class_layout::Members;
 using class_layout::Pointer;
 using class_layout::Reference;
+// Batch-wide: an interface input may depend on another group's owner.
+struct Obligation {
+  ClassRedefinitionPrefix* interface;
+  std::string name;
+  std::string descriptor;
+};
+struct Pending final : transaction::Part { std::vector<Obligation> entries; };
+const std::vector<Obligation>& Obligations() {
+  const auto* pending = transaction::PartOf<Pending>(transaction::Current(), &transaction::Context::dispatch);
+  static const std::vector<Obligation> empty;
+  return pending ? pending->entries : empty;
+}
 Services art{};
 jclass object_array_root = nullptr, pointer_array_root = nullptr;
 std::mutex state_mutex;
@@ -93,11 +105,10 @@ template <typename Class, typename Method> struct Verifier {
 
   static bool CheckInterfaces(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                                std::string* rejection) {
-    const auto* context = transaction::Current();
     const auto* old_classes = data.Classes(true);
     const auto* new_classes = data.Classes(false);
-    if (context->interface_obligations.empty() || !old_classes) return true;
-    for (const auto& obligation : context->interface_obligations) {
+    if (Obligations().empty() || !old_classes) return true;
+    for (const auto& obligation : Obligations()) {
       void* original = art.mirror_class(obligation.interface);
       Class* interface = nullptr;
       for (int32_t i = 0; i < old_classes->length; ++i)
@@ -192,7 +203,7 @@ template <typename Class, typename Method> struct Verifier {
         !class_layout::MethodIdentity<Class>(thread, implementation, &selected, &why) ||
         required.name != selected.name || required.descriptor != selected.descriptor) return false;
     const auto* context = transaction::Current();
-    for (const auto& obligation : context->interface_obligations) {
+    for (const auto& obligation : Obligations()) {
       if (obligation.name != required.name || obligation.descriptor != required.descriptor) continue;
       void* original = art.mirror_class(obligation.interface);
       bool candidate = false;
@@ -247,16 +258,22 @@ std::string State() {
   std::lock_guard<std::mutex> lock(state_mutex);
   return state;
 }
+void Require(ClassRedefinitionPrefix* interface, std::string name, std::string descriptor) {
+  auto* context = transaction::Current();
+  if (!context->dispatch) context->dispatch = std::make_unique<Pending>();
+  auto* pending = transaction::PartOf<Pending>(context, &transaction::Context::dispatch);
+  pending->entries.push_back({interface, std::move(name), std::move(descriptor)});
+}
 bool Check(const VerifiedThread& thread, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data, std::string* rejection) {
   const auto* context = transaction::Current();
-  if (!context || context->interface_obligations.empty()) return true;
+  if (!context || Obligations().empty()) return true;
   const int selected = class_layout::Selected();
   if (selected >= 0) {
     if (!kVerifiers[selected].check(thread, self, data, rejection)) return false;
     ARTDCEVM_TEST(
     bool owns_condition = false;
     const auto* originals = data.Classes(true);
-    for (const auto& obligation : context->interface_obligations)
+    for (const auto& obligation : Obligations())
       for (int32_t i = 0; originals && i < originals->length; ++i)
         owns_condition |= class_layout::Element<void>(thread, originals, i) == art.mirror_class(obligation.interface);
     if (owns_condition) fault_injection::Increment(fault_injection::Counter::kValidatedGroups);

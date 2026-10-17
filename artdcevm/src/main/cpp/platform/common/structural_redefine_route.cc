@@ -67,7 +67,7 @@ class WatchScope {
       process->watches.push_back(&watch_);
     }
     if (first) process->snapshot_env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
-    context->subclass_loaded = &watch_.subclass_loaded;
+    BatchOf(context)->subclass_loaded = &watch_.subclass_loaded;
   }
   ~WatchScope() {
     if (!process->capabilities.subclass_watch) return;
@@ -191,6 +191,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     return JVMTI_ERROR_UNATTACHED_THREAD;
   batch.jni = jni;
   runtime_thread::Probe(jni);
+  verification_redirect::Begin();
   if (process->interface_backend) process->interface_backend->Begin(jni, process->snapshot_env, count, definitions);
   // ART rejects a missing or unmodifiable target before any validator runs;
   // do not load types for a batch it will not consider.

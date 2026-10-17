@@ -19,6 +19,8 @@ void Prepare(JNIEnv* jni, const Services& services);
 bool Available(const runtime_thread::VerifiedThread& thread,
                abi::arm64::ClassRedefinitionPrefix* self, bool early_link_errors_available);
 std::string State();
+// Record a policy obligation in this module's transaction Part.
+void Require(abi::arm64::ClassRedefinitionPrefix*, std::string name, std::string descriptor);
 // Linked groups: validate every pending obligation owned by this data item.
 bool Check(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
            const abi::arm64::RedefinitionDataIter& data, std::string* rejection);

@@ -22,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/structural_redefine_engine.h"
 #include "platform/common/class_layout.h"
+#include "platform/common/interface_dispatch.h"
+#include "platform/common/verification_redirect.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -215,6 +217,27 @@ int main(int argc, char** argv) {
     Require(cold.find("\"installed\":false") != std::string::npos &&
             cold.find("engine not installed") != std::string::npos,
             "Cold capability report requires constructed hook state");
+    {
+      transaction::Scope outer;
+      verification_redirect::Begin();
+      interface_dispatch::Require(nullptr, "added", "()V");
+      auto* verification = outer.context().verification.get();
+      auto* dispatch = outer.context().dispatch.get();
+      Require(verification && dispatch, "Module transaction Parts were not created");
+      {
+        transaction::Scope nested;
+        Require(!nested.context().verification && !nested.context().dispatch,
+                "Nested transaction inherited module-specific state");
+        verification_redirect::Begin();
+        interface_dispatch::Require(nullptr, "nested", "()I");
+        Require(nested.context().verification.get() != verification &&
+                nested.context().dispatch.get() != dispatch,
+                "Nested transaction reused outer module-specific state");
+      }
+      Require(transaction::Current() == &outer.context() &&
+              outer.context().verification.get() == verification && outer.context().dispatch.get() == dispatch,
+              "Nested transaction did not restore its enclosing module Parts");
+    }
     const auto result = structural_redefine::Install(&vm, &env, {});
     if (mode == 1) {
       Require(result == JVMTI_ERROR_INTERNAL && set_calls == 0 && active.empty(),

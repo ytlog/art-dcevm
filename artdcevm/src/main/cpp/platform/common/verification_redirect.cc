@@ -10,7 +10,7 @@
 #include "platform/symbols/verification_redirect_symbols.h"
 
 namespace artdcevm::verification_redirect {
-// The redefinition ART is verifying on this thread (transaction::Context).
+// The redefinition ART is verifying on this transaction thread.
 struct Verification {
   const abi::arm64::RedefinitionDataIter* data;
   std::string_view descriptor;  // "Lpkg/Name;"
@@ -21,6 +21,11 @@ namespace {
 using abi::arm64::ClassRedefinitionPrefix;
 using abi::arm64::Handle;
 using abi::arm64::RedefinitionDataIter;
+
+struct State final : transaction::Part { const Verification* verifying = nullptr; };
+State* CurrentState() {
+  return transaction::PartOf<State>(transaction::Current(), &transaction::Context::verification);
+}
 
 void* original_check_verification = nullptr;
 void* original_find_class = nullptr;
@@ -35,9 +40,9 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
   if (!target || !target->redirect_verification)
     return reinterpret_cast<Function>(original_check_verification)(self, data);
   const Verification scope{&data, target->descriptor, (art.interfaces && art.interfaces->IsAffected(self))};
-  const Verification* previous = std::exchange(context->verifying, &scope);
+  const Verification* previous = std::exchange(CurrentState()->verifying, &scope);
   const bool verified = reinterpret_cast<Function>(original_check_verification)(self, data);
-  context->verifying = previous;
+  CurrentState()->verifying = previous;
   if (const auto error = (art.interfaces ? art.interfaces->VerificationError() : JVMTI_ERROR_NONE); error != JVMTI_ERROR_NONE) {
     self->driver->result = error;
     return false;
@@ -46,8 +51,8 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
 }
 
 void* VerifiedClass(void* linker, std::string_view descriptor, Handle loader) {
-  const transaction::Context* context = transaction::Current();
-  const Verification* verifying = context ? context->verifying : nullptr;
+  const State* state = CurrentState();
+  const Verification* verifying = state ? state->verifying : nullptr;
   if (!verifying) return nullptr;
   if (verifying->interface_group)
     return art.interfaces->VerificationClass(linker, descriptor, loader);
@@ -68,6 +73,10 @@ void* FindClassWithLength(void* linker, void* thread, const char* descriptor, si
                                                                      length, loader);
 }
 }  // namespace
+
+void Begin() {
+  transaction::Current()->verification = std::make_unique<State>();
+}
 
 bool Prepare(const Services& services, std::vector<Hook>* hooks, std::string* failure) {
   art = services;

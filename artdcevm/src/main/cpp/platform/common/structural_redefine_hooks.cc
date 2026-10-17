@@ -85,9 +85,10 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   transaction::Requirements& requirements = context->targets[self];
   requirements.descriptor = incoming.descriptor;
   requirements.member_mapping = interface_target || decision.requires_member_mapping;
-  requirements.no_instances = decision.requires_no_instances;
+  if (decision.requires_no_instances) batch->no_instances.insert(self);
+  else batch->no_instances.erase(self);
   for (const auto& [name, descriptor] : decision.interface_obligations)
-    context->interface_obligations.push_back({self, name, descriptor});
+    interface_dispatch::Require(self, name, descriptor);
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
@@ -148,7 +149,7 @@ bool CheckInstances(const runtime_thread::VerifiedThread& thread,
                     ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) {
   auto* context = transaction::Current();
   for (const auto& [target, requirements] : context->targets) {
-    if (!requirements.no_instances) continue;
+    if (!BatchOf(context)->no_instances.count(target)) continue;
     const auto* instances = data.OldInstances();
     const uint32_t reference = class_layout::Reference(process->layout_services.mirror_class(target));
     for (int32_t i = 0; instances && i < instances->length; ++i) {
@@ -168,7 +169,8 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   };
   if (ARTDCEVM_FAULT_IF(3, (process->interface_backend && process->interface_backend->IsTarget(self)) && data->Classes(true)))
     return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY, named("injected instance allocation failure"));
-  if (context && context->subclass_loaded && context->subclass_loaded->load())
+  const Batch* batch = BatchOf(context);
+  if (batch && batch->subclass_loaded && batch->subclass_loaded->load())
     return context->Reject(self, JVMTI_ERROR_INTERNAL,
         named("a subtype of a redefined class was loaded during the transaction"));
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);

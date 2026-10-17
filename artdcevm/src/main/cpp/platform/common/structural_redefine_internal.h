@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 #include <atomic>
 #include <map>
 #include <memory>
@@ -83,6 +84,8 @@ struct Batch final : transaction::Part {
   std::vector<jobject> retirement_roots;
   std::vector<jobject> type_roots;
   bool retires_members = false;
+  std::set<ClassRedefinitionPrefix*> no_instances;
+  const std::atomic<bool>* subclass_loaded = nullptr;
   ~Batch() override {
     if (!jni) return;
     for (jobject root : retirement_roots) jni->DeleteGlobalRef(root);
