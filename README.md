@@ -52,7 +52,7 @@ dependencyResolutionManagement {
 ```groovy
 // app module build.gradle
 dependencies {
-    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha.1'
+    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha.2'
 }
 ```
 
