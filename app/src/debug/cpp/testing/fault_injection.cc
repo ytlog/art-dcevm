@@ -1,6 +1,7 @@
 #include "platform/common/fault_injection.h"
 #include "platform/symbols/art_symbol_compat.h"
 #include <array>
+#include <android/log.h>
 #include <jni.h>
 #include <jvmti.h>
 #include <cstdint>
@@ -12,6 +13,12 @@ thread_local int failure_stage = 0, failure_hits = 0;
 thread_local std::array<int, 5> counters{};
 thread_local bool reject_next_probe = false;
 thread_local uint64_t reads = 0, marking_reads = 0;
+}
+void SnapshotFinished(std::chrono::steady_clock::time_point start, int targets, int loaded) {
+  const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - start).count();
+  __android_log_print(ANDROID_LOG_INFO, "ART-DCEVM-SNAPSHOT", "targets=%d loaded=%d nanos=%lld",
+                      targets, loaded, static_cast<long long>(nanos));
 }
 void InterfacePrepared(bool prepared) { interface_prepared = prepared; }
 bool Inject(int stage) {

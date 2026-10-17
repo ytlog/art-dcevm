@@ -103,6 +103,9 @@ struct Decision {
   std::vector<evolution::Member> retired_fields;
   // The class becomes abstract: the transaction must fail if instances exist.
   bool requires_no_instances = false;
+  // Accepted decisions only: disabling mapping and all its derived abilities
+  // (but keeping instance_check) would reject this evolution.
+  bool requires_member_mapping = false;
   // ART must link the new class under the new superclass.
   bool superclass_changed = false;
   // Added public abstract interface declarations, checked on the linked group.

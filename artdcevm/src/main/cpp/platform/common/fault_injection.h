@@ -4,6 +4,7 @@
 // Disabled builds do not evaluate fault conditions or counter arguments.
 #ifdef ARTDCEVM_INTERFACE_ABORT_TESTS
 #include "platform/abi/arm64/common/redefinition.h"
+#include <chrono>
 namespace artdcevm::fault_injection {
 enum class Counter { kDiscardedClasses, kAllocationOrder, kAllocatedTypes, kAllocatedGroups,
                      kValidatedGroups };
@@ -11,6 +12,7 @@ bool Inject(int stage);
 void InterfacePrepared(bool prepared);
 bool RejectThreadProbe();
 void ReferenceRead(bool marking);
+void SnapshotFinished(std::chrono::steady_clock::time_point start, int targets, int loaded);
 void CorruptHolder(const abi::arm64::RedefinitionDataIter& data);
 int Increment(Counter counter);
 void Set(Counter counter, int value);

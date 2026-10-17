@@ -244,6 +244,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   Decision decision;
   decision.requires_no_instances = becomes_abstract;
   decision.superclass_changed = superclass_changed;
+  decision.requires_member_mapping = superclass_changed;
   // Only a new Class object carries the new flags or interface table: take
   // ART's structural path.
   if ((class_changed & ~kAccSuper) || superclass_changed || live.interfaces != incoming.interfaces)
@@ -259,6 +260,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                       "field removed or its type/storage changed: " + old.name + ":" + old.descriptor);
       decision.fields_structural = true;
       decision.retired_fields.push_back(old);
+      decision.requires_member_mapping = true;
       continue;
     }
     const uint32_t changed = old.access ^ it->second;
@@ -289,6 +291,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                       "unsupported interface method retirement: " + Describe(old));
       decision.methods_structural = true;
       decision.retired_methods.push_back(old);
+      decision.requires_member_mapping = true;
       continue;
     }
     const uint32_t now = it->second;
@@ -314,6 +317,8 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
         overrides.count({old.name, old.descriptor}))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "method made final is overridden by a loaded subclass: " + Describe(old));
+    if ((changed & acc::kAccNative) && !(now & acc::kAccNative))
+      decision.requires_member_mapping = true;
     if (changed) decision.methods_structural = true;
     new_methods.erase(it);
   }
@@ -328,15 +333,17 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members,
                                               abilities);
       if (added.error != JVMTI_ERROR_NONE) return added;
+      decision.requires_member_mapping = true;
       decision.interface_obligations.insert(decision.interface_obligations.end(),
           added.interface_obligations.begin(), added.interface_obligations.end());
     }
   }
   if (!new_methods.empty()) decision.methods_structural = true;
   // With the engine's mapping, a vanished copy maps to its canonical method.
-  if (!owns_member_mapping) {
-    Decision copied = CheckCopiedMembers(live, incoming, hierarchy);
-    if (copied.error != JVMTI_ERROR_NONE) return copied;
+  Decision copied = CheckCopiedMembers(live, incoming, hierarchy);
+  if (copied.error != JVMTI_ERROR_NONE) {
+    if (!owns_member_mapping) return copied;
+    decision.requires_member_mapping = true;
   }
   return decision;
 }

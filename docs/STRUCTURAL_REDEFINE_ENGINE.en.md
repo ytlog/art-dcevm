@@ -125,7 +125,7 @@ The Thread layout table lives in `platform/abi/arm64/runtime_thread_table.h`. A 
 `CheckClass` reads `klass` and `dex_file` according to `redefinition.h`, calling the original function if the class is absent from the context. It then reads the new declaration (ClassDef 0) through `DexView`, probes the layout, reads runtime flags of added interfaces and the new superclass, and calls `structural_policy::Evaluate`:
 
 - On rejection, write only `driver_->result_` and return false; `Redefiner::RecordFailure` itself does the same. Record the reason in `lastRejection` and logcat.
-- On acceptance, store the decision, including the retired-declaration list, in the context's engine batch keyed by `ClassRedefinition*`, and record mapping, instance and verification requirements in per-target `Requirements`. Mark the transaction as mapping-dependent if the decision would be rejected without custom mapping.
+- On acceptance, store the decision, including the retired-declaration list, in the context's engine batch keyed by `ClassRedefinition*`, and record mapping, instance and verification requirements in per-target `Requirements`. The policy directly sets `Decision::requires_member_mapping` when accepting a mapping-dependent branch; the engine no longer derives it with a second evaluation disabling mapping. For accepted decisions, it equals rejection with mapping and its derived abilities disabled while retaining `instance_check`: field retirement, method retirement/signature changes, native-to-Java changes, interface member additions (including abstract methods), superclass changes, and copied/miranda changes rejected without custom mapping. Adding an interface itself, ordinary member additions, modifier changes and body edits do not inherently require mapping; making a class abstract only requires instance inspection. Interface targets still unconditionally require mapping, including body-only edits. Rejected decisions carry no requirement.
 
 `CheckFields` / `CheckMethods` call the appropriate `RecordNew*Added` according to `fields_structural` / `methods_structural`. The decision is cleared after `CheckMethods`.
 
@@ -198,7 +198,7 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 | Delete fields or change their types or static flags | Accept when retirement and field guards are available; otherwise reject with `SCHEMA_CHANGED` (64) |
 | Change class visibility, final, abstract, synthetic or InnerClass flags | Accept through the structural path. Adding final with a loaded subclass rejects with `CLASS_MODIFIERS_CHANGED` (70); adding abstract while the class itself has instances rejects with 70 after `CollectAndCreateNewInstances` |
 | Switch a class between class, interface, annotation and enum kinds | Reject with 70 |
-| Add interfaces, with optional reordering | Accept when retirement is available. Unresolved, non-interface or inaccessible types reject with `FAILS_VERIFICATION` (62); no usable layout for reading flags rejects with `HIERARCHY_CHANGED` (66); a newly linked default conflict rejects with 63 when using custom mapping |
+| Add interfaces, with optional reordering | Accept with readable runtime flags and successful resolution/access checks; adding an interface alone does not require member mapping. Unresolved, non-interface or inaccessible types reject with `FAILS_VERIFICATION` (62); no usable layout for reading flags rejects with `HIERARCHY_CHANGED` (66); a newly linked default conflict rejects with 63 when using custom mapping |
 | Remove an interface; repeat an interface | Removal rejects with 66; see [why narrowing is unsupported](#narrowing-is-unsupported). A duplicate rejects with 62 |
 | Change the superclass | Accept when the new superclass extends the original; other cases reject with 62, 61 or 66 under the conditions in [widening superclass changes](#widening-superclass-changes) |
 
@@ -425,6 +425,7 @@ Under `artdcevm/src/main/cpp`:
 | Candidate IfTable probes, abstract-obligation validation and actual link-selection diagnostics | `platform/common/interface_dispatch.{h,cc}` |
 | Bounded DEX method identity shared by mapping and dispatch checks | `platform/common/art_method_identity.h` |
 | Native snapshot of affected interface types, inheritance edges and rebuild order | `platform/common/interface_snapshot.{h,cc}` |
+| Public JNI/JVMTI type preloading, new superclass/interface resolution, hierarchy facts and a shared loaded-class index per attempt | `platform/common/hierarchy_snapshot.{h,cc}` |
 | Old-schema inspection through public JVMTI | `platform/common/schema_snapshot.{h,cc}` |
 | Class declarations read from ART's mapped DEX | `platform/common/art_dex_view.h`, `evolution/class_schema.h`, `evolution/dex_schema.cc` |
 | Interface runtime registry, device-verification status, API admission and maximum HandleScope header size | `platform/abi/arm64/interface_runtime_table.h` |
@@ -434,7 +435,7 @@ Under `artdcevm/src/main/cpp`:
 | Declarations with real version differences | `platform/abi/arm64/android11`–`android17/` |
 | Named symbols and ShadowHook lookup | `platform/symbols/` |
 
-Dependencies form a directed acyclic graph from the engine to lower modules. `Install` assembles services and capabilities; its commit gate calls layout, mapping and dispatch checks. `verification_redirect` receives interface queries through explicit services. `interface_redefinition` uses dispatch diagnostics, snapshots, layouts and the runtime registry; mapping uses layout readers and retirement guards without calling interface modules. Layout and dispatch readers depend on `runtime_thread`, which depends only on transaction context, bottom-layer ABI tables, named services and the empty-in-production fault interface. Release ordering and ABI tables do not depend on shared implementations or symbols. The transaction context owns module-private state and requirements; it calls no module. Fault implementation, counters and every `InterfaceAbortInstrumentation` JNI export live in the app Debug source; production modules contain only erased fault/counter macros. ART still owns migration, reference rewriting, deoptimization and cache invalidation.
+Dependencies form a directed acyclic graph from the engine to lower modules. `hierarchy_snapshot` and `schema_snapshot` share the public JNI/JVMTI layer: the former depends only on the latter, policy types and `evolution`, receiving environments and root containers explicitly without engine globals or layout, thread, mapping or interface internals. The target list is independent of declaration snapshots that a nested preload-time transaction may clear, so retention still covers the original submitted batch. Each attempt builds one identity index and direct superclass graph after `GetLoadedClasses`; `IsSameObject` distinguishes same-named classes and hash collisions. Superclass edges select ordinary targets and their subtypes in loaded order with PREPARED status; policy reads only prepared subclasses. Retention reuses the union of affected types in all states. Interface policy still receives the original `GroupTypes`, while retention includes every loaded type assignable to an interface target. The ordering of `Probe`, `Begin`, watch setup and retries stays unchanged. `Install` assembles services and capabilities; its commit gate calls layout, mapping and dispatch checks. `verification_redirect` receives interface queries through explicit services. `interface_redefinition` uses dispatch diagnostics, snapshots, layouts and the runtime registry; mapping uses layout readers and retirement guards without calling interface modules. Layout and dispatch readers depend on `runtime_thread`, which depends only on transaction context, bottom-layer ABI tables, named services and the empty-in-production fault interface. Release ordering and ABI tables do not depend on shared implementations or symbols. The transaction context owns module-private state and requirements; it calls no module. Fault implementation, counters and every `InterfaceAbortInstrumentation` JNI export live in the app Debug source; production modules contain only erased fault/counter macros. ART still owns migration, reference rewriting, deoptimization and cache invalidation.
 
 ```mermaid
 flowchart TD
@@ -443,6 +444,10 @@ flowchart TD
     engine --> interface[interface_redefinition]
     engine --> dispatch[interface_dispatch]
     engine --> layout[class_layout]
+    engine --> hierarchy[hierarchy_snapshot]
+    hierarchy --> schema[schema_snapshot]
+    hierarchy --> policy[structural_policy types]
+    hierarchy --> evolution[evolution]
     interface --> dispatch
     interface --> layout
     mapping --> layout

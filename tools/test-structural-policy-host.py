@@ -52,8 +52,108 @@ void Reject(const ClassSchema& live, const ClassSchema& next, jvmtiError expecte
   const auto result = policy::Evaluate(live, next, subclasses);
   Require(result.error == expected && !result.reason.empty(), "wrong rejection code or missing reason");
 }
+void MappingRequirements() {
+  size_t accepted = 0;
+  for (bool interface_target : {false, true}) {
+    ClassSchema live = Base();
+    if (interface_target) {
+      live.access |= acc::kAccInterface | acc::kAccAbstract;
+    }
+    for (uint32_t method_access : {acc::kAccPublic, acc::kAccPrivate,
+         acc::kAccPublic | acc::kAccStatic, acc::kAccPublic | acc::kAccAbstract}) {
+      live.methods[0].access = method_access;
+      for (int change = 0; change < 25; ++change) {
+        auto before = live;
+        auto next = live;
+        policy::LoadedHierarchy hierarchy;
+        bool mapping_change = false;
+        switch (change) {
+          case 0: break;  // Only method bodies differ, outside declaration input.
+          case 1: next.fields.clear(); mapping_change = true; break;
+          case 2: next.fields[0].descriptor = "J"; mapping_change = true; break;
+          case 3: next.fields[0].access |= acc::kAccStatic; mapping_change = true; break;
+          case 4: next.methods.erase(next.methods.begin()); mapping_change = true; break;
+          case 5: next.methods[0].descriptor = "()J"; mapping_change = true; break;
+          case 6:
+            before.methods[0].access &= ~acc::kAccAbstract;
+            before.methods[0].access |= acc::kAccNative;
+            mapping_change = true; break;
+          case 7: next.methods.push_back({"added", "()I", acc::kAccPublic});
+            mapping_change = interface_target; break;
+          case 8: next.methods.push_back({"added", "()I", acc::kAccPrivate});
+            mapping_change = interface_target; break;
+          case 9: next.methods.push_back({"added", "()I", acc::kAccPublic | acc::kAccStatic});
+            mapping_change = interface_target; break;
+          case 10: next.methods.push_back({"added", "()I", acc::kAccPublic | acc::kAccAbstract});
+            mapping_change = interface_target; break;
+          case 11: next.superclass = "Lfixture/Wider;";
+            hierarchy.new_superclass.emplace();
+            hierarchy.new_superclass->access = acc::kAccPublic;
+            hierarchy.new_superclass->extends_old_superclass = true;
+            mapping_change = true; break;
+          case 12:
+            next.methods.push_back({"copied", "()I", acc::kAccPublic});
+            hierarchy.interface_copies.insert({"copied", "()I"});
+            mapping_change = true; break;
+          case 13:
+            before.methods[0].access = acc::kAccPrivate;
+            next.methods[0].access = acc::kAccPublic;
+            hierarchy.interface_copies.insert({"work", "()I"});
+            mapping_change = true; break;
+          case 14: next.fields.push_back({"added", "J", acc::kAccPublic}); break;
+          case 15: next.fields[0].access |= acc::kAccVolatile; break;
+          case 16: next.methods[0].access |= acc::kAccSynchronized; break;
+          case 17: next.interfaces.push_back("Lfixture/Added;");
+            hierarchy.added_interfaces["Lfixture/Added;"].access = acc::kAccPublic | acc::kAccInterface;
+            break;
+          case 18: next.access |= acc::kAccAbstract; break;
+          case 19: next.methods.push_back({"copied", "()I", acc::kAccPublic});
+            hierarchy.interface_copies.insert({"copied", "()I"});
+            hierarchy.inherited_public.insert({"copied", "()I"});
+            mapping_change = interface_target; break;
+          case 20: next.access |= acc::kAccFinal; break;
+          case 21: next.access |= acc::kAccSynthetic; break;
+          case 22: before.methods[0].access &= ~acc::kAccAbstract;
+            next.methods[0].access = before.methods[0].access | acc::kAccNative; break;
+          case 23: before.methods[0].access &= ~acc::kAccAbstract;
+            before.methods[0].access |= acc::kAccNative;
+            next.methods[0].access |= acc::kAccAbstract;
+            mapping_change = true; break;
+          case 24: next.fields.clear(); next.methods.erase(next.methods.begin());
+            mapping_change = true; break;
+        }
+        // Additional combinations exercise dependency marks surviving multiple
+        // accepted branches and disappearing when a later branch rejects.
+        for (int combination = 0; combination < 4; ++combination) {
+          auto incoming = next;
+          if (combination & 1) incoming.fields.push_back({"extra", "I", acc::kAccPublic});
+          if (combination & 2) incoming.methods[0].access ^= acc::kAccStatic;
+          for (int bits = 0; bits < 64; ++bits) {
+            policy::Abilities abilities;
+            abilities.member_mapping = bits & 1;
+            abilities.field_retirement = bits & 2;
+            abilities.superclass_change = bits & 4;
+            abilities.interface_members = bits & 8;
+            abilities.interface_abstract_methods = bits & 16;
+            abilities.instance_check = bits & 32;
+            const auto result = policy::Evaluate(before, incoming, hierarchy, abilities);
+            if (result.error != JVMTI_ERROR_NONE) {
+              Require(!result.requires_member_mapping, "rejected decision carries a requirement");
+              continue;
+            }
+            ++accepted;
+            Require(result.requires_member_mapping == mapping_change, "wrong mapping requirement");
+          }
+        }
+      }
+    }
+  }
+  Require(accepted > 1000, "too few accepted mapping combinations");
+  std::cout << "mapping requirement combinations: " << accepted << " accepted\n";
+}
 int main(int argc, char** argv) {
   try {
+    MappingRequirements();
     {
       // Exercise the same probe used by CheckClass. A failed slot declaration
       // must reject before dereferencing the deliberately invalid array.

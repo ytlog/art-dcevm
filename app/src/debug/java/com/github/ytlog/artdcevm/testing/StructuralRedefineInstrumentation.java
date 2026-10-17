@@ -142,6 +142,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (arguments != null && arguments.containsKey("scenario")) {
             String isolated = arguments.getString("scenario");
             if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
+            else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
             else if (isolated.startsWith("interface-abstract-reject-"))
                 runAbstractRejectionScenario(isolated.substring("interface-abstract-reject-".length()));
@@ -1631,6 +1632,22 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             for (int i = 0; i < instances.length; ++i)
                 scenario.check("afterGc" + i, 18, added.invoke(instances[i]));
         });
+    }
+
+    // Isolated Debug diagnostic: preload the same 200 implementations for both
+    // ordinary multi-target snapshots and the interface-stress transaction.
+    private void runSnapshotBenchmark() throws Exception {
+        for (int i = 0; i < 200; ++i)
+            Class.forName(InterfaceStressTypes.class.getName() + "$C"
+                    + String.format(java.util.Locale.ROOT, "%03d", i));
+        for (int i = 0; i < 10; ++i)
+            runScenario("snapshot-ordinary-" + i, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{Evolving.class, ModifierSubject.class},
+                        "body", "modifier-public");
+                scenario.check("body", 12, new Evolving(10).compute());
+                scenario.check("member", 43, new ModifierSubject().throughPublic());
+            });
+        runInterfaceStressScenario();
     }
 
     private void runInterfaceStressScenario() throws Exception {

@@ -3,6 +3,8 @@
 
 No ART object, hook trampoline or collector executes on the host. Failures cover
 installation ordering, rollback, optional-retirement fallback and diagnostics.
+A routed Native transaction also checks retention after nested snapshot
+invalidation; its ART transaction entry is a fake.
 """
 from pathlib import Path
 import runpy
@@ -21,6 +23,8 @@ SOURCE = r'''
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/runtime_thread_symbols.h"
 #include <iostream>
+#include <cstring>
+#include <cstdlib>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -28,6 +32,17 @@ SOURCE = r'''
 using namespace artdcevm;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 bool route_hooked = false;
+using Route = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
+Route routed = nullptr;
+bool nested_preload = false;
+int outer_routes = 0, child_method_reads = 0;
+jclass root_type = reinterpret_cast<jclass>(0x3100);
+jclass first_type = reinterpret_cast<jclass>(0x3200);
+jclass second_type = reinterpret_cast<jclass>(0x3300);
+jclass child_type = reinterpret_cast<jclass>(0x3400);
+jclass nested_type = reinterpret_cast<jclass>(0x3500);
+std::map<jobject, int> global_refs;
+
 std::set<void*> active;
 std::map<std::string, int> addresses;
 JNINativeInterface functions{};
@@ -37,6 +52,14 @@ JNIEnv jni{&functions};
 JavaVM vm{&invocation};
 jvmtiEnv env{&tooling};
 void Require(bool value, const char* why) { if (!value) throw std::runtime_error(why); }
+jvmtiError JNICALL Structural(jvmtiEnv*, jint count, const jvmtiClassDefinition*) {
+  if (count == 2) {
+    Require(global_refs[child_type] == 1,
+            "Nested preload invalidation dropped an original target's descendant retention root");
+    ++outer_routes;
+  }
+  return JVMTI_ERROR_NONE;
+}
 extern "C" int android_get_device_api_level() { return 33; }
 extern "C" int __android_log_write(int, const char*, const char*) { return 0; }
 extern "C" int __android_log_print(int, const char*, const char*, ...) { return 0; }
@@ -47,6 +70,7 @@ extern "C" void* shadowhook_dlopen(const char*) { return reinterpret_cast<void*>
 extern "C" void shadowhook_dlclose(void*) {}
 extern "C" void* shadowhook_dlsym(void*, const char* name) {
   const std::string key(name);
+  if (key == symbols::structural::kStructurallyRedefineClasses.name) return reinterpret_cast<void*>(Structural);
   if (key == symbols::structural::kJvmtiRedefineClasses.name) return reinterpret_cast<void*>(Redefine);
   if (key == symbols::runtime_thread::kCurrentThread.name) return reinterpret_cast<void*>(Current);
   if (key == symbols::runtime_thread::kReadBarrierMark.name) return reinterpret_cast<void*>(Mark);
@@ -62,11 +86,13 @@ extern "C" void* shadowhook_dlsym_dynsym(void* handle, const char* name) {
 extern "C" int shadowhook_init(int, bool) { return 0; }
 extern "C" int shadowhook_get_errno() { return 1; }
 extern "C" const char* shadowhook_to_errmsg(int) { return "injected hook error"; }
-extern "C" void* shadowhook_hook_sym_addr(void* target, void*, void** original) {
+extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void** original) {
   ++hook_calls;
   if (mode == 1 && hook_calls == 2) return nullptr;
   *original = target;
-  if (target == reinterpret_cast<void*>(Redefine)) route_hooked = true;
+  if (target == reinterpret_cast<void*>(Redefine)) {
+    route_hooked = true; routed = reinterpret_cast<Route>(replacement);
+  }
   auto token = reinterpret_cast<void*>(static_cast<uintptr_t>(hook_calls));
   active.insert(token);
   return token;
@@ -76,8 +102,10 @@ extern "C" int shadowhook_unhook(void* token) {
   return 0;
 }
 jint JNICALL GetEnv(JavaVM*, void** out, jint) { *out = &jni; return JNI_OK; }
-jclass JNICALL FindClass(JNIEnv*, const char*) { return reinterpret_cast<jclass>(0x1000); }
-jobject JNICALL NewGlobalRef(JNIEnv*, jobject object) { return object; }
+jclass JNICALL FindClass(JNIEnv*, const char* name) {
+  return std::string(name) == "java/lang/Object" ? root_type : reinterpret_cast<jclass>(0x1000);
+}
+jobject JNICALL NewGlobalRef(JNIEnv*, jobject object) { ++global_refs[object]; return object; }
 void JNICALL DeleteLocalRef(JNIEnv*, jobject) {}
 jmethodID JNICALL GetMethodID(JNIEnv*, jclass, const char*, const char*) {
   return reinterpret_cast<jmethodID>(0x2001);
@@ -86,7 +114,8 @@ jvmtiError JNICALL Potential(jvmtiEnv*, jvmtiCapabilities* caps) {
   *caps = {}; caps->can_redefine_classes = 1; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL GetJni(jvmtiEnv*, jniNativeInterface** table) {
-  *table = new jniNativeInterface(functions); return JVMTI_ERROR_NONE;
+  *table = static_cast<jniNativeInterface*>(std::malloc(sizeof(jniNativeInterface)));
+  **table = functions; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL SetJni(jvmtiEnv*, const jniNativeInterface*) {
   ++set_calls;
@@ -97,6 +126,57 @@ jvmtiError JNICALL SetJni(jvmtiEnv*, const jniNativeInterface*) {
 jvmtiError JNICALL Callbacks(jvmtiEnv*, const jvmtiEventCallbacks*, jint) {
   return JVMTI_ERROR_NONE;
 }
+void JNICALL DeleteGlobal(JNIEnv*, jobject value) { --global_refs[value]; }
+jboolean JNICALL Same(JNIEnv*, jobject a, jobject b) { return a == b; }
+jboolean JNICALL Exception(JNIEnv*) { return false; }
+jclass JNICALL Super(JNIEnv*, jclass klass) {
+  return klass == child_type ? first_type : klass == root_type ? nullptr : root_type;
+}
+jboolean JNICALL Assign(JNIEnv*, jclass klass, jclass target) {
+  for (jclass current = klass; current; current = Super(nullptr, current))
+    if (current == target) return true;
+  return false;
+}
+jvmtiError JNICALL Modifiers(jvmtiEnv*, jclass, jint* value) { *value = 1; return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL Modifiable(jvmtiEnv*, jclass klass, jboolean* value) {
+  *value = klass != nested_type; return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
+  if (mode == 4 && klass == second_type && !nested_preload) {
+    nested_preload = true;
+    const jvmtiClassDefinition definition{nested_type, 0, nullptr};
+    Require(routed(&env, 1, &definition) == JVMTI_ERROR_NONE, "Nested preload transaction failed");
+  }
+  *value = nullptr; return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL Signature(jvmtiEnv*, jclass klass, char** value, char**) {
+  const std::string text = klass == root_type ? "Ljava/lang/Object;" :
+      "Lfixture/Type" + std::to_string(reinterpret_cast<uintptr_t>(klass)) + ";";
+  *value = static_cast<char*>(std::malloc(text.size() + 1));
+  std::strcpy(*value, text.c_str()); return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL Interfaces(jvmtiEnv*, jclass, jint* n, jclass** value) {
+  *n = 0; *value = nullptr; return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL Fields(jvmtiEnv*, jclass, jint* n, jfieldID** value) {
+  *n = 0; *value = nullptr; return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL Methods(jvmtiEnv*, jclass klass, jint* n, jmethodID** value) {
+  if (klass == child_type) ++child_method_reads;
+  *n = 0; *value = nullptr; return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL Loaded(jvmtiEnv*, jint* n, jclass** value) {
+  *n = 4; *value = static_cast<jclass*>(std::malloc(4 * sizeof(jclass)));
+  const jclass classes[] = {child_type, second_type, first_type, root_type};
+  std::memcpy(*value, classes, sizeof(classes)); return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL Hash(jvmtiEnv*, jobject value, jint* hash) {
+  *hash = reinterpret_cast<uintptr_t>(value) >> 8; return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL IsInterface(jvmtiEnv*, jclass, jboolean* value) { *value = false; return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL Status(jvmtiEnv*, jclass, jint* value) { *value = JVMTI_CLASS_STATUS_PREPARED; return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL Deallocate(jvmtiEnv*, unsigned char* value) { std::free(value); return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL Events(jvmtiEnv*, jvmtiEventMode, jvmtiEvent, jthread, ...) { return JVMTI_ERROR_NONE; }
 int main(int argc, char** argv) {
   try {
     Require(argc == 2, "Missing installation case");
@@ -107,6 +187,16 @@ int main(int argc, char** argv) {
     tooling.GetPotentialCapabilities = Potential; tooling.RedefineClasses = Redefine;
     tooling.GetJNIFunctionTable = GetJni; tooling.SetJNIFunctionTable = SetJni;
     tooling.SetEventCallbacks = Callbacks;
+    functions.DeleteGlobalRef = DeleteGlobal; functions.IsSameObject = Same;
+    functions.ExceptionCheck = Exception; functions.GetSuperclass = Super;
+    functions.IsAssignableFrom = Assign; functions.GetStaticMethodID = GetMethodID;
+    tooling.GetClassModifiers = Modifiers; tooling.IsModifiableClass = Modifiable;
+    tooling.GetClassLoader = Loader; tooling.GetClassSignature = Signature;
+    tooling.GetImplementedInterfaces = Interfaces; tooling.GetClassFields = Fields;
+    tooling.GetClassMethods = Methods; tooling.GetLoadedClasses = Loaded;
+    tooling.GetObjectHashCode = Hash; tooling.IsInterface = IsInterface;
+    tooling.GetClassStatus = Status; tooling.Deallocate = Deallocate;
+    tooling.SetEventNotificationMode = Events;
     const auto result = structural_redefine::Install(&vm, &env, {});
     if (mode == 1) {
       Require(result == JVMTI_ERROR_INTERNAL && set_calls == 0 && active.empty(),
@@ -115,7 +205,7 @@ int main(int argc, char** argv) {
       Require(result == JVMTI_ERROR_NONE, "Optional retirement failure changed initialization error");
       const auto caps = structural_redefine::Capabilities();
       Require(caps.find("\"installed\":true") != std::string::npos, "Base engine was not installed");
-      if (mode == 0) {
+      if (mode == 0 || mode == 4) {
         Require(set_calls == 1 && hooks_at_set == hook_calls && active.size() > 4,
                 "JNI installation was not the final hook operation");
         Require(caps.find("\"methodDeletion\":true") != std::string::npos, "Retirement disabled");
@@ -134,6 +224,13 @@ int main(int argc, char** argv) {
         Require(!runtime_thread::Ready() && class_layout::State() == reason,
                 "Failed Thread probe overwrote unavailable mapping diagnosis");
       }
+    }
+    if (mode == 4) {
+      const jvmtiClassDefinition definitions[] = {{first_type, 0, nullptr}, {second_type, 0, nullptr}};
+      Require(routed(&env, 2, definitions) == JVMTI_ERROR_NONE && nested_preload && outer_routes == 1,
+              "Native route did not preserve retention after nested snapshot invalidation");
+      Require(global_refs[child_type] == 0, "Native route leaked the descendant root");
+      Require(child_method_reads == 0, "A surviving snapshot collected facts from the invalidated target subtree");
     }
     std::cout << "Installer case " << mode << " PASS\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -186,7 +283,7 @@ def main():
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
-        for case in range(4):
+        for case in range(5):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:
