@@ -34,7 +34,7 @@ This capability is available only on Android 13 (API 33), Android 14 (API 34), A
 | Method modifier changes other than abstract/default switches; switching to abstract without a verified IfTable accessor; switching to default where it would shadow static/non-public class-chain methods | `METHOD_MODIFIERS_CHANGED` (71) |
 | Removing a parent interface; adding one without member mapping; a static/private method hiding a new parent's method, or a new parent default shadowing static/non-public class-chain methods; a new parent's abstract methods without a verified IfTable accessor | `HIERARCHY_CHANGED` (66) |
 | An added interface (including one a class adds) or one of its parents is redefined in the same batch | `HIERARCHY_CHANGED` (66) |
-| Changing class modifiers | `CLASS_MODIFIERS_CHANGED` (70) |
+| Changing the kind between interface, annotation and enum (an interface's access level, synthetic and similar modifiers may change as a class's) | `CLASS_MODIFIERS_CHANGED` (70) |
 | Interface groups with intersecting subtypes (including unrelated interfaces sharing an implementation), or a structurally edited superclass outside the group, merge into one rebuild in which no structural target's instances cover every concrete member | `HIERARCHY_CHANGED` (66) |
 | An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |
 | A boot interface, a Proxy implementation, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
@@ -63,7 +63,6 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 | Change | Error code | Notes |
 | --- | --- | --- |
 | Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kinds stay fixed](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kinds-stay-fixed). Use a different name or signature instead |
-| Changing a method's varargs or strict flags | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | |
 | Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
 | Removing an interface, or changing the superclass in a way that drops an existing supertype | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
 

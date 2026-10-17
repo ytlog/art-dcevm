@@ -189,7 +189,7 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 | Interface target method-body edits | Accepted with verified interface runtime and member mapping |
 | Interface target new public abstract/default/static methods and private instance methods; deletion or signature change of any method; public instance abstract ↔ default; static field additions, deletions or type changes | Accept with verified member mapping and interface runtime, subject to inherited/shadow/default-conflict and abstract-dispatch checks |
 | Interface target new native methods; abstract additions without valid dispatch or a verified IfTable accessor; direct-method hiding or default conflicts | Reject `METHOD_ADDED` (63) |
-| Interface target field modifiers; method modifiers other than abstract ↔ default; parent removal or a failed new-parent shadow check; class modifiers | Reject `SCHEMA_CHANGED` (64), `METHOD_MODIFIERS_CHANGED` (71), `HIERARCHY_CHANGED` (66), and `CLASS_MODIFIERS_CHANGED` (70), respectively |
+| Interface target field modifiers; method modifiers other than abstract ↔ default; parent removal or a failed new-parent shadow check; class kind | Reject `SCHEMA_CHANGED` (64), `METHOD_MODIFIERS_CHANGED` (71), `HIERARCHY_CHANGED` (66), and `CLASS_MODIFIERS_CHANGED` (70), respectively |
 | Unavailable interface runtime capability (unsupported version, named service or probe) | Reject `NOT_AVAILABLE` (98); declaration changes use the standard errors above |
 | Add fields or methods | Accept |
 | Change existing members' access, final, volatile, transient or synchronized flags, except making an instance method private; Java → native; abstract ↔ concrete | Accept |
@@ -197,7 +197,7 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 | Add an instance method or change its access level when it may displace a loaded subclass's copied default/miranda method | Accept through custom mapping when retirement is available; otherwise reject additions with `METHOD_ADDED` (63) and access changes with 71 |
 | native → Java | Accept when retirement is available; the engine handles JNI-entry copying. Otherwise reject with 71 |
 | Switch a method between static and instance, make an instance method private, or re-add a retired method as another invoke kind | Reject with 71; see [invoke kinds stay fixed](#invoke-kinds-stay-fixed) |
-| Change a method's varargs or strict flags | Reject with 71 |
+| Change a method's bridge, varargs, strict or synthetic flags | Accept through the structural path; the new method carries the new flags, which only describe it to reflection and linking |
 | Delete methods or change signatures, including native, abstract, constructors and class initializers | Accept when retirement is available; otherwise reject with `METHOD_DELETED` (67) |
 | Delete fields or change their types or static flags | Accept when retirement and field guards are available; otherwise reject with `SCHEMA_CHANGED` (64) |
 | Change class visibility, final, abstract, synthetic or InnerClass flags | Accept through the structural path. Adding final with a loaded subclass rejects with `CLASS_MODIFIERS_CHANGED` (70); adding abstract while the class itself has instances rejects with 70 after `CollectAndCreateNewInstances` |

@@ -13,6 +13,7 @@ import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
 import com.github.ytlog.artdcevm.fixture.SuperBatchFixture;
+import com.github.ytlog.artdcevm.fixture.ModifierFlagsFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -1066,6 +1067,27 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("optionalAfterGc", 51, contract.optional());
         });
         runInterfaceParentScenarios();
+        runInterfaceAccessScenarios();
+    }
+
+    // Interface class modifiers evolve like a class's.
+    private void runInterfaceAccessScenarios() throws Exception {
+        ModifierFlagsFixture.Implementation implementation = new ModifierFlagsFixture.Implementation();
+        ModifierFlagsFixture.Visible visible = implementation;
+        Method value = ModifierFlagsFixture.Visible.class.getMethod("value");
+        runScenario("interface-access", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{ModifierFlagsFixture.Visible.class}, "interface-access");
+            scenario.check("publicAfter", false, Modifier.isPublic(ModifierFlagsFixture.Visible.class.getModifiers()));
+            value.setAccessible(true);
+            scenario.check("value", 2, value.invoke(implementation));
+            scenario.check("marker", 3, implementation.marker);
+        });
+        runScenario("interface-access-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{ModifierFlagsFixture.Visible.class}, "interface-access-restore");
+            scenario.check("publicAfter", true, Modifier.isPublic(ModifierFlagsFixture.Visible.class.getModifiers()));
+            scenario.check("value", 3, visible.value());
+            scenario.check("marker", 3, implementation.marker);
+        });
     }
 
     // An interface may newly extend an unchanged interface.
@@ -2009,6 +2031,23 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             checkWidenedSuperclass(scenario, subject, child);
         });
         runSuperBatchScenarios();
+        runDescriptiveFlagScenarios();
+    }
+
+    // Bridge, varargs, strict and synthetic flags only describe a method.
+    private void runDescriptiveFlagScenarios() throws Exception {
+        ModifierFlagsFixture.Subject subject = new ModifierFlagsFixture.Subject();
+        runScenario("method-descriptive-flags", 0, scenario -> {
+            scenario.check("varargsBefore", true,
+                    ModifierFlagsFixture.Subject.class.getMethod("sum", int[].class).isVarArgs());
+            scenario.redefine(new Class<?>[]{ModifierFlagsFixture.Subject.class}, "method-descriptive-flags");
+            Method sum = ModifierFlagsFixture.Subject.class.getMethod("sum", int[].class);
+            Method half = ModifierFlagsFixture.Subject.class.getMethod("half", double.class);
+            scenario.check("varargsAfter", false, sum.isVarArgs());
+            scenario.check("strictAfter", false, Modifier.isStrict(half.getModifiers()));
+            scenario.check("sum", 7, subject.sum(2, 4));
+            scenario.check("half", 2.5, subject.half(10));
+        });
     }
 
     // A superclass change may share the batch with a subclass of the moving

@@ -262,9 +262,13 @@ int main(int argc, char** argv) {
     next = live; next.methods[0].access |= acc::kAccAbstract;
     Accept(live, next, false, true);  // Concrete -> abstract.
     Accept(next, live, false, true);  // Abstract -> concrete.
-    for (uint32_t flags : {acc::kAccStatic, uint32_t{0x80}, uint32_t{0x800}}) {
+    next = live; next.methods[0].access |= acc::kAccStatic;
+    Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
+    // Bridge, varargs, strict and synthetic describe the method to reflection.
+    for (uint32_t flags : {uint32_t{0x40}, uint32_t{0x80}, uint32_t{0x800}, uint32_t{0x1000}}) {
       next = live; next.methods[0].access |= flags;
-      Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED);
+      Accept(live, next, false, true);
+      Accept(next, live, false, true);
     }
     next = live; next.fields.clear();
     Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED);
@@ -411,7 +415,14 @@ int main(int argc, char** argv) {
         auto parent = contract; parent.interfaces.push_back("Lfixture/Parent;");
         Require(policy::Evaluate(parent, contract, {}, abilities).error ==
                 JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "interface parent removal");
+        // An interface's class modifiers evolve like a class's; its kind does not.
         next = contract; next.access |= acc::kAccSynthetic;
+        Require(policy::Evaluate(contract, next, {}, abilities).error == JVMTI_ERROR_NONE,
+                "interface synthetic flag change must be accepted");
+        next = contract; next.access &= ~acc::kAccPublic;
+        Require(policy::Evaluate(contract, next, {}, abilities).error == JVMTI_ERROR_NONE,
+                "interface access change must be accepted");
+        next = contract; next.access |= 0x2000;
         expect(next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
       }
     }

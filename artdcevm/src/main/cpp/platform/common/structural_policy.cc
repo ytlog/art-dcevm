@@ -25,7 +25,10 @@ constexpr uint32_t kClassAllowed = kAccessLevel | acc::kAccStatic | acc::kAccFin
     acc::kAccAbstract | kAccSynthetic;
 constexpr uint32_t kFieldTransient = 0x0080;
 constexpr uint32_t kFieldAllowed = kAccessLevel | acc::kAccFinal | acc::kAccVolatile | kFieldTransient;
-constexpr uint32_t kMethodAllowed = kAccessLevel | acc::kAccFinal | acc::kAccSynchronized;
+// Bridge, varargs, strict and synthetic only describe the method to reflection
+// and linking; the structural path gives the new method its new flags.
+constexpr uint32_t kMethodDescriptive = 0x0040 | 0x0080 | 0x0800 | kAccSynthetic;
+constexpr uint32_t kMethodAllowed = kAccessLevel | acc::kAccFinal | acc::kAccSynchronized | kMethodDescriptive;
 
 Decision Reject(jvmtiError error, std::string reason) {
   Decision decision;
@@ -286,9 +289,6 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       (ClassModifiers(live.access) ^
        ClassModifiers(incoming.reflection_access.value_or(incoming.access))) |
       ((live.access ^ incoming.access) & kClassDefinitionFlags);
-  if (interface_target && (class_changed & ~kAccSuper))
-    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
-                  "interface redefinition does not support class modifier changes");
   if (class_changed & ~kClassAllowed)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
                   "class kind changed (interface, annotation or enum)");

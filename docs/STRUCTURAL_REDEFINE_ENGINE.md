@@ -184,7 +184,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 接口目标的方法体更新 | 接受；需接口运行时探测与成员映射通过 |
 | 接口目标新增 public abstract/default/static/private 实例方法；删除或改签名任一方法；public 实例方法 abstract ↔ default；静态字段增删或改类型 | 成员映射与接口运行时可用、且继承／遮蔽／default 冲突与 abstract 分派检查通过时接受 |
 | 接口目标新增 native；新增 abstract 无有效实现或 IfTable 探测不通过；direct 遮蔽或 default 冲突 | 拒绝 `METHOD_ADDED`（63） |
-| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；移除父接口或新父接口方法遮蔽检查失败；类修饰符变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
+| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；移除父接口或新父接口方法遮蔽检查失败；类种类变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
 | 接口运行时能力不可用（版本、命名服务或探测不支持） | 拒绝 `NOT_AVAILABLE`（98）；声明变化使用上述标准错误码 |
 | 新增字段、方法 | 接受 |
 | 已有成员的访问级别、final、volatile、transient、synchronized 变化（实例方法改为 private 除外）；Java → native；abstract ↔ concrete | 接受 |
@@ -192,7 +192,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 新增或改变访问级别的实例方法，可能顶替已加载子类的 copied default/miranda | 可退役时接受，由自有映射处理；否则新增拒绝 `METHOD_ADDED`（63），访问级别变化拒绝 71 |
 | native → Java | 可退役时接受（引擎处理 JNI 入口复制）；否则拒绝 71 |
 | 方法在 static 与实例之间变化，实例方法改为 private；已退役的方法以另一种调用方式重新加入 | 拒绝 71（见[调用方式不变](#调用方式不变)） |
-| 方法的 varargs、strict 标志变化 | 拒绝 71 |
+| 方法的 bridge、varargs、strict、synthetic 标志变化 | 接受并走结构路径，新方法带新标志（这些标志只供反射与链接描述方法） |
 | 删除方法、改签名（含 native、abstract、构造器、类初始化器） | 可退役时接受；否则拒绝 `METHOD_DELETED`（67） |
 | 删除字段，字段类型或 static 属性变化 | 可退役且字段守卫可用时接受；否则拒绝 `SCHEMA_CHANGED`（64） |
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 而有已加载子类时拒绝 `CLASS_MODIFIERS_CHANGED`（70）；加 abstract 而该类自身仍有实例时，在 `CollectAndCreateNewInstances` 之后拒绝 70 |

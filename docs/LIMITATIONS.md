@@ -34,7 +34,7 @@
 | abstract 与 default 互换之外的方法修饰符变化；改为 abstract 而 IfTable 探测不通过；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
 | 移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法；新父接口的 abstract 方法缺少 IfTable 探测 | `HIERARCHY_CHANGED`（66） |
 | 新增的接口（含普通类新增的接口）本身或其父接口在同批重定义 | `HIERARCHY_CHANGED`（66） |
-| 类修饰符变化 | `CLASS_MODIFIERS_CHANGED`（70） |
+| 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 子类型相交的接口组（含无关接口共享实现类）或同批做结构修改的组外父类合并重建时，没有任何结构目标的实例覆盖全部具体成员 | `HIERARCHY_CHANGED`（66） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
 | boot 接口、有 Proxy 实现类、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
@@ -61,7 +61,6 @@
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
 | 方法在 static 与实例之间变化、实例方法改为 private，或已删除的方法以另一种调用方式重新加入 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式不变](STRUCTURAL_REDEFINE_ENGINE.md#调用方式不变)；可改用不同的名称或签名 |
-| 方法的 varargs、strict 标志变化 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
 | 移除接口，以及任何失去父类型的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 
