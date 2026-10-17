@@ -96,8 +96,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
-  requirements.redirect_verification =
-      decision.superclass_changed || (interfaces && interfaces->IsAffected(self));
+  requirements.redirect_verification = decision.superclass_changed || snapshot.moved_ancestor ||
+      (interfaces && interfaces->IsAffected(self));
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     batch->retires_members = true;
   snapshot.retiring = decision.retired_methods;

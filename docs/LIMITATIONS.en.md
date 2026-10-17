@@ -77,7 +77,7 @@ The following conflicts reject the transaction:
 - A class becomes final while it has a loaded subclass (70).
 - A class becomes abstract while instances of that class itself still exist (70). Instances of its subclasses do not prevent the change.
 - An added interface cannot be resolved through the target's loader, is not an interface, or is inaccessible to the target (`JVMTI_ERROR_FAILS_VERIFICATION`, 62).
-- The new superclass cannot be resolved, is an interface, is final, is inaccessible, or has a final method overridden by the new definition or a loaded subclass (62); the new superclass extends the target itself (`JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION`, 61); it does not extend the original superclass (66, narrowing); or the same batch also redefines the target's superclass, a subclass, or a class in the new superclass chain (66).
+- The new superclass cannot be resolved, is an interface, is final, is inaccessible, or has a final method overridden by the new definition or a loaded subclass (62); the new superclass extends the target itself (`JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION`, 61); it does not extend the original superclass (66, narrowing); or the same batch also redefines a supertype of the target, a class in the new superclass chain, or a subclass that changes its superclass too (66); a subclass that only changes members may share the batch and verifies against the new superclass chain.
 - When retirement is unavailable, adding an instance method or changing its access level may displace a loaded subclass's copied default/miranda method.
 
 ## Superclass changes

@@ -12,6 +12,7 @@ import com.github.ytlog.artdcevm.fixture.InterfaceMethodFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
+import com.github.ytlog.artdcevm.fixture.SuperBatchFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -2006,6 +2007,51 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runScenario("super-narrow", 66, scenario -> {
             scenario.redefine(new Class<?>[]{SuperSubject.class}, "super-original");
             checkWidenedSuperclass(scenario, subject, child);
+        });
+        runSuperBatchScenarios();
+    }
+
+    // A superclass change may share the batch with a subclass of the moving
+    // class; that subclass verifies against the moving class's new version.
+    private void runSuperBatchScenarios() throws Exception {
+        SuperBatchFixture.Child child = new SuperBatchFixture.Child();
+        child.childValue = 13; child.own = 17; child.baseValue = 19;
+        String schema = memberSchema(SuperBatchFixture.Subject.class);
+        String[] rejected = {"super-batch-parent", "super-batch-moving"};
+        Class<?>[][] batches = {{SuperBatchFixture.Subject.class, SuperBatchFixture.Base.class},
+                {SuperBatchFixture.Subject.class, SuperBatchFixture.Child.class}};
+        String[] variants = {"super-batch-child", "super-batch-moving"};
+        for (int i = 0; i < rejected.length; ++i) {
+            Class<?>[] batch = batches[i];
+            String variant = variants[i];
+            runScenario(rejected[i], 66, scenario -> {
+                // A supertype in the batch, or a subclass that moves too, stays rejected.
+                scenario.expectRejectionBy(SuperBatchFixture.Subject.class);
+                scenario.redefine(batch, variant, variant);
+                scenario.check("rejectionReason", true,
+                        DcevmRuntime.capabilities().getString("lastRejection").contains("related class"));
+                scenario.check("unchangedSubject", schema, memberSchema(SuperBatchFixture.Subject.class));
+                scenario.check("superclassUnchanged", SuperBatchFixture.Base.class.getName(),
+                        SuperBatchFixture.Subject.class.getSuperclass().getName());
+                scenario.check("base", 19, child.base());
+                scenario.check("childValue", 13, child.childValue);
+            });
+        }
+        runScenario("super-batch-child", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{SuperBatchFixture.Child.class, SuperBatchFixture.Subject.class},
+                    "super-batch-child", "super-batch-child");
+            scenario.check("subjectSuperclass", SuperBatchFixture.Middle.class.getName(),
+                    SuperBatchFixture.Subject.class.getSuperclass().getName());
+            scenario.check("childIsMiddle", true, ((Object) child) instanceof SuperBatchFixture.Middle);
+            Method via = SuperBatchFixture.Child.class.getMethod("viaMiddle");
+            scenario.check("existingViaMiddle", 53, via.invoke(child));
+            scenario.check("newViaMiddle", 60, via.invoke(new SuperBatchFixture.Child()));
+            scenario.check("existingMiddleValue", 0, SuperBatchFixture.Middle.class.getField("middleValue").getInt(child));
+            scenario.check("own", 17, child.own);
+            scenario.check("baseValue", 19, child.baseValue);
+            scenario.check("childValue", 13, child.childValue);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("viaMiddleAfterGc", 53, via.invoke(child));
         });
     }
 

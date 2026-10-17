@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "platform/abi/arm64/common/redefinition.h"
+#include "platform/common/runtime_thread.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/verification_redirect_symbols.h"
@@ -25,7 +26,12 @@ using abi::arm64::ClassRedefinitionPrefix;
 using abi::arm64::Handle;
 using abi::arm64::RedefinitionDataIter;
 
-struct State final : transaction::Part { const Verification* verifying = nullptr; };
+struct State final : transaction::Part {
+  const Verification* verifying = nullptr;
+  // Holder entries of superclass-changed targets, recorded as ART verifies
+  // them. ART sorts supertypes first, so before any of their batched subclasses.
+  std::vector<int32_t> moved;
+};
 State* CurrentState() {
   return transaction::PartOf<State>(transaction::Current(), &transaction::Context::verification);
 }
@@ -52,6 +58,7 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
     self->driver->result = JVMTI_ERROR_INTERNAL;
     return false;
   }
+  if (target->superclass) state->moved.push_back(data.index);
   interface_redefinition::Backend* backend = interfaces.load(std::memory_order_acquire);
   const Verification scope{&data, target->descriptor,
                            backend && backend->IsAffected(self) ? backend : nullptr};
@@ -73,19 +80,35 @@ void* VerifiedClass(void* linker, std::string_view descriptor, Handle loader) {
     return verifying->interface_group->VerificationClass(linker, descriptor, loader);
   return descriptor == verifying->descriptor ? verifying->data->NewClassObject() : nullptr;
 }
+// While a batched subclass verifies, a superclass-changed target resolves,
+// through its loader as usual, to the old class: show the verifier its new
+// class instead, matched by identity rather than by name.
+void* MovedClass(void* found) {
+  const State* state = CurrentState();
+  const Verification* verifying = state ? state->verifying : nullptr;
+  if (!found || !verifying || verifying->interface_group || state->moved.empty()) return found;
+  const auto thread = runtime_thread::Ready();
+  if (!thread) return found;
+  for (int32_t index : state->moved) {
+    const RedefinitionDataIter moved{index, verifying->data->holder};
+    if (runtime_thread::Read(*thread, moved.Reference(RedefinitionDataIter::kSlotMirrorClass)) == found)
+      return runtime_thread::Read(*thread, moved.Reference(RedefinitionDataIter::kSlotNewClassObject));
+  }
+  return found;
+}
 void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {
   if (auto* backend = interfaces.load(std::memory_order_acquire)) backend->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, descriptor, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, Handle);
-  return reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader);
+  return MovedClass(reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader));
 }
 void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
                           Handle loader) noexcept {
   if (auto* backend = interfaces.load(std::memory_order_acquire)) backend->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, {descriptor, length}, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, size_t, Handle);
-  return reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
-                                                                     length, loader);
+  return MovedClass(reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
+                                                                                length, loader));
 }
 }  // namespace
 

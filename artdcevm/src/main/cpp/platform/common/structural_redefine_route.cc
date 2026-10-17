@@ -248,15 +248,21 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
         if (!jni->IsSameObject(klass, other) && jni->IsAssignableFrom(added, other))
           snapshot.hierarchy.added_interface_in_batch = descriptor;
   }
-  // ART recreates a target's subclasses under its new class and treats each
-  // target's old subclasses as its own; a superclass change cannot share that.
+  // ART recreates a target's subclasses under its new class, allocating a
+  // batched subclass from its own DEX. That subclass may evolve with the
+  // target unless it moves too; a supertype of the target or a class on the
+  // new superclass chain would link the version published before the batch.
   for (auto& [klass, snapshot] : batch.classes) {
     if (!snapshot.hierarchy.new_superclass) continue;
-    for (const auto& [other, ignored] : batch.classes)
-      if (!jni->IsSameObject(klass, other) &&
-          (jni->IsAssignableFrom(klass, other) || jni->IsAssignableFrom(other, klass) ||
-           jni->IsAssignableFrom(snapshot.superclass_class, other)))
+    for (auto& [other, other_snapshot] : batch.classes) {
+      if (jni->IsSameObject(klass, other)) continue;
+      const bool subclass = jni->IsAssignableFrom(other, klass);
+      if (jni->IsAssignableFrom(klass, other) || jni->IsAssignableFrom(snapshot.superclass_class, other) ||
+          (subclass && other_snapshot.hierarchy.new_superclass))
         snapshot.hierarchy.new_superclass->related_in_batch = true;
+      else if (subclass)
+        other_snapshot.moved_ancestor = true;
+    }
   }
   // A subclass prepared from here on is missing from the snapshot and may be
   // missing from ART's recreated subclasses: fail this attempt instead.

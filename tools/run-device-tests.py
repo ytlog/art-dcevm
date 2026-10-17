@@ -175,6 +175,9 @@ SCENARIOS = (
     ("super-circular", ["super-circular"], 61),
     ("super-widen", ["super-widen"], 0),
     ("super-narrow", ["super-original"], 66),
+    ("super-batch-parent", ["super-batch-child", "super-batch-child"], 66),
+    ("super-batch-moving", ["super-batch-moving", "super-batch-moving"], 66),
+    ("super-batch-child", ["super-batch-child", "super-batch-child"], 0),
     ("preload-subclass", ["preload-subclass"], 0),
     ("preload-hook-subclass", ["preload-hook-original"], 0),
     ("tool-add-classes", ["tool-v1", "tool-v1"], 0),
@@ -198,7 +201,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "nested-interface-initializer", "nested-interface-restore-initializer",
                     "interface-kind-default", "interface-kind-abstract", "interface-parent-add",
                     "interface-batch-unrelated", "interface-batch-after-rejection", "interface-batch-unrelated-reverse",
-                    "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen",
+                    "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child",
                     "field-retire", "field-restore", "field-types"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
@@ -479,6 +482,12 @@ REQUIRED_CHECKS = {
     "super-widen": {**SUPER_WIDENED_CHECKS, "describeBefore": "base", "newMiddleValue": 11,
                     "newValue": 12},
     "super-narrow": SUPER_WIDENED_CHECKS,
+    **{"super-batch-" + variant: {"rejectionReason": True,
+        "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Base", "base": 19, "childValue": 13}
+       for variant in ("parent", "moving")},
+    "super-batch-child": {"subjectSuperclass": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Middle",
+        "childIsMiddle": True, "existingViaMiddle": 53, "newViaMiddle": 60, "existingMiddleValue": 0,
+        "own": 17, "baseValue": 19, "childValue": 13, "viaMiddleAfterGc": 53},
     "preload-subclass": {"childLoadedBefore": False, "childLoadedAfter": True, "childLayout": 435},
     "preload-hook-subclass": {"childLoadedBefore": False, "hookInstalled": 0, "hookReplacements": 2,
                               "subclassLoadRetries": 1, "childLoadedAfter": True, "childLayout": 435},
@@ -565,6 +574,7 @@ UNCHANGED_CHECKS = {
     "interface-default-conflict": ("unchangedInterface", "unchangedImplementation"),
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
     "interface-overlap-superclass": ("unchangedParent",),
+    **{"super-batch-" + variant: ("unchangedSubject",) for variant in ("parent", "moving")},
     "interface-overlap-uncovered": ("unchangedParent",),
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},

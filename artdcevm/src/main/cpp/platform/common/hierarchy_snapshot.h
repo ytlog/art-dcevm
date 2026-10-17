@@ -13,6 +13,8 @@ struct Snapshot {
   std::map<std::string, jclass> interface_classes;
   // Interface targets: each declaring interface of hierarchy.parent_methods.
   std::map<std::string, jclass> parent_interfaces;
+  // A superclass of this target changes its own superclass in the batch.
+  bool moved_ancestor = false;
   jclass superclass_class = nullptr;
 };
 struct LoadedType {
