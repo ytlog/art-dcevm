@@ -311,7 +311,47 @@ bool SuperclassMatches(const VerifiedThread& thread, ClassRedefinitionPrefix* se
                        const RedefinitionDataIter& data, jclass superclass, int selected) {
   void* replacement = data.Classes(false) ? Element<void>(thread, data.Classes(false), 0) : nullptr;
   void* expected = DecodeClass(art.mirror_class, self, superclass);
+  if (void* rebuilt = expected ? Rebuilt(thread, data.holder, expected) : nullptr) expected = rebuilt;
   return replacement && expected && kProbes[selected].superclass(replacement) == Reference(expected);
+}
+
+namespace {
+int32_t HolderEntries(const abi::RedefinitionDataHolderPrefix* holder) {
+  const auto* array = holder && holder->array.reference ? holder->array.Get<abi::ObjectArray>() : nullptr;
+  return array ? array->length / RedefinitionDataIter::kNumSlots : 0;
+}
+}  // namespace
+
+void* Rebuilt(const VerifiedThread& thread, const abi::RedefinitionDataHolderPrefix* holder, const void* old,
+              const std::vector<int32_t>& entries) {
+  const int32_t count = HolderEntries(holder);
+  const auto search = [&](int32_t index) -> void* {
+    if (index < 0 || index >= count) return nullptr;
+    const RedefinitionDataIter data{index, const_cast<abi::RedefinitionDataHolderPrefix*>(holder)};
+    const auto* olds = Heap<abi::ObjectArray>(thread, data.Reference(RedefinitionDataIter::kSlotOldClasses));
+    const auto* news = Heap<abi::ObjectArray>(thread, data.Reference(RedefinitionDataIter::kSlotNewClasses));
+    for (int32_t i = 0; olds && news && i < olds->length && i < news->length; ++i)
+      if (Element<void>(thread, olds, i) == old) return Element<void>(thread, news, i);
+    return nullptr;
+  };
+  if (!entries.empty()) {
+    for (int32_t index : entries)
+      if (void* found = search(index)) return found;
+    return nullptr;
+  }
+  for (int32_t index = 0; index < count; ++index)
+    if (void* found = search(index)) return found;
+  return nullptr;
+}
+
+int32_t HolderEntry(const VerifiedThread& thread, ClassRedefinitionPrefix* self,
+                    const abi::RedefinitionDataHolderPrefix* holder, jclass klass) {
+  const void* mirror = DecodeClass(art.mirror_class, self, klass);
+  for (int32_t index = 0; mirror && index < HolderEntries(holder); ++index) {
+    const RedefinitionDataIter data{index, const_cast<abi::RedefinitionDataHolderPrefix*>(holder)};
+    if (Heap<void>(thread, data.Reference(RedefinitionDataIter::kSlotMirrorClass)) == mirror) return index;
+  }
+  return -1;
 }
 
 int Selected() { return Selected(transaction::Current()); }

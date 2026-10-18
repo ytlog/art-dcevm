@@ -292,7 +292,8 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
   - 循环（B 扩展 T）：`CIRCULAR_CLASS_DEFINITION`（61）；
   - 不扩展 A（收窄）：66；
   - 新定义或已加载子类覆写了 B 链上的 final 方法：62；
-  - 同批还有同样改变父类的子类：66；同批的 T 的父类型或 B 链上的类只改方法体时接受（ART 对它们走非结构路径，类对象不变，新 T 链接到的正是它们），若其最终 DEX 在 `CheckClass` 中要求结构路径（成员变化、改父类、新增接口或属于接口重建组）则 66，因为新 T 会链接到提交前发布的旧版本；只改成员的子类可以同批，ART 以其新 DEX 把它分配在新 T 之下；
+  - 同批还有同样改变父类的子类：66；同批的 T 的父类型（重建它会连同 T 一起重建）或 B 链上的接口只改方法体时接受（ART 对它们走非结构路径，类对象不变，新 T 链接到的正是它们），若其最终 DEX 在 `CheckClass` 中要求结构路径（成员变化、改父类、新增接口或属于接口重建组）则 66；
+  - 同批 B 链上、A 之下的普通类（B 本身或 B 与 A 之间的类）结构变化时接受：ART 按父类深度排序条目，同深度次序任意，因此接口模块的 `FinishNewClassAllocations` Hook 在分配 T 之前先按深度为这些链上条目调用分配（已初始化的条目 ART 直接返回，链上更深的类随其祖先的重建分配）；`AllocateNewClassObject` 把父类槽位写为 holder 中重建出的 B′（按各条目 OldClasses/NewClasses 的身份对应查找，B 不在批次中而随其祖先重建时同样适用）；校验 T 时 `FindClass` 解析出的旧链上类按这些条目映射到替换类；`CollectAndCreateNewInstances` 之后核对新类的父类为 B′。没有接口运行时（批次无接口目标）时，按各候选版本的固定 holder 声明自检，只接受唯一满足 holder 不变式的版本。链上类同样改父类或属于接口重建组时 66；只改成员的子类可以同批，ART 以其新 DEX 把它分配在新 T 之下；
   - 没有自有成员映射或校验重定向：66（B 会让 T 中的 copied default/miranda 消失，所以需要自有映射）。
 - **分配**：`AllocateNewClassObject` 把旧父类放进调用方 handle scope 中的槽位，再交给 `LinkClass`。Hook 在该槽位写入 B（槽位仍是 GC 根），新类因此链接在 B 之下；已加载子类随后以新 T 为父类重建。`CollectAndCreateNewInstances` 之后核对新类的父类确为 B，否则以 66 拒绝。
 - **校验**：自 Android 13 起，校验器按描述符经类加载器解析类本身，得到的仍是旧类（父类为 A），新构造器调用 B 的构造器就会校验失败；Android 11/12 的 ART 自己把新类写入新 DexCache。引擎 Hook `ClassRedefinition::CheckVerification`：校验该类期间，本线程的 `ClassLinker::FindClass`（两种签名，每套库至少有一种）对该描述符返回 holder 中的新类对象。若某版本的校验器走其他解析路径，校验失败并以 62 拒绝，不会提交未校验的代码。校验同批子类 S 时，本线程 `FindClass` 原样解析出的旧 T 按身份（holder 槽位中的原类）改为新 T；ART 先校验父类型，引擎在校验 T 时记下其 holder 条目。没有该重定向时，把 `this` 当作 B 传递的 S 代码以 62 校验失败。

@@ -144,6 +144,18 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     decision.reason = snapshot.anchored_by + " changes its superclass and links the published version of " +
                       incoming.descriptor + ", which this batch changes structurally";
   }
+  // A structural class of a target's new chain is allocated before the target
+  // through the interface module's allocation hook; one that moves too, or
+  // belongs to an interface rebuild, would be linked by another order.
+  if (decision.error == JVMTI_ERROR_NONE && !snapshot.chain_of.empty() &&
+      (decision.fields_structural || decision.methods_structural || decision.superclass_changed ||
+       !snapshot.hierarchy.added_interfaces.empty()) &&
+      (decision.superclass_changed || !interfaces || !interfaces->Available() || interfaces->IsAffected(self))) {
+    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+    decision.reason = snapshot.chain_of + " changes its superclass to a chain through " + incoming.descriptor +
+                      (decision.superclass_changed ? ", which changes its superclass too"
+                                                   : ", whose rebuild cannot be allocated first");
+  }
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
     if (std::string callers = KindCallers(*thread, self, snapshot, *batch, decision.kind_changes); !callers.empty()) {
       decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
@@ -173,6 +185,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   requirements.linked_interfaces.clear();
   if (snapshot.hierarchy.added_interface_in_batch)
     for (const auto& [descriptor, type] : snapshot.interface_classes) requirements.linked_interfaces.push_back(type);
+  requirements.chain_rebuilds = snapshot.chain_in_batch;
   requirements.retyped_fields.clear();
   for (const auto& field : snapshot.retyped_fields)
     requirements.retyped_fields.push_back({field.name, field.is_static, field.descriptor, field.type});
@@ -222,8 +235,13 @@ void* AllocateNewClassObject(ClassRedefinitionPrefix* self, abi::arm64::Handle o
   const transaction::Requirements* target = context ? context->Find(self) : nullptr;
   if (target && target->superclass && super_class.reference &&
       old_class.Get<void>() == process->layout_services.mirror_class(self)) {
-    if (void* superclass = class_layout::DecodeClass(process->layout_services.mirror_class, self, target->superclass))
+    if (void* superclass = class_layout::DecodeClass(process->layout_services.mirror_class, self, target->superclass)) {
+      // A structural class of the new chain was rebuilt first: link under its replacement.
+      if (!target->chain_rebuilds.empty() && context->holder)
+        if (const auto thread = runtime_thread::Ready())
+          if (void* rebuilt = class_layout::Rebuilt(*thread, context->holder, superclass)) superclass = rebuilt;
       *const_cast<uint32_t*>(super_class.reference) = class_layout::Reference(superclass);
+    }
   }
   using Function = void* (*)(ClassRedefinitionPrefix*, abi::arm64::Handle, abi::arm64::Handle, abi::arm64::Handle, uint16_t);
   return reinterpret_cast<Function>(process->original_allocate)(self, old_class, super_class, cache, index);

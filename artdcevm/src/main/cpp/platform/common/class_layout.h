@@ -51,6 +51,15 @@ int VerifyReplacements(const runtime_thread::VerifiedThread& thread, abi::arm64:
 bool SuperclassMatches(const runtime_thread::VerifiedThread& thread,
                        abi::arm64::ClassRedefinitionPrefix* self,
                        const abi::arm64::RedefinitionDataIter& data, jclass superclass, int selected);
+// The replacement an allocated entry of ART's holder created for `old`, or
+// null: each structural entry lists the old classes of its rebuild in its
+// OldClasses slot and their replacements, in the same order, in NewClasses.
+// A non-empty `entries` limits the search to those holder entries.
+void* Rebuilt(const runtime_thread::VerifiedThread& thread, const abi::arm64::RedefinitionDataHolderPrefix* holder,
+              const void* old, const std::vector<int32_t>& entries = {});
+// The holder entry that redefines `klass`, or -1.
+int32_t HolderEntry(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
+                    const abi::arm64::RedefinitionDataHolderPrefix* holder, jclass klass);
 // The table index of the current transaction's selected layout, or -1.
 int Selected();
 // Later redefinitions of this transaction use only `index`; -1 selects none.

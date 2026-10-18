@@ -237,25 +237,25 @@ bool FailAllocation(ClassRedefinitionPrefix* self, jvmtiError error, const char*
   return false;
 }
 struct HolderView {
+  const InterfaceRuntime* runtime = nullptr;
   uint8_t* begin = nullptr;
   std::vector<bool>* initialized = nullptr;
   std::vector<bool>* structural = nullptr;
   std::vector<bool>* initial = nullptr;
   ClassRedefinitionPrefix* Definition(int32_t index) const {
-    return reinterpret_cast<ClassRedefinitionPrefix*>(begin + index * Runtime().redefinition_size);
+    return reinterpret_cast<ClassRedefinitionPrefix*>(begin + index * runtime->redefinition_size);
   }
 };
-bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, HolderView* output) {
+// ART's holder read with `runtime`'s fixed declarations, or the first
+// declaration mismatch. Every element's prefix, Class and DexCache slots must
+// name this batch's own redefinitions.
+const char* ViewHolder(const InterfaceRuntime& runtime, ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
+                       HolderView* output) {
   const State* state = CurrentState();
-  const InterfaceRuntime& runtime = *state->runtime;
-  const auto reject_holder = [&](const char* reason) {
-    Disable(reason);
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, reason);
-  };
   if (!data->holder || !data->holder->array.reference ||
       !data->holder->array.Get<ObjectArray>() ||
       data->holder->array.Get<ObjectArray>()->length != state->batch_size * RedefinitionDataIter::kNumSlots)
-    return reject_holder("interface holder array declaration mismatch");
+    return "interface holder array declaration mismatch";
   auto* definitions = Field<void**>(data->holder, runtime.redefinitions);
   if (!definitions || !definitions[0] || data->index < 0 || data->index >= state->batch_size ||
       reinterpret_cast<uintptr_t>(definitions[1]) != reinterpret_cast<uintptr_t>(definitions[0]) +
@@ -264,32 +264,55 @@ bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, Hol
       reinterpret_cast<uintptr_t>(self) != reinterpret_cast<uintptr_t>(definitions[0]) +
           data->index * runtime.redefinition_size ||
       Slot(*data, 4) != process->mirror_class(self))
-    return reject_holder("interface holder redefinitions declaration mismatch");
+    return "interface holder redefinitions declaration mismatch";
   auto& initialized = Field<std::vector<bool>>(data->holder, runtime.initialized);
   auto& structural = Field<std::vector<bool>>(data->holder, runtime.actually_structural);
   auto& initial = Field<std::vector<bool>>(data->holder, runtime.initial_structural);
   if (initialized.size() != static_cast<size_t>(state->batch_size) ||
       structural.size() != initialized.size() || initial.size() != initialized.size())
-    return reject_holder("interface holder flag declarations mismatch");
-  output->begin = static_cast<uint8_t*>(definitions[0]);
-  output->initialized = &initialized;
-  output->structural = &structural;
-  output->initial = &initial;
+    return "interface holder flag declarations mismatch";
+  HolderView view{&runtime, static_cast<uint8_t*>(definitions[0]), &initialized, &structural, &initial};
   for (jint i = 0; i < state->batch_size; ++i) {
-    auto* context = output->Definition(i);
+    auto* context = view.Definition(i);
     bool known = false;
     for (jint j = 0; j < state->batch_size; ++j)
       known |= context->klass == state->definitions[j].klass;
     // Never decode an unverified candidate jclass from a guessed element.
     if (!known || context->driver != self->driver)
-      return reject_holder("interface holder element prefix declaration mismatch");
+      return "interface holder element prefix declaration mismatch";
     RedefinitionDataIter item{i, data->holder};
     auto* cache = static_cast<DexCache*>(Slot(item, 3));
     if (Slot(item, 4) != process->mirror_class(context) || !cache ||
         cache->dex_file != reinterpret_cast<uintptr_t>(context->dex_file))
-      return reject_holder("interface holder Class/DEX-cache slots declaration mismatch");
+      return "interface holder Class/DEX-cache slots declaration mismatch";
+  }
+  *output = view;
+  return nullptr;
+}
+bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, HolderView* output) {
+  if (const char* reason = ViewHolder(*CurrentState()->runtime, self, data, output)) {
+    Disable(reason);
+    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, reason);
   }
   return true;
+}
+// An ordinary batch selects no interface runtime: accept the one candidate
+// release whose holder declarations hold for this holder.
+bool VerifyOrdinaryHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, HolderView* output) {
+  if (CurrentState()->runtime) return VerifyHolder(self, data, output);
+  int matches = 0;
+  for (int release : class_layout::CandidateReleases(true)) {
+    const InterfaceRuntime* candidate = RuntimeFor(release);
+    HolderView view;
+    if (candidate && !ViewHolder(*candidate, self, data, &view) && (!matches || view.begin != output->begin ||
+                                                                    view.runtime->redefinition_size != output->runtime->redefinition_size)) {
+      *output = view;
+      ++matches;
+    }
+  }
+  if (matches == 1) return true;
+  return FailAllocation(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                        "the holder declarations needed to allocate the new superclass chain first are unverified");
 }
 bool AllocateLinked(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, const HolderView& holder,
                     const std::vector<jclass>& linked);
@@ -517,7 +540,27 @@ bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage
   try {
     void* klass = process->mirror_class(self);
     const Group* affected = RuntimeAvailable() ? AffectedGroup(klass) : nullptr;
-    const transaction::Requirements* requirements = transaction::Current() ? transaction::Current()->Find(self) : nullptr;
+    transaction::Context* context = transaction::Current();
+    const transaction::Requirements* requirements = context ? context->Find(self) : nullptr;
+    if (context) context->holder = data->holder;
+    if (requirements && requirements->superclass && !requirements->chain_rebuilds.empty() && CurrentState()) {
+      // ART sorts entries by depth, not by the new superclass chain: allocate
+      // the chain's structural rebuilds first so the target links under the
+      // replacement of its new superclass.
+      HolderView holder;
+      if (!VerifyOrdinaryHolder(self, data, &holder)) return false;
+      if ((*holder.initialized)[data->index]) return true;
+      for (jclass chain : requirements->chain_rebuilds) {
+        const int32_t entry = Entry(holder, chain);
+        // A chain class below another structural chain class is allocated
+        // with that class's rebuild (ART checks it is initial otherwise).
+        if (entry < 0 || !(*holder.structural)[entry] || !(*holder.initial)[entry] ||
+            (*holder.initialized)[entry])
+          continue;
+        RedefinitionDataIter chain_data{entry, data->holder};
+        if (!Finish(holder.Definition(entry), storage, &chain_data)) return false;
+      }
+    }
     if (!affected && RuntimeAvailable() && requirements && !requirements->linked_interfaces.empty() &&
         CurrentState() && CurrentState()->attempt) {
       // ART allocates this class and its subclasses; they link the rebuilt

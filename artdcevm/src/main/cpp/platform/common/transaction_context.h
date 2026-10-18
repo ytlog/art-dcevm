@@ -46,6 +46,10 @@ struct Requirements {
   // target links their replacements, so those rebuilds are allocated first.
   std::vector<jclass> linked_interfaces;
   std::vector<RetypedType> retyped_fields;
+  // Classes of the batch on the new superclass chain, below the old superclass
+  // (global references): their structural rebuilds are allocated first, and
+  // the target links under the replacement of its new superclass.
+  std::vector<jclass> chain_rebuilds;
 };
 
 struct Context {
@@ -66,6 +70,9 @@ struct Context {
   std::map<abi::arm64::ClassRedefinitionPrefix*, Requirements> targets;
   // A rejection decided after ART allocated the new classes, taken once.
   std::string rejection;
+  // ART's holder while it allocates the new classes, for finding a class's
+  // replacement by identity.
+  abi::arm64::RedefinitionDataHolderPrefix* holder = nullptr;
 
   const Requirements* Find(abi::arm64::ClassRedefinitionPrefix* self) const;
   bool RequiresMemberMapping() const;

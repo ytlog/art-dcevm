@@ -19,6 +19,12 @@ struct Snapshot {
   // on its new superclass chain as published: this change must stay
   // non-structural. Names that target in the rejection.
   std::string anchored_by;
+  // An ordinary class on a batched target's new superclass chain, below its
+  // old superclass: names that target. Its structural rebuild is allocated
+  // before the target, which links under the replacement.
+  std::string chain_of;
+  // That target's view: the batch's classes on its new chain (batch keys).
+  std::vector<jclass> chain_in_batch;
   // The submitted definition changes a method's invoke kind (static <->
   // instance, virtual -> private); ClassFileLoadHook output is checked again.
   bool changes_invoke_kind = false;

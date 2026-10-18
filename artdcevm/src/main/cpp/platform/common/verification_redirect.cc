@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "platform/abi/arm64/common/redefinition.h"
+#include "platform/common/class_layout.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -33,6 +34,9 @@ struct State final : transaction::Part {
   // Holder entries of superclass-changed targets, recorded as ART verifies
   // them. ART sorts supertypes first, so before any of their batched subclasses.
   std::vector<int32_t> moved;
+  // Holder entries of structural classes on a moved target's new superclass
+  // chain: their old classes resolve to the replacements the target links to.
+  std::vector<int32_t> chains;
 };
 State* CurrentState() {
   return transaction::PartOf<State>(transaction::Current(), &transaction::Context::verification);
@@ -61,6 +65,12 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
     return false;
   }
   if (target->superclass) state->moved.push_back(data.index);
+  if (!target->chain_rebuilds.empty()) {
+    const auto thread = runtime_thread::Ready();
+    for (jclass chain : target->chain_rebuilds)
+      if (const int32_t entry = thread ? class_layout::HolderEntry(*thread, self, data.holder, chain) : -1; entry >= 0)
+        state->chains.push_back(entry);
+  }
   interface_redefinition::Backend* backend = interfaces.load(std::memory_order_acquire);
   const bool member = backend && backend->IsAffected(self);
   const Verification scope{&data, target->descriptor,
@@ -100,6 +110,8 @@ void* MovedClass(void* found) {
     if (runtime_thread::Read(*thread, moved.Reference(RedefinitionDataIter::kSlotMirrorClass)) == found)
       return runtime_thread::Read(*thread, moved.Reference(RedefinitionDataIter::kSlotNewClassObject));
   }
+  if (!state->chains.empty())
+    if (void* rebuilt = class_layout::Rebuilt(*thread, verifying->data->holder, found, state->chains)) return rebuilt;
   return found;
 }
 void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {

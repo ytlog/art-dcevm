@@ -183,9 +183,9 @@ SCENARIOS = (
     ("super-narrow", ["super-original"], 66),
     ("super-batch-moving", ["super-batch-moving", "super-batch-moving"], 66),
     ("super-batch-child", ["super-batch-child", "super-batch-child"], 0),
-    ("super-chain-new-structural", ["super-chain-structural", "super-chain-structural"], 66),
     ("super-chain-old-structural", ["super-chain-structural", "super-chain-structural"], 66),
     ("super-chain-body", ["super-chain-body", "super-chain-body", "super-chain-body"], 0),
+    ("super-chain-rebuilt", ["super-chain-rebuilt", "super-chain-rebuilt", "super-chain-rebuilt"], 0),
     ("method-descriptive-flags", ["method-descriptive-flags"], 0),
     ("kind-instance", ["kind-instance"], 71),
     ("kind-instance-batch", ["kind-instance", "kind-instance"], 0),
@@ -221,7 +221,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "interface-parent-batch", "interface-parent-rebuilt",
                     "kind-instance-batch", "kind-private",
                     "interface-batch-unrelated", "interface-batch-after-rejection", "interface-batch-unrelated-reverse",
-                    "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child", "super-chain-body",
+                    "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child", "super-chain-body", "super-chain-rebuilt",
                     "field-retire", "field-restore", "field-types", "field-retype", "field-retype-restore"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
@@ -509,9 +509,11 @@ REQUIRED_CHECKS = {
     "super-narrow": SUPER_WIDENED_CHECKS,
     "super-batch-moving": {"rejectionReason": True,
         "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Base", "base": 19, "childValue": 13},
-    **{"super-chain-" + variant: {"rejectionReason": True,
-        "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperChainFixture$Base", "base": 19}
-       for variant in ("new-structural", "old-structural")},
+    "super-chain-old-structural": {"rejectionReason": True,
+        "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperChainFixture$Base", "base": 19},
+    "super-chain-rebuilt": {"moverIdentity": True, "deepMoverIdentity": True, "middleExtra": "int",
+        "existingMover": 181, "newMover": 184, "existingDeepMover": 137, "newDeepMover": 142, "subjectChain": 87,
+        "moverValue": 31, "existingMoverAfterGc": 181, "existingDeepMoverAfterGc": 137},
     "super-chain-body": {"middleIdentity": True, "existingIsMiddle": True, "existingChain": 87, "newChain": 74,
         "publishedMiddle": 61, "publishedBase": 6, "own": 17, "existingChainAfterGc": 87},
     "kind-instance": {"rejectionReason": True, "callerUnchanged": 2, "staticUnchanged": 2},
@@ -628,8 +630,7 @@ UNCHANGED_CHECKS = {
     "interface-overlap-superclass": ("unchangedParent",),
     **{name: ("unchangedSubject",) for name in ("kind-instance", "kind-static-rejected")},
     "interface-kind-static-rejected": ("unchangedContract",),
-    **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-new-structural",
-                                                 "super-chain-old-structural")},
+    **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
     "interface-batch-unrelated-invalid": ("unchangedInterface", "unchangedUnrelated"),

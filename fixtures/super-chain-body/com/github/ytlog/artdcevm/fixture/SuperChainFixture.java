@@ -16,4 +16,14 @@ public final class SuperChainFixture {
         public int own = 7;
         public int chain() { return middle() + base() + own; }
     }
+    public static class Deep extends Middle {
+        public int deepValue = 13;
+        public int deep() { return deepValue; }
+    }
+    public static class Mover extends Base {
+        public int moverValue = 23;
+    }
+    public static class DeepMover extends Base {
+        public int value = 29;
+    }
 }
