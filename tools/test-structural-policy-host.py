@@ -285,6 +285,49 @@ int main(int argc, char** argv) {
       Require(policy::Evaluate(live, next, {}, kinds).error == JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
               "invoke-kind change needs the engine's mapping");
     }
+    {
+      // An interface target retires the old kind the same way; the new kind's
+      // declaration is checked like any interface addition.
+      ClassSchema contract;
+      contract.descriptor = "Lfixture/KindContract;";
+      contract.superclass = "Ljava/lang/Object;";
+      contract.access = acc::kAccPublic | acc::kAccInterface | acc::kAccAbstract;
+      contract.methods = {{"value", "()I", acc::kAccPublic}};
+      policy::Abilities kinds;
+      kinds.member_mapping = true;
+      kinds.kind_changes = true;
+      kinds.interface_members = true;
+      auto made_static = contract; made_static.methods[0].access = acc::kAccPublic | acc::kAccStatic;
+      auto made_private = contract; made_private.methods[0].access = acc::kAccPrivate;
+      auto made_abstract = contract; made_abstract.methods[0].access = acc::kAccPublic | acc::kAccAbstract;
+      for (const auto* candidate : {&made_static, &made_private}) {
+        const auto changed = policy::Evaluate(contract, *candidate, {}, kinds);
+        Require(changed.error == JVMTI_ERROR_NONE && changed.methods_structural && changed.requires_member_mapping &&
+                changed.retired_methods.size() == 1 && changed.kind_changes.size() == 1 &&
+                changed.kind_changes[0].second == contract.methods[0].access,
+                "interface default made static or private must retire it and request a caller scan");
+      }
+      const auto restored = policy::Evaluate(made_static, contract, {}, kinds);
+      Require(restored.error == JVMTI_ERROR_NONE && restored.kind_changes.size() == 1,
+              "interface static made default must request a caller scan");
+      Require(policy::Evaluate(made_static, made_abstract, {}, kinds).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+              "interface static made abstract needs a verified IfTable accessor like an added abstract");
+      policy::LoadedHierarchy inherited;
+      inherited.inherited_interface = {{"value", "()I"}};
+      Require(policy::Evaluate(contract, made_static, inherited, kinds).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+              "interface method made static must not hide an inherited interface method");
+      policy::LoadedHierarchy shadowed;
+      shadowed.subtype_shadows[{"value", "()I"}] = "Lfixture/Impl;";
+      Require(policy::Evaluate(made_static, contract, shadowed, kinds).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+              "interface static made default must not shadow a subtype method");
+      kinds.interface_members = false;
+      Require(policy::Evaluate(contract, made_static, {}, kinds).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+              "interface invoke-kind change needs interface member mapping");
+    }
     // Bridge, varargs, strict and synthetic describe the method to reflection.
     for (uint32_t flags : {uint32_t{0x40}, uint32_t{0x80}, uint32_t{0x800}, uint32_t{0x1000}}) {
       next = live; next.methods[0].access |= flags;

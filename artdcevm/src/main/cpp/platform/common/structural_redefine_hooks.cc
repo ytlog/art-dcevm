@@ -14,17 +14,20 @@ namespace {
 // Verified code re-resolves a method by name and runs it as the kind it was
 // verified against. A kind change is accepted only when no loaded class
 // outside the batch has code naming the old method through the target or a
-// loaded subclass; classes loaded later verify against the new kind. Boot
-// code cannot name application classes.
+// loaded subtype (an interface's implementations and subinterfaces); classes
+// loaded later verify against the new kind. Boot code cannot name application
+// classes.
 std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
                         const Snapshot& snapshot, const Batch& batch,
                         const std::vector<std::pair<structural_policy::MemberKey, uint32_t>>& changes) {
   const std::string method = changes.front().first.first + changes.front().first.second;
   if (batch.active_frame)
     return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
-  if (!batch.loaded || !snapshot.subtypes) return "loaded code cannot be checked for the old kind of " + method;
+  const bool interface_target = snapshot.live.access & evolution::kAccInterface;
+  const auto* subtypes = interface_target ? &snapshot.interface_subtypes : snapshot.subtypes;
+  if (!batch.loaded || !subtypes) return "loaded code cannot be checked for the old kind of " + method;
   std::set<std::string> classes{snapshot.live.descriptor};
-  for (const auto& type : *snapshot.subtypes) {
+  for (const auto& type : *subtypes) {
     const abi::arm64::DexFilePrefix* dex = nullptr;
     int32_t class_def = -1;
     bool boot = false;

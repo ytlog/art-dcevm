@@ -13,6 +13,7 @@ import com.github.ytlog.artdcevm.fixture.RetypeFixture;
 import com.github.ytlog.artdcevm.fixture.SuperChainFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
+import com.github.ytlog.artdcevm.fixture.InterfaceInvokeKindFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
 import com.github.ytlog.artdcevm.fixture.SuperBatchFixture;
 import com.github.ytlog.artdcevm.fixture.ModifierFlagsFixture;
@@ -1126,6 +1127,51 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         runInterfaceParentScenarios();
         runInterfaceAccessScenarios();
+        runInterfaceInvokeKindScenarios();
+    }
+
+    // Interface methods may switch between default, static and private when no
+    // loaded class outside the batch still invokes the old kind. This class
+    // reaches Contract's methods only through reflection and Caller.
+    private void runInterfaceInvokeKindScenarios() throws Exception {
+        Class<?> type = InterfaceInvokeKindFixture.Contract.class;
+        InterfaceInvokeKindFixture.Impl impl = new InterfaceInvokeKindFixture.Impl();
+        impl.marker = 9;
+        if (InterfaceInvokeKindFixture.Caller.call(impl) != 11) throw new AssertionError("Caller precondition");
+        Method cachedValue = type.getMethod("value");
+        String schema = memberSchema(type);
+        runScenario("interface-kind-static-rejected", 71, scenario -> {
+            scenario.redefine(new Class<?>[]{type}, "interface-kind-static");
+            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains(
+                    "loaded class Lcom/github/ytlog/artdcevm/fixture/InterfaceInvokeKindFixture$Caller; still invokes the old kind"));
+            scenario.check("unchangedContract", schema, memberSchema(type));
+            scenario.check("callerUnchanged", 11, InterfaceInvokeKindFixture.Caller.call(impl));
+        });
+        runScenario("interface-kind-static", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{type, InterfaceInvokeKindFixture.Caller.class},
+                    "interface-kind-static", "interface-kind-static");
+            scenario.check("valueStatic", true, Modifier.isStatic(type.getMethod("value").getModifiers()));
+            scenario.check("staticValue", 21, type.getMethod("value").invoke(null));
+            scenario.check("caller", 22, InterfaceInvokeKindFixture.Caller.call(impl));
+            scenario.expectError("retiredDefault", NoSuchMethodError.class, () -> cachedValue.invoke(impl));
+            scenario.check("twiceDefault", true, type.getMethod("twice", int.class).isDefault());
+            scenario.check("twice", 12, type.getMethod("twice", int.class).invoke(impl, 4));
+            scenario.check("helperPrivate", true, Modifier.isPrivate(type.getDeclaredMethod("helper").getModifiers()));
+            scenario.check("useHelper", 7, type.getMethod("useHelper").invoke(impl));
+            scenario.check("newImpl", 12, type.getMethod("twice", int.class).invoke(new InterfaceInvokeKindFixture.Impl(), 4));
+            scenario.check("marker", 9, impl.marker);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("callerAfterGc", 22, InterfaceInvokeKindFixture.Caller.call(impl));
+        });
+        runScenario("interface-kind-static-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{type, InterfaceInvokeKindFixture.Caller.class},
+                    "interface-kind-static-restore", "interface-kind-static-restore");
+            scenario.check("valueDefault", true, type.getMethod("value").isDefault());
+            scenario.check("caller", 13, InterfaceInvokeKindFixture.Caller.call(impl));
+            scenario.check("twiceStatic", 8, type.getMethod("twice", int.class).invoke(null, 4));
+            scenario.check("useHelper", 7, type.getMethod("useHelper").invoke(impl));
+            scenario.check("marker", 9, impl.marker);
+        });
     }
 
     // Interface class modifiers evolve like a class's.

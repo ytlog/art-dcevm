@@ -316,7 +316,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 - `invoke-static` 解析到实例方法时，以缺少接收者的参数执行实例方法体。
 - `invoke-virtual` 解析到 static 方法或 private 方法时，按它们并不拥有的 vtable 索引分派到别的方法。
 
-调用方的 DexCache 项随旧方法退役而清除，之后的重新解析正是这条路径；引擎无法让它抛 `IncompatibleClassChangeError`。因此调用方式变化只在没有这样的调用方时接受：`CheckClass` 对批次之外每个已加载的非 boot 类，经布局读取其 DexFile 与 ClassDef，在该 DEX 中找出经目标或其已加载子类命名旧身份的 method_ids，再有界遍历该类全部代码的 invoke（35c、3rc、45cc、4rcc）与方法类 const-method-handle；找到即以 71 拒绝并写明调用方。之后才加载的类按新调用方式重新校验；boot 代码不能命名应用类。Native 阶段在批次可能改变调用方式时经 `GetAllStackTraces` 检查批次类的活动帧：旧帧继续执行旧代码，其下一次调用同样按名称重新解析。接受后旧声明退役（映射不把它映射到另一种调用方式的新方法），新声明是新成员。private 方法可以变成虚方法：直接调用它的只有该类自己的代码，仍然有效。构造器与类初始化器总是直接调用，不受此限制。
+调用方的 DexCache 项随旧方法退役而清除，之后的重新解析正是这条路径；引擎无法让它抛 `IncompatibleClassChangeError`。因此调用方式变化只在没有这样的调用方时接受：`CheckClass` 对批次之外每个已加载的非 boot 类，经布局读取其 DexFile 与 ClassDef，在该 DEX 中找出经目标或其已加载子类型（接口目标为组内的实现类、子接口及其子类）命名旧身份的 method_ids，再有界遍历该类全部代码的 invoke（35c、3rc、45cc、4rcc）与方法类 const-method-handle；找到即以 71 拒绝并写明调用方。之后才加载的类按新调用方式重新校验；boot 代码不能命名应用类。Native 阶段在批次可能改变调用方式时经 `GetAllStackTraces` 检查批次类的活动帧：旧帧继续执行旧代码，其下一次调用同样按名称重新解析。接受后旧声明退役（映射不把它映射到另一种调用方式的新方法），新声明是新成员。接口目标同样适用（default ↔ static、default/abstract → private、static → abstract 等），新声明按接口新增成员校验：新 static/private 不得遮蔽继承的接口方法，新 default 不得遮蔽子类型方法，新 abstract 需要每个已加载实现；实现类中旧 default 的 copied 方法经已有的 kCopied 映射消失。private 方法可以变成虚方法：直接调用它的只有该类自己的代码，仍然有效。构造器与类初始化器总是直接调用，不受此限制。
 
 引擎记录每个类在已提交事务中退役的方法及其修饰符，之后以另一种调用方式重新加入同一身份时按同样规则扫描调用方；记录随类保留到进程结束。字段的解析带有 static 属性，找不到另一种存储方式的同名字段，因此字段的 static 变化可以按退役处理。
 

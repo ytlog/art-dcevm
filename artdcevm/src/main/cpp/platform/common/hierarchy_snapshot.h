@@ -29,6 +29,9 @@ struct Snapshot {
   // Ordinary targets: loaded subtypes, including the target, borrowed from the
   // standard entry's index for the transaction.
   const std::vector<struct LoadedType>* subtypes = nullptr;
+  // Interface targets: the loaded subtypes in the target's group, excluding
+  // the target, borrowed from the group's GetLoadedClasses result.
+  std::vector<struct LoadedType> interface_subtypes;
   jclass superclass_class = nullptr;
 };
 struct LoadedType {

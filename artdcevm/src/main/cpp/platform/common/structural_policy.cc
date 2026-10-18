@@ -368,6 +368,19 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     }
     const uint32_t now = it->second;
     const uint32_t changed = old.access ^ now;
+    if (BreaksVerifiedCallers(old.name, old.access, now)) {
+      if (!owns_member_mapping || !abilities.kind_changes || (interface_target && !interface_members))
+        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+                      "verified callers may still invoke the old kind of " + Describe(old));
+      // The old kind retires; the declaration of the new kind is a new member,
+      // which an interface target checks like any other addition.
+      decision.kind_changes.push_back({{old.name, old.descriptor}, old.access});
+      decision.retired_methods.push_back(old);
+      decision.methods_structural = true;
+      decision.requires_member_mapping = true;
+      if (!interface_target) new_methods.erase(it);
+      continue;
+    }
     if (interface_target && changed) {
       Decision kind = CheckInterfaceKindChange({old.name, old.descriptor}, old.access, now, hierarchy,
                                                interface_members, abilities);
@@ -375,18 +388,6 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       decision.requires_member_mapping = true;
       decision.interface_obligations.insert(decision.interface_obligations.end(),
           kind.interface_obligations.begin(), kind.interface_obligations.end());
-    }
-    if (BreaksVerifiedCallers(old.name, old.access, now)) {
-      if (interface_target || !owns_member_mapping || !abilities.kind_changes)
-        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
-                      "verified callers may still invoke the old kind of " + Describe(old));
-      // The old kind retires; the declaration of the new kind is a new member.
-      decision.kind_changes.push_back({{old.name, old.descriptor}, old.access});
-      decision.retired_methods.push_back(old);
-      decision.methods_structural = true;
-      decision.requires_member_mapping = true;
-      new_methods.erase(it);
-      continue;
     }
     // Abstract <-> concrete and Java <-> native change the method's kind; the
     // structural path creates the new kind. Native -> Java needs the engine's
@@ -411,7 +412,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   for (const auto& [key, now] : new_methods) {
     const auto before = retired.find(key);
     if (before == retired.end() || !BreaksVerifiedCallers(key.first, before->second, now)) continue;
-    if (interface_target || !owns_member_mapping || !abilities.kind_changes)
+    if (!owns_member_mapping || !abilities.kind_changes || (interface_target && !interface_members))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                     "verified callers may still invoke the retired kind of " + key.first + key.second);
     decision.kind_changes.push_back({key, before->second});

@@ -532,6 +532,7 @@ jvmtiError CollectInterfaceSubclasses(jvmtiEnv* env, JNIEnv* jni, jclass target,
     if (result != JVMTI_ERROR_NONE) { *error = "GetClassStatus failed"; return result; }
     candidates.push_back({klass, (status & JVMTI_CLASS_STATUS_PREPARED) != 0});
   }
+  snapshot->interface_subtypes = candidates;
   return CollectFacts(env, jni, target, candidates, snapshot, error);
 }
 }  // namespace artdcevm::hierarchy_snapshot

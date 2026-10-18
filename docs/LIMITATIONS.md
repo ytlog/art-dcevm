@@ -22,7 +22,7 @@
 
 ## 接口重定义
 
-接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法（含 default/abstract），已有 public 实例方法在 abstract 与 default 之间切换，新增、删除或改类型静态字段，以及新增父接口。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
+接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法（含 default/abstract），已有 public 实例方法在 abstract 与 default 之间切换，方法在 default/abstract、static、private 之间改变调用方式（规则同普通类，见下表 71），新增、删除或改类型静态字段，以及新增父接口。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
 
 此能力仅在 Android 13（API 33）、Android 14（API 34）、Android 15（API 35）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
 
@@ -31,7 +31,7 @@
 | 新增 native；新增 abstract 无有效实现或 IfTable 探测不通过；direct 方法遮蔽继承的接口／Object 方法；default 遮蔽类链 static／非 public 方法或产生 default 冲突 | `METHOD_ADDED`（63） |
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
-| abstract 与 default 互换之外的方法修饰符变化；改为 abstract 而 IfTable 探测不通过；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
+| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 abstract 而 IfTable 探测不通过；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
 | 移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法；新父接口的 abstract 方法缺少 IfTable 探测 | `HIERARCHY_CHANGED`（66） |
 | 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
