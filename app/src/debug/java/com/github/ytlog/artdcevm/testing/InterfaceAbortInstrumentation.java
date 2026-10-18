@@ -39,6 +39,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     static native long referenceCleanupVisits();
     static native long referenceCleanupClears();
     static int armMappingPlanFailure() { return armFailure(22); }
+    static int mappingPlanFailureHits() { return failureHits(); }
     static int armPointerFailure(int stage) { return armFailure(stage); }
     // A new default conflict links, as on JBR, a method that throws at the
     // call; later transactions on the class and the interface resolve it.

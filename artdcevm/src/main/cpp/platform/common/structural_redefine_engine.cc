@@ -14,6 +14,7 @@
 #include "platform/common/runtime_thread.h"
 #include "platform/common/verification_redirect.h"
 #include "platform/symbols/retransform_symbols.h"
+#include "platform/abi/arm64/class_definition_table.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
 namespace artdcevm::structural_redefine {
@@ -209,8 +210,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     using namespace symbols::retransform;
     void* retransform = symbols::Find(kJvmtiRetransformClasses);
     void* direct = symbols::Find(kRedefineClassesDirect);
-    const int api = android_get_device_api_level();
-    if (api >= 33 && api <= 37 && retransform && direct &&
+    const auto* layout = abi::arm64::ClassDefinitionsFor(android_get_device_api_level());
+    process->initialize_definition = layout && layout->lazy_memory
+        ? reinterpret_cast<void (*)(const void*)>(symbols::Find(kInitializeDefinitionMemory)) : nullptr;
+    if (layout && (!layout->lazy_memory || process->initialize_definition) && retransform && direct &&
         reinterpret_cast<void*>(env->functions->RetransformClasses) == retransform) {
       replacements.push_back({direct, reinterpret_cast<void*>(RedefineDirect), &process->original_direct,
                               kRedefineClassesDirect.name});

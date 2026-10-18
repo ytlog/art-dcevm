@@ -68,11 +68,13 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 
 ### RetransformClasses
 
-arm64 Android 13–17（API 33–37）复用标准入口的 Native 快照、校验、映射和退役路径。安装时核对公开表指向命名 `JvmtiFunctions::RetransformClasses`，先 Hook `Redefiner::RedefineClassesDirect`，再 Hook 该包装器，最后安装标准重定义入口。缺少服务或公开表不匹配时不安装这组 Hook；`retransformRouted` 为 false。Android 11/12 的定义包含 MemMap，保持 ART 原生规则。
+arm64 Android 11–17（API 30–37，含 Android 12L/API 32）复用标准入口的 Native 快照、校验、映射和退役路径。安装时选择固定声明，并核对公开 JVMTI 表指向命名 `JvmtiFunctions::RetransformClasses`；先 Hook `Redefiner::RedefineClassesDirect`，再 Hook 该包装器，最后安装标准重定义入口。11–12L 还要求命名 `ArtClassDefinition::InitializeMemory`。缺少服务、声明或公开表不匹配时不安装这组 Hook，`retransformRouted` 为 false。该诊断只报告安装，不能将原生拒绝算作增强结构变化成功。11–12L 当前只有源码、真实符号和宿主验证，尚缺对应 arm64 设备执行证据。
 
-包装器用线程局部作用域保存请求，返回或异常退出时恢复。ART 完成全部 ClassFileLoadHook 后，Direct Hook 在引擎批次之外读取固定 [ArtClassDefinition 声明](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/openjdkjvmti/ti_class_definition.h)：逐项核对条目数、同一个 `klass_` 句柄、初始化、`redefined_==false` 等标志、DEX 长度和魔数。13–17 的该声明一致，arm64 libc++ 的 dex_data_ 位于 72、结构大小 136；不以运行库反汇编推算。校验不通过就以原参数调用 Direct，保持 ART 原生规则，失败时记录本次 lastRejection。
+包装器用线程局部作用域保存请求，返回或异常退出时恢复。ART 完成全部 ClassFileLoadHook 后，Direct Hook 在引擎批次之外读取 ABI 层的非拥有视图。固定声明来自 [Android 11](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/openjdkjvmti/ti_class_definition.h)、[Android 12](https://android.googlesource.com/platform/art/+/refs/tags/android-12.0.0_r1/openjdkjvmti/ti_class_definition.h)、[Android 12L](https://android.googlesource.com/platform/art/+/refs/tags/android-12.1.0_r1/openjdkjvmti/ti_class_definition.h) 与 [Android 13–17](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/openjdkjvmti/ti_class_definition.h)。11–12L 的两个 MemMap 各 72 字节，`dex_data_` 位于 224、结构大小 288；13–17 的 `dex_data_` 位于 72、结构大小 136。只在 ABI 声明层区分版本，不复制路由或从运行库反汇编推算布局。逐项核对向量步长、条目数、同一个 `klass_` 句柄、初始化、`redefined_==false`、标志字节与 DEX 范围；失败就以原参数和原种类调用 Direct，失败时记录本次回退原因。
 
-逐项校验通过后，按固定源码的 `IsModified` 规则比较最终字节与当前字节，仅为实际变化类建立共享快照；整批未变化则直接调用原始 Direct。提交仍保留原始完整 Native 定义向量。变化类的最终 DEX 交给共享 RouteWith，以 `kStructural` 调用原始 Direct。事务中的重试继续使用 ART 持有的同一组不可变最终定义，不重新进入 ClassFileLoadHook；实例迁移、引用替换、去优化和缓存失效仍由 ART 完成。已有引擎批次内的 Direct 不再路由，线程局部请求在 Direct 及其回调期间暂时清空。成功请求清空旧拒绝；入口校验与回退失败也写入本次拒绝。
+11–12L 的[固定 IsModified/InitializeMemory 实现](https://android.googlesource.com/platform/art/+/refs/tags/android-12.1.0_r1/openjdkjvmti/ti_class_definition.cc)还包含懒展开规则。最终数据与当前数据指针相同时立即跳过，不读 DEX 魔数或 `PROT_NONE` 内存；当前数据仍是未展开的原始映射、transformer 却已经提供最终字节时，按 ART 规则视为变化，不读取当前映射。需要读取未展开最终数据或进入源码中的比较分支时，先核对两个 MemMap 和原始 DexFile 的前提，调用 ART 命名服务展开，再重新核对视图、指针与长度。`IsModified` 虽有命名符号，但声明要求持有 shared mutator lock，不在 Native 快照前直接调用。固定 [transform.cc](https://android.googlesource.com/platform/art/+/refs/tags/android-12.1.0_r1/openjdkjvmti/transform.cc)也在 Native 状态调用这个服务；这里不通过触发信号展开，因为回调结束后临时定义故障处理器已经移除。展开之后，规划与原始 Direct 使用相同的已展开状态进行比较。引擎不构造、复制、析构或自行填充 ART 的 MemMap。
+
+只为实际变化类建立共享快照，整批不变就直接调用原始 Direct；混合批次中的不变条目也不成为快照目标。提交始终保留 ART 持有的完整 Native 定义向量，变化类的最终 DEX 送入共享 RouteWith，并以 `kStructural` 调用原始 Direct。最多三次尝试只重试 Direct，沿用同一向量与最终 DEX，不重复 transformer 或懒展开。已有引擎批次内的 Direct 不再路由；Direct 及其回调期间暂时清空当前 retransform 请求，嵌套请求各自保存和恢复。无替换输出保持 ART 当前定义语义；恢复使用明确的恢复 DEX。实例迁移、引用替换、去优化、缓存失效与整批提交仍由 ART 完成。
 
 ### 事务中的类加载
 

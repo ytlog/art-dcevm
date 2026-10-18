@@ -24,7 +24,9 @@ done
 
 `python3 tools/test-structural-install-host.py` 编译公共生产模块，以公开 JNI/JVMTI 表与 ShadowHook 替身验证安装顺序、幂等性、inline hook 失败时不尝试 JNI 覆盖、JNI 表失败后保留基础能力，以及映射名称缺失后线程服务仍准备且诊断保留。测试不执行 ART 对象、收集器或真实 Hook，不能代替设备 ABI 验证。
 
-`tool` 组还包含 `tool-retransform-structural` 与 `tool-retransform-restore`（arm64 Android 13–17）。独立 agent 调用标准 RetransformClasses，经 ClassFileLoadHook 换入新增字段/方法与恢复 DEX，核对返回码、空 lastRejection、retransformRouted、旧实例新增字段为 0、新实例为 7、方法体和反射调用、退役成员及 GC 后行为；精确一次替换回调证明不重复调用 Hook。Android 11/12 保持 ART 原生规则，不适用这两个增强场景。安装主机测试另查服务与公开表匹配、Hook 顺序、回滚、异常与嵌套请求恢复；主机替身不替代真机 ABI 验证。
+`--scenario-group retransform` 独立运行 11 个增强场景，`tool` 和完整组也包含它们，准入 arm64 API 30–37（含 12L）。独立 agent 经公开 JVMTI 表调用 RetransformClasses，只在 ClassFileLoadHook 中提供 DEX。核对字段／方法新增、删除与恢复、旧实例兼容值、旧缓存引用持续退役、GC、同内容输出、无替换输出、混合批次的不变类、两目标整批提交、回调内嵌套 retransform、准确的回调／替换次数及失败后的下一事务。无效第二个 DEX 必须回退并返回 60；有效双目标批次在映射计划故障点精确命中一次、返回 110，两个定义及 GC 后行为都须保持，再完成后续退役事务。成功结构变化必须返回 0、无 lastRejection 并观察到真实新成员；原生拒绝或安装能力字段不能代替通过。
+
+`test-structural-install-host.py` 以 60 组测试覆盖三种旧 API 的实际声明步长、公开表匹配、缺少懒展开服务、Hook 顺序／回滚、嵌套成功与异常恢复、整批不变、共享与等内容缓冲的混合批次。不可读保护页验证不读未变化的懒输入、transformer 未读当前映射时的早返回，以及需要时只调用一次命名展开服务；同时核对三次尝试上限、相同完整向量、transformer 和展开不重跑、之后请求恢复。`check-interface-abi-preparation.py` 交叉编译两种布局；`check-structural-symbols.py` 单独报告两个路由入口和仅旧版需要的展开入口。宿主替身、arm64 编译和真实名称均不代替旧设备执行：API 30–32 当前缺少对应设备证据，API 33/36 可用设备承担公共路径回归。
 
 测试 APK 的 app 自有引擎使用 `-O2`，保留 Debug 符号、断言和故障注入；独立 AAR 的构建配置不受影响。`check-interface-abort-isolation.py` 同时核对这些编译条件。已完成场景保存为 UTF-8 JSON 后释放原对象树，避免后续 ART 整堆引用遍历反复扫描报告对象；报告仍包含全部场景与检查，保留原子 `fsync`／rename 发布。
 

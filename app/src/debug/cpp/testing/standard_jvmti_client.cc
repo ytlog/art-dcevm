@@ -4,6 +4,7 @@
 #include <cstdarg>
 #include <cstring>
 #include <mutex>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -24,8 +25,11 @@ void JNICALL SingleStep(jvmtiEnv*, JNIEnv*, jthread, jmethodID, jlocation) {
 // One class whose ClassFileLoadHook replaces the definition, as a
 // transforming agent would. Guarded because ART may call the hook on any thread.
 std::mutex replacement_mutex;
-std::string replacement_name;
-std::vector<unsigned char> replacement_bytes;
+std::map<std::string, std::vector<unsigned char>> replacements;
+std::atomic<jlong> class_file_calls{0};
+std::string nested_trigger;
+jobjectArray nested_classes = nullptr;
+std::atomic<jint> nested_result{-1};
 std::atomic<jlong> replacement_count{0};
 std::string load_target;
 jobject load_loader = nullptr;
@@ -39,16 +43,24 @@ void JNICALL ClassFileLoadHook(jvmtiEnv* env, JNIEnv* jni, jclass, jobject, cons
                                unsigned char** new_data) {
   jobject loader = nullptr;
   jstring class_name = nullptr;
+  jobjectArray nested = nullptr;
   {
     std::lock_guard<std::mutex> lock(replacement_mutex);
     if (!name) return;
-    if (replacement_name == name && !replacement_bytes.empty()) {
+    const auto replacement = replacements.find(name);
+    if (replacement != replacements.end()) class_file_calls.fetch_add(1, std::memory_order_relaxed);
+    if (replacement != replacements.end() && !replacement->second.empty()) {
+      const auto& replacement_bytes = replacement->second;
       unsigned char* copy = nullptr;
       if (env->Allocate(static_cast<jlong>(replacement_bytes.size()), &copy) != JVMTI_ERROR_NONE) return;
       std::memcpy(copy, replacement_bytes.data(), replacement_bytes.size());
       *new_length = static_cast<jint>(replacement_bytes.size());
       *new_data = copy;
       replacement_count.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (nested_trigger == name && nested_classes) {
+      nested = static_cast<jobjectArray>(jni->NewLocalRef(nested_classes));
+      nested_trigger.clear();
     }
     if (load_target == name && load_names && load_index < jni->GetArrayLength(load_names)) {
       loader = jni->NewLocalRef(load_loader);
@@ -57,6 +69,14 @@ void JNICALL ClassFileLoadHook(jvmtiEnv* env, JNIEnv* jni, jclass, jobject, cons
   }
   // Loading can recursively invoke this callback: never keep the native test
   // mutex across Java class loading. Locals protect the configured globals.
+  if (nested && !jni->ExceptionCheck()) {
+    std::vector<jclass> batch;
+    for (jsize i = 0; i < jni->GetArrayLength(nested); ++i)
+      batch.push_back(static_cast<jclass>(jni->GetObjectArrayElement(nested, i)));
+    nested_result.store(env->RetransformClasses(static_cast<jint>(batch.size()), batch.data()), std::memory_order_relaxed);
+    for (jclass klass : batch) if (klass) jni->DeleteLocalRef(klass);
+  }
+  if (nested) jni->DeleteLocalRef(nested);
   if (loader && class_name && !jni->ExceptionCheck()) {
     jclass type = jni->FindClass("java/lang/Class");
     jmethodID for_name = type ? jni->GetStaticMethodID(type, "forName",
@@ -164,8 +184,9 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileReplaceme
   bool enabled;
   {
     std::lock_guard<std::mutex> lock(replacement_mutex);
-    replacement_name.clear();
-    replacement_bytes.clear();
+    replacements.clear();
+    std::string replacement_name;
+    std::vector<unsigned char> replacement_bytes;
     if (name && bytes) {
       const char* chars = jni->GetStringUTFChars(name, nullptr);
       if (!chars) return JVMTI_ERROR_OUT_OF_MEMORY;
@@ -175,10 +196,69 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileReplaceme
       jni->GetByteArrayRegion(bytes, 0, static_cast<jsize>(replacement_bytes.size()),
                               reinterpret_cast<jbyte*>(replacement_bytes.data()));
     }
-    enabled = !replacement_bytes.empty() || load_names;
+    if (!replacement_bytes.empty()) replacements.emplace(std::move(replacement_name), std::move(replacement_bytes));
+    enabled = !replacements.empty() || load_names || nested_classes;
   }
   return client_env->SetEventNotificationMode(enabled ? JVMTI_ENABLE : JVMTI_DISABLE,
                                               JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileReplacements(
+    JNIEnv* jni, jclass, jobjectArray names, jobjectArray dexes) {
+  if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  if (!names || !dexes || jni->GetArrayLength(names) != jni->GetArrayLength(dexes)) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+  std::map<std::string, std::vector<unsigned char>> configured;
+  for (jsize i = 0; i < jni->GetArrayLength(names); ++i) {
+    auto name = static_cast<jstring>(jni->GetObjectArrayElement(names, i));
+    auto bytes = static_cast<jbyteArray>(jni->GetObjectArrayElement(dexes, i));
+    if (!name) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+    const char* chars = jni->GetStringUTFChars(name, nullptr);
+    if (!chars) return JVMTI_ERROR_OUT_OF_MEMORY;
+    std::string key(chars); jni->ReleaseStringUTFChars(name, chars);
+    std::vector<unsigned char> value(bytes ? jni->GetArrayLength(bytes) : 0);
+    if (bytes) jni->GetByteArrayRegion(bytes, 0, static_cast<jsize>(value.size()), reinterpret_cast<jbyte*>(value.data()));
+    jni->DeleteLocalRef(name); if (bytes) jni->DeleteLocalRef(bytes);
+    if (jni->ExceptionCheck()) return JVMTI_ERROR_OUT_OF_MEMORY;
+    configured.emplace(std::move(key), std::move(value));
+  }
+  bool enabled;
+  {
+    std::lock_guard<std::mutex> lock(replacement_mutex);
+    replacements = std::move(configured);
+    enabled = !replacements.empty() || load_names || nested_classes;
+  }
+  return client_env->SetEventNotificationMode(enabled ? JVMTI_ENABLE : JVMTI_DISABLE,
+                                              JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setNestedRetransform(
+    JNIEnv* jni, jclass, jstring trigger, jobjectArray classes) {
+  if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  bool enabled;
+  {
+    std::lock_guard<std::mutex> lock(replacement_mutex);
+    if (nested_classes) jni->DeleteGlobalRef(nested_classes);
+    nested_classes = nullptr; nested_trigger.clear(); nested_result.store(-1);
+    if (trigger && classes) {
+      const char* chars = jni->GetStringUTFChars(trigger, nullptr);
+      if (!chars) return JVMTI_ERROR_OUT_OF_MEMORY;
+      nested_trigger = chars; jni->ReleaseStringUTFChars(trigger, chars);
+      nested_classes = static_cast<jobjectArray>(jni->NewGlobalRef(classes));
+      if (!nested_classes) return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    enabled = !replacements.empty() || load_names || nested_classes;
+  }
+  return client_env->SetEventNotificationMode(enabled ? JVMTI_ENABLE : JVMTI_DISABLE,
+                                              JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_nestedRetransformResult(JNIEnv*, jclass) {
+  return nested_result.load(std::memory_order_relaxed);
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_classFileCalls(JNIEnv*, jclass) {
+  return class_file_calls.load(std::memory_order_relaxed);
 }
 
 extern "C" JNIEXPORT jint JNICALL
@@ -200,7 +280,7 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileLoads(
       load_names = static_cast<jobjectArray>(jni->NewGlobalRef(names));
       if (!load_loader || !load_names) return JVMTI_ERROR_OUT_OF_MEMORY;
     }
-    enabled = !replacement_bytes.empty() || load_names;
+    enabled = !replacements.empty() || load_names || nested_classes;
   }
   return client_env->SetEventNotificationMode(enabled ? JVMTI_ENABLE : JVMTI_DISABLE,
                                               JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);

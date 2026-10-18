@@ -58,6 +58,7 @@ struct Process {
   void* original_allocate = nullptr;
   void* original_retransform = nullptr;
   void* original_direct = nullptr;
+  void (*initialize_definition)(const void*) = nullptr;
   class_layout::Services layout_services{};
   // Filled only by Install. Per-transaction probes further restrict these abilities.
   ProcessCapabilities capabilities;

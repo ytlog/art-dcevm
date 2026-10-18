@@ -1,16 +1,14 @@
 #pragma once
-#include <jni.h>
-#include <cstddef>
+#include "platform/abi/arm64/common/class_definition.h"
 
 // openjdkjvmti/ti_class_definition.h: the member declarations of
 // ArtClassDefinition are identical in Android 13--17 (arm64, libc++). Android
-// 11--12 also hold two MemMaps and lazily filled DEX memory, so this
-// declaration never applies to them.
+// 11--12 have a separate fixed declaration with two lazy MemMaps.
 namespace artdcevm::abi::arm64::android13 {
-struct LibcppString { void* words[3]; };
-struct LibcppBytes { unsigned char* begin; unsigned char* end; unsigned char* capacity; };
+using class_definition::LibcppString;
+using class_definition::LibcppBytes;
 // art::ArrayRef<const unsigned char>.
-struct ByteRef { const unsigned char* data; size_t size; };
+using class_definition::ByteRef;
 struct ArtClassDefinition {
   jclass klass;
   jobject loader;
@@ -29,9 +27,10 @@ static_assert(offsetof(ArtClassDefinition, dex_data) == 72);
 static_assert(offsetof(ArtClassDefinition, initialized) == 129);
 static_assert(sizeof(ArtClassDefinition) == 136);
 // std::vector<ArtClassDefinition>.
-struct ClassDefinitions {
-  const ArtClassDefinition* begin;
-  const ArtClassDefinition* end;
-  const void* capacity;
-};
+using ClassDefinitions = class_definition::Vector<ArtClassDefinition>;
+inline class_definition::View ReadClassDefinition(const void* address) {
+  return class_definition::Read(*static_cast<const ArtClassDefinition*>(address));
+}
+inline constexpr class_definition::Layout kClassDefinitions{
+    sizeof(ArtClassDefinition), ReadClassDefinition, false};
 }  // namespace artdcevm::abi::arm64::android13

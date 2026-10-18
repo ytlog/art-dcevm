@@ -66,6 +66,7 @@ def main():
                     if (path / 'bin/aarch64-linux-android30-clang++').is_file())
     lines = ['#include "platform/abi/arm64/interface_runtime_table.h"']
     lines.append('#include "platform/abi/arm64/runtime_thread_table.h"')
+    lines.append('#include "platform/abi/arm64/class_definition_table.h"')
     lines.append('using namespace artdcevm::abi::arm64;')
     expected = {11: (16, 52, 216, 296, 12), 12: (12, 48, 208, 288, 12),
                 13: (12, 36, 200, 280, 12), 14: (12, 36, 208, 288, 12),
@@ -86,6 +87,13 @@ def main():
         lines.append(f'static_assert({profile}.runtime->redefinition_size == 72);')
         lines.append(f'static_assert({profile}.runtime->scope_thread_id_signed == {str(v == 11).lower()});')
         lines.append(f'static_assert(kMaxInterfaceScopeHeader >= {profile}.runtime->scope_header_size);')
+    for api in range(29, 39):
+        layout = f'ClassDefinitionsFor({api})'
+        if 30 <= api <= 37:
+            lines.append(f'static_assert({layout}->stride == {288 if api <= 32 else 136});')
+            lines.append(f'static_assert({layout}->lazy_memory == {str(api <= 32).lower()});')
+        else:
+            lines.append(f'static_assert({layout} == nullptr);')
     lines.append('static_assert(kMaxInterfaceScopeHeader == 16);')
     for release in (-1, 0, 10, 18, 99):
         lines.append(f'static_assert(RuntimeFor({release}) == nullptr);')

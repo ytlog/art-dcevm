@@ -138,7 +138,7 @@
 
 - 已有对象的新增字段取零值或 `null`，不重新执行构造器；新建对象执行新构造器。
 - 结构变化会让 ART 遍历堆迁移实例、去优化所有线程帧并清空 JIT 代码，耗时随堆大小增加，提交后需要重新预热。
-- 补丁分发、签名校验和访问控制由调用方负责。arm64 Android 13–17 的 `RetransformClasses` 将 ClassFileLoadHook 最终 DEX 送入增强结构路径，使用相同的新增与退役规则；Android 11/12 保持 ART 原生规则。需两个命名服务、匹配的公开函数表和固定声明校验通过；不通过则回退 ART 原生规则。路由及其重试不重复调用 ClassFileLoadHook，`retransformRouted` 报告安装能力。
+- 补丁分发、签名校验和访问控制由调用方负责。arm64 Android 11–17（含 12L）的 `RetransformClasses` 将 ClassFileLoadHook 最终 DEX 送入增强结构路径，使用相同的新增与退役规则；11–12L 尚缺 arm64 设备验证。需两个路由命名服务、旧版懒展开服务、匹配的公开函数表和固定声明校验通过；不通过则回退 ART 原生规则。路由及其重试不重复调用 ClassFileLoadHook，`retransformRouted` 报告安装能力。
 
 ## 与 JBR DCEVM 的对照
 

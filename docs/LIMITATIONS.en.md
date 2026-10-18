@@ -142,7 +142,7 @@ Appending only adds to the end of the loader's path, cannot be undone and does n
 
 - Fields added to existing objects start at zero or `null`; their constructors are not run again. New objects execute the new constructors.
 - Structural changes make ART walk the heap to migrate instances, deoptimize every thread's frames and clear JIT code. The cost grows with heap size, and code needs to warm up again afterwards.
-- Patch delivery, signature verification and access control are the caller's responsibility. On arm64 Android 13–17, `RetransformClasses` sends final ClassFileLoadHook DEX through the enhanced structural path with the same addition and retirement rules; Android 11/12 retain ART rules. Both named services, a matching public table and fixed-declaration validation are required; validation failure falls back to ART rules. Routing and retries do not call ClassFileLoadHook again. `retransformRouted` reports installation capability.
+- Patch delivery, signature verification and access control are the caller's responsibility. On arm64 Android 11–17, including 12L, `RetransformClasses` sends final ClassFileLoadHook DEX through the enhanced structural path with the same addition and retirement rules; Android 11–12L still lack arm64 device validation. Both routing services, the legacy lazy materializer, a matching public table and fixed-declaration validation are required; validation failure falls back to ART rules. Routing and retries do not call ClassFileLoadHook again. `retransformRouted` reports installation capability.
 
 ## Comparison with JBR DCEVM
 

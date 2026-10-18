@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/structural_redefine_engine.h"
 #include "platform/common/structural_redefine_internal.h"
-#include "platform/abi/arm64/android13/class_definition.h"
+#include "platform/abi/arm64/class_definition_table.h"
 #include "platform/symbols/retransform_symbols.h"
 #include "platform/common/interface_redefinition_internal.h"
 #include "platform/common/class_layout.h"
@@ -41,6 +41,8 @@ SOURCE = r'''
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
+#include <sys/mman.h>
+#include <type_traits>
 #include <map>
 #include <set>
 #include <stdexcept>
@@ -49,6 +51,8 @@ using namespace artdcevm;
 namespace artdcevm::structural_redefine::detail {
 jvmtiError FindActiveBatchFrame(jvmtiEnv*, JNIEnv*, Batch&);
 }
+int api_override = 0, initialize_calls = 0;
+bool missing_initializer = false;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 int probe_registration_calls = 0;
 const jclass selection_probe = reinterpret_cast<jclass>(0x1900);
@@ -68,8 +72,8 @@ namespace defs = abi::arm64::android13;
 jvmtiError DirectOriginal(void*, void*, void*, const void* definitions, int type, void*) {
   direct_type = type;
   if (transform_behavior == 3) throw std::bad_alloc();
-  if (transform_behavior == 11) {
-    if (++retry_calls == 1) {
+  if (transform_behavior == 11 || transform_behavior == 25 || transform_behavior == 26) {
+    if (++retry_calls == 1 || transform_behavior == 25) {
       retry_definitions = definitions;
       auto* batch = structural_redefine::detail::BatchOf(transaction::Current());
       if (!batch || !batch->subclass_loaded) throw std::runtime_error("Retry lacked a Native snapshot watch");
@@ -81,12 +85,71 @@ jvmtiError DirectOriginal(void*, void*, void*, const void* definitions, int type
   }
   if (transform_behavior == 15 || transform_behavior == 16) {
     auto* batch = structural_redefine::detail::BatchOf(transaction::Current());
-    const auto* list = static_cast<const defs::ClassDefinitions*>(definitions);
+    const auto* list = static_cast<const abi::arm64::class_definition::Definitions*>(definitions);
     if (!batch || batch->classes.size() != 1 || !batch->classes.count(first_type) ||
-        batch->classes.count(second_type) || list->end - list->begin != 2)
+        batch->classes.count(second_type) ||
+        reinterpret_cast<uintptr_t>(list->end) - reinterpret_cast<uintptr_t>(list->begin) !=
+            2 * abi::arm64::ClassDefinitionsFor(api_override ? api_override : 33)->stride)
       throw std::runtime_error("Mixed retransform changed its original vector or snapshotted an unchanged target");
   }
   return direct_result;
+}
+template <typename Definition> jvmtiError RetransformDefinitions(jvmtiEnv* env, jint, const jclass* classes) {
+  unsigned char dex[0x70] = {'d', 'e', 'x', '\n', '0', '3', '5', 0};
+  unsigned char current[0x70]; std::memcpy(current, dex, sizeof(dex)); current[8] = 1;
+  unsigned char equal[0x70]; std::memcpy(equal, dex, sizeof(dex));
+  Definition entries[2]{};
+  auto& definition = entries[0];
+  definition.klass = transform_behavior == 8 ? nullptr : classes[0];
+  definition.initialized = transform_behavior != 4;
+  definition.redefined = transform_behavior == 12;
+  if (transform_behavior == 10) dex[0] = 0;
+  definition.dex_data = {dex, sizeof(dex)};
+  definition.current_dex_file = {current, sizeof(current)};
+  if (transform_behavior == 14) definition.current_dex_file = definition.dex_data;
+  struct Mapping {
+    unsigned char* address = static_cast<unsigned char*>(mmap(nullptr, 4096, PROT_READ | PROT_WRITE,
+                                                           MAP_PRIVATE | MAP_ANON, -1, 0));
+    ~Mapping() { if (address != MAP_FAILED) munmap(address, 4096); }
+  } map;
+  if constexpr (std::is_same_v<Definition, abi::arm64::android11::ArtClassDefinition>) {
+    if (transform_behavior >= 17) {
+      if (map.address == MAP_FAILED) throw std::runtime_error("Cannot allocate lazy test page");
+      std::memcpy(map.address, dex, sizeof(dex));
+      if (mprotect(map.address, 4096, PROT_NONE)) throw std::runtime_error("Cannot guard lazy test page");
+      definition.dex_data_mmap = {{}, map.address, 4096, map.address, 4096, 0, false, false, 0};
+      definition.temp_mmap = {{}, dex, 4096, dex, 4096, 3, false, false, 0};
+      definition.initial_dex_file_unquickened = dex;
+      if (transform_behavior == 17 || transform_behavior == 18)
+        definition.current_dex_file = {map.address, sizeof(dex)};
+      if (transform_behavior != 18 && transform_behavior != 20)
+        definition.dex_data = {map.address, sizeof(dex)};
+      if (transform_behavior == 21) definition.current_dex_file = {equal, sizeof(equal)};
+      if (transform_behavior == 22) definition.temp_mmap.protection = 0;
+      if (transform_behavior == 23) *reinterpret_cast<unsigned char*>(&definition.from_class_ext) = 2;
+    }
+  }
+  const bool mixed = transform_behavior == 15 || transform_behavior == 16;
+  if (mixed) {
+    entries[1] = definition; entries[1].klass = classes[1];
+    entries[1].current_dex_file = {transform_behavior == 15 ? dex : equal, sizeof(dex)};
+  }
+  const abi::arm64::class_definition::Vector<Definition> list{entries, entries + (transform_behavior == 9 ? 0 : mixed ? 2 : 1), entries + 2};
+  if (transform_behavior == 13) {
+    definition.redefined = true;
+    if (routed_direct(env, nullptr, nullptr, &list, 1, nullptr) != JVMTI_ERROR_NONE || direct_type != 1)
+      throw std::runtime_error("A nested explicit definition borrowed the retransform route");
+    definition.redefined = false;
+  }
+  return routed_direct(env, nullptr, nullptr, &list, 1, nullptr);
+}
+void InitializeDefinition(const void* address) {
+  ++initialize_calls;
+  auto* definition = const_cast<abi::arm64::android11::ArtClassDefinition*>(
+      static_cast<const abi::arm64::android11::ArtClassDefinition*>(address));
+  if (mprotect(definition->dex_data_mmap.begin, 4096, PROT_READ))
+    throw std::runtime_error("Cannot initialize the guarded test page");
+  definition->dex_data_mmap.protection = PROT_READ;
 }
 jvmtiError JNICALL RetransformOriginal(jvmtiEnv* env, jint count, const jclass* classes) {
   ++transform_calls;
@@ -100,32 +163,11 @@ jvmtiError JNICALL RetransformOriginal(jvmtiEnv* env, jint count, const jclass* 
       throw std::runtime_error("Nested retransform lost its result");
     transform_behavior = 0;
   }
-  unsigned char dex[0x70] = {'d', 'e', 'x', '\n', '0', '3', '5', 0};
-  unsigned char current[0x70]; std::memcpy(current, dex, sizeof(dex)); current[8] = 1;
-  unsigned char equal[0x70]; std::memcpy(equal, dex, sizeof(dex));
-  defs::ArtClassDefinition entries[2]{};
-  auto& definition = entries[0];
-  definition.klass = transform_behavior == 8 ? nullptr : classes[0];
-  definition.initialized = transform_behavior != 4;
-  definition.redefined = transform_behavior == 12;
-  if (transform_behavior == 10) dex[0] = 0;
-  definition.dex_data = {dex, sizeof(dex)};
-  definition.current_dex_file = {current, sizeof(current)};
-  if (transform_behavior == 14) definition.current_dex_file = definition.dex_data;
-  const bool mixed = transform_behavior == 15 || transform_behavior == 16;
-  if (mixed) {
-    entries[1] = definition; entries[1].klass = classes[1];
-    entries[1].current_dex_file = {transform_behavior == 15 ? dex : equal, sizeof(dex)};
-  }
-  const defs::ClassDefinitions list{entries, entries + (transform_behavior == 9 ? 0 : mixed ? 2 : 1), entries + 2};
-  if (transform_behavior == 13) {
-    definition.redefined = true;
-    if (routed_direct(env, nullptr, nullptr, &list, 1, nullptr) != JVMTI_ERROR_NONE || direct_type != 1)
-      throw std::runtime_error("A nested explicit definition borrowed the retransform route");
-    definition.redefined = false;
-  }
-  return routed_direct(env, nullptr, nullptr, &list, 1, nullptr);
+  if (api_override >= 30 && api_override <= 32)
+    return RetransformDefinitions<abi::arm64::android11::ArtClassDefinition>(env, count, classes);
+  return RetransformDefinitions<defs::ArtClassDefinition>(env, count, classes);
 }
+
 int sealing_hooks = 0;
 bool failed_sealing_hook = false;
 int probe_loads = 0;
@@ -193,7 +235,7 @@ jvmtiError JNICALL Structural(jvmtiEnv*, jint count, const jvmtiClassDefinition*
   }
   return JVMTI_ERROR_NONE;
 }
-extern "C" int android_get_device_api_level() { return mode == 5 ? 29 : mode == 27 ? 32 : 33; }
+extern "C" int android_get_device_api_level() { return api_override ? api_override : mode == 5 ? 29 : mode == 27 ? 38 : 33; }
 extern "C" int __android_log_write(int, const char*, const char*) { return 0; }
 extern "C" int __android_log_print(int, const char*, const char*, ...) { return 0; }
 void* Current() { return nullptr; }
@@ -209,6 +251,8 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
       std::strcmp(name, "NterpGetMethod") == 0) return nullptr;
   const std::string key(name);
   if (key == symbols::interface_selection::kOpenDex.name && mode < 29) return nullptr;
+  if (key == symbols::retransform::kInitializeDefinitionMemory.name)
+    return missing_initializer ? nullptr : reinterpret_cast<void*>(InitializeDefinition);
   if (key == symbols::retransform::kJvmtiRetransformClasses.name)
     return mode >= 23 ? reinterpret_cast<void*>(RetransformOriginal) : nullptr;
   if (key == symbols::retransform::kRedefineClassesDirect.name)
@@ -240,7 +284,8 @@ extern "C" const char* shadowhook_to_errmsg(int) { return "injected hook error";
 extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void** original) {
   ++hook_calls;
   if (target == reinterpret_cast<void*>(Redefine)) {
-    if (mode >= 23 && mode != 26 && mode != 27)
+    const auto* layout = abi::arm64::ClassDefinitionsFor(android_get_device_api_level());
+    if (mode >= 23 && mode != 26 && layout && (!layout->lazy_memory || !missing_initializer))
       Require(direct_hook_order < retransform_hook_order && retransform_hook_order < hook_calls,
               "Public redefine was hooked before the retransform services");
     std::cout << "HOOK public-redefine\n";
@@ -451,9 +496,11 @@ jvmtiError JNICALL AllStacks(jvmtiEnv*, jint, jvmtiStackInfo** value, jint* coun
 }
 int main(int argc, char** argv) {
   try {
-    Require(argc == 2, "Missing installation case");
+    Require(argc >= 2 && argc <= 4, "Missing installation case");
     std::cout << std::unitbuf;
     mode = std::stoi(argv[1]);
+    if (argc >= 3) api_override = std::stoi(argv[2]);
+    missing_initializer = argc == 4;
     invocation.GetEnv = GetEnv;
     functions.FindClass = FindClass; functions.NewGlobalRef = NewGlobalRef;
     functions.DeleteLocalRef = DeleteLocalRef; functions.GetMethodID = GetMethodID;
@@ -523,7 +570,8 @@ int main(int argc, char** argv) {
                 "Retransform hook rollback prevented a later installation");
       } else Require(result == JVMTI_ERROR_NONE, "Retransform services broke installation");
       const auto caps = structural_redefine::Capabilities();
-      const bool supported = mode != 26 && mode != 27;
+      const auto* definition_layout = abi::arm64::ClassDefinitionsFor(android_get_device_api_level());
+      const bool supported = mode != 26 && definition_layout && (!definition_layout->lazy_memory || !missing_initializer);
       Require(caps.find(supported ? "\"retransformRouted\":true" : "\"retransformRouted\":false") != std::string::npos,
               "Retransform capability ignored public table, API gate or rollback");
       if (!supported) Require(!routed_direct && !routed_retransform,
@@ -539,6 +587,31 @@ int main(int argc, char** argv) {
                   structural_redefine::Capabilities().find("\"subclassLoadRetries\":1") != std::string::npos &&
                   structural_redefine::Capabilities().find("\"lastRejection\":\"\"") != std::string::npos,
                   "Retransform retry repeated transformations, lost final bytes or retained a rejection");
+          transform_behavior = 0;
+        }
+        if (definition_layout->lazy_memory) {
+          for (int behavior : {17, 18, 19, 20, 21}) {
+            transform_behavior = behavior; initialize_calls = 0;
+            Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_NONE &&
+                    direct_type == (behavior == 17 || behavior == 21 ? 1 : 0) &&
+                    initialize_calls == (behavior >= 19 ? 1 : 0),
+                    "Lazy input was touched early, expanded twice or incorrectly marked changed");
+          }
+          direct_result = JVMTI_ERROR_INVALID_CLASS_FORMAT;
+          for (int behavior : {22, 23}) {
+            transform_behavior = behavior; initialize_calls = 0;
+            Require(routed_retransform(&env, 1, &nested_type) == direct_result && direct_type == 1 && initialize_calls == 0,
+                    "Invalid lazy declaration bypassed fallback");
+          }
+          direct_result = JVMTI_ERROR_NONE;
+          if (mode == 23) for (int behavior : {25, 26}) {
+            transform_behavior = behavior; initialize_calls = retry_calls = 0;
+            const int before = transform_calls;
+            Require(routed_retransform(&env, 1, &first_type) == (behavior == 25 ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE) &&
+                    direct_type == 0 && transform_calls == before + 1 && initialize_calls == 1 &&
+                    retry_calls == (behavior == 25 ? 3 : 2),
+                    "Retry exceeded its bound or reran the transformer/materializer");
+          }
           transform_behavior = 0;
         }
         Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_NONE && direct_type == 0,
@@ -791,9 +864,14 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(38):
-            result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
-            (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
+        cases = [(case, None, False) for case in range(38)]
+        cases += [(case, api, False) for api in (30, 31, 32) for case in range(23, 29)]
+        cases += [(23, api, True) for api in (30, 31, 32, 33)]
+        for case, api, missing in cases:
+            suffix = (('-api' + str(api)) if api else '') + ('-no-initializer' if missing else '')
+            command = [str(binary), str(case)] + ([str(api)] if api else []) + (['missing'] if missing else [])
+            result = subprocess.run(command, capture_output=True, text=True)
+            (evidence / ('case-' + str(case) + suffix + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode:
                 raise RuntimeError(f'Installer case {case} failed; inspect ignored evidence')
             lines = result.stdout.splitlines()
@@ -802,9 +880,9 @@ def main():
                 'capabilities': json.loads(next(line[13:] for line in lines if line.startswith('CAPABILITIES '))),
                 'hooksSha256': hashlib.sha256('\n'.join(line[5:] for line in lines if line.startswith('HOOK ')).encode()).hexdigest(),
                 'unhooks': [int(line[7:]) for line in lines if line.startswith('UNHOOK ')]}
-            if case < 6 and contract != contracts[str(case)]:
+            if case < 6 and api is None and contract != contracts[str(case)]:
                 raise RuntimeError(f'Installer case {case} changed capabilities, hook order or rollback order')
-            print(next(line for line in lines if line.startswith('Installer case ')))
+            print(next(line for line in lines if line.startswith('Installer case ')) + suffix)
         print('Evidence: ' + str(evidence.relative_to(ROOT)))
 
 

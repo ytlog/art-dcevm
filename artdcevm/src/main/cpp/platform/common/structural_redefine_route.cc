@@ -6,7 +6,7 @@
 #include <cstring>
 #include <utility>
 #include <vector>
-#include "platform/abi/arm64/android13/class_definition.h"
+#include "platform/abi/arm64/class_definition_table.h"
 #include "platform/common/art_hook.h"
 #include "platform/common/fault_injection.h"
 #include "platform/common/runtime_thread.h"
@@ -506,7 +506,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
 }
 
 namespace {
-namespace defs = abi::arm64::android13;
+namespace defs = abi::arm64::class_definition;
 // The classes of the RetransformClasses call on this thread, while ART runs it.
 struct Retransforming {
   jint count;
@@ -529,7 +529,7 @@ struct DirectCall {
   void* env;
   void* runtime;
   void* self;
-  const defs::ClassDefinitions* definitions;
+  const void* definitions;
   void* error;
 };
 constexpr int kStructuralType = 0;  // RedefinitionType::kStructural.
@@ -539,35 +539,64 @@ jvmtiError CommitDirect(const void* state, jvmtiEnv*, jint, const jvmtiClassDefi
                                                             call->definitions, kStructuralType, call->error);
 }
 
-// ART's definitions match the fixed Android 13--17 declaration: one entry per
-// requested class, in order, each initialized and holding a DEX image.
-bool ReadDefinitions(const defs::ClassDefinitions& definitions, const Retransforming& call,
-                     std::vector<jvmtiClassDefinition>* out) {
-  const int api = android_get_device_api_level();
-  if (api < 33 || api > 37 || call.count <= 0 || !call.classes ||
-      !definitions.begin || definitions.end < definitions.begin ||
-      definitions.end - definitions.begin != call.count)
-    return false;
-  for (jint i = 0; i < call.count; ++i) {
-    const defs::ArtClassDefinition& definition = definitions.begin[i];
-    const auto flag = [](const bool& value) { return *reinterpret_cast<const unsigned char*>(&value); };
-    if (definition.klass != call.classes[i] || flag(definition.initialized) != 1 || flag(definition.redefined) != 0 ||
-        flag(definition.structural_transform_update) > 1 || !definition.dex_data.data ||
-        definition.dex_data.size < 0x70 || definition.dex_data.size > (size_t{1} << 30) ||
-        !definition.current_dex_file.data || definition.current_dex_file.size < 0x70 ||
-        definition.current_dex_file.size > (size_t{1} << 30) ||
-        std::memcmp(definition.dex_data.data, "dex\n", 4) != 0)
-      return false;
-    // Match ArtClassDefinition::IsModified (fixed 13--17 source). These
-    // spans own native vectors or reference DexFiles that ART keeps live.
-    // Direct skips unchanged entries; they must not become snapshot targets.
-    if (definition.dex_data.data == definition.current_dex_file.data ||
-        (definition.dex_data.size == definition.current_dex_file.size &&
-         std::memcmp(definition.dex_data.data, definition.current_dex_file.data,
-                     definition.dex_data.size) == 0))
-      continue;
-    out->push_back({definition.klass, static_cast<jint>(definition.dex_data.size), definition.dex_data.data});
+bool ValidDefinition(const defs::View& view, jclass requested) {
+  const auto valid_span = [](defs::ByteRef bytes) {
+    return bytes.data && bytes.size >= 0x70 && bytes.size <= (size_t{1} << 30);
+  };
+  return view.klass == requested && view.initialized == 1 && view.redefined == 0 &&
+      view.structural <= 1 && view.from_class_ext <= 1 && valid_span(view.dex) && valid_span(view.current);
+}
+
+// Same IsModified rules as ART, including the 11--12L lazy-map early return.
+// Materialize only through ART's named Native service, never a signal fault
+// after transform.cc has removed its temporary definition fault handler.
+bool ReadDefinition(const defs::Layout& layout, const void* address, jclass requested,
+                    std::vector<jvmtiClassDefinition>* out) {
+  auto view = layout.read(address);
+  if (!ValidDefinition(view, requested)) return false;
+  if (view.dex.data == view.current.data) return true;
+  bool changed = false;
+  if (view.lazy) {
+    if (!view.lazy_begin || view.lazy_size < 0x70 ||
+        (view.dex.data == view.lazy_begin && view.dex.size > view.lazy_size) ||
+        (view.current.data == view.lazy_begin && view.current.size > view.lazy_size)) return false;
+    if (view.current.data == view.lazy_begin) {
+      // A transformer supplied final bytes without reading its lazy input.
+      // The source deliberately returns true without comparing that input.
+      changed = true;
+    } else {
+      if (!view.can_initialize || !process->initialize_definition) return false;
+      process->initialize_definition(address);
+      const auto expanded = layout.read(address);
+      if (!ValidDefinition(expanded, requested) || expanded.lazy ||
+          expanded.dex.data != view.dex.data || expanded.dex.size != view.dex.size ||
+          expanded.current.data != view.current.data || expanded.current.size != view.current.size) return false;
+      view = expanded;
+    }
   }
+  if (!changed)
+    changed = view.dex.size != view.current.size ||
+        std::memcmp(view.dex.data, view.current.data, view.dex.size) != 0;
+  if (!changed) return true;
+  if (std::memcmp(view.dex.data, "dex\n", 4) != 0) return false;
+  out->push_back({view.klass, static_cast<jint>(view.dex.size), view.dex.data});
+  return true;
+}
+
+// One fixed-layout entry per requested class, in order. The original complete
+// native vector remains ART-owned and is passed unchanged to every commit.
+bool ReadDefinitions(const defs::Definitions& definitions, const Retransforming& call,
+                     std::vector<jvmtiClassDefinition>* out) {
+  const auto* layout = abi::arm64::ClassDefinitionsFor(android_get_device_api_level());
+  const auto begin = reinterpret_cast<uintptr_t>(definitions.begin);
+  const auto end = reinterpret_cast<uintptr_t>(definitions.end);
+  const auto capacity = reinterpret_cast<uintptr_t>(definitions.capacity);
+  if (!layout || call.count <= 0 || !call.classes || !begin || begin % alignof(void*) || end < begin ||
+      capacity < end || end - begin != static_cast<size_t>(call.count) * layout->stride)
+    return false;
+  for (jint i = 0; i < call.count; ++i)
+    if (!ReadDefinition(*layout, reinterpret_cast<const void*>(begin + i * layout->stride), call.classes[i], out))
+      return false;
   return true;
 }
 }  // namespace
@@ -609,7 +638,7 @@ jvmtiError RedefineDirect(void* env, void* runtime, void* self, const void* defi
   if (!call || BatchOf(transaction::Current()))
     return original(env, runtime, self, definitions, type, error);
   std::vector<jvmtiClassDefinition> read;
-  const auto* list = static_cast<const defs::ClassDefinitions*>(definitions);
+  const auto* list = static_cast<const defs::Definitions*>(definitions);
   if (!list || !ReadDefinitions(*list, *call, &read)) {
     const jvmtiError result = original(env, runtime, self, definitions, type, error);
     if (result != JVMTI_ERROR_NONE)

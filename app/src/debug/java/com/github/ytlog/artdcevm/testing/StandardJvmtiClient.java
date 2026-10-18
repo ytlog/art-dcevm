@@ -59,6 +59,11 @@ final class StandardJvmtiClient {
      * ClassFileLoadHook until cleared with nulls; returns the JVMTI error code.
      */
     static native int setClassFileReplacement(String name, byte[] dex);
+    /** Null DEX observes a requested class without replacing its bytes. */
+    static native int setClassFileReplacements(String[] names, byte[][] dexes);
+    static native long classFileCalls();
+    static native int setNestedRetransform(String trigger, Class<?>[] classes);
+    static native int nestedRetransformResult();
     static native long classFileReplacements();
     /** Load one named class per matching hook, after the engine's snapshot. */
     static native int setClassFileLoads(String target, ClassLoader loader, String[] names);

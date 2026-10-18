@@ -71,6 +71,8 @@ import com.github.ytlog.artdcevm.fixture.StaticNarrowingFixture;
 import com.github.ytlog.artdcevm.fixture.ParentRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.ToolHost;
 import com.github.ytlog.artdcevm.fixture.RetransformSubject;
+import com.github.ytlog.artdcevm.fixture.RetransformPeer;
+import com.github.ytlog.artdcevm.fixture.RetransformNestedSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
 
@@ -196,6 +198,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("method-private".equals(isolated)) runPrivateCallScenarios();
             else if ("method-private-self".equals(isolated)) runPrivateSelfScenarios();
             else if ("tool".equals(isolated)) runToolScenarios();
+            else if ("retransform".equals(isolated)) runRetransformScenarios();
             else if ("interface-shadow".equals(isolated)) runInterfaceShadowScenarios();
             else if ("interface-selection".equals(isolated)) runInterfaceSelectionMatrix();
             else if ("class-kinds".equals(isolated)) runClassKindScenarios();
@@ -3987,22 +3990,31 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.redefine(tool.existingClasses(), "tool-v2");
             scenario.check("run", 1543, ToolHost.run());
         });
-        if (Build.VERSION.SDK_INT < 33 || Build.VERSION.SDK_INT > 37) return;
-        String unchangedToolSchema = memberSchema(ToolHost.class);
+        runRetransformScenarios();
+    }
+
+    private void runRetransformScenarios() throws Exception {
+        String unchangedPeerSchema = memberSchema(RetransformPeer.class);
         RetransformSubject subject = new RetransformSubject();
         Field[] addedField = new Field[1];
         Method[] addedMethod = new Method[1];
         runScenario("tool-retransform-structural", 0, scenario -> {
             scenario.check("before", 1, subject.compute());
             long replacements = StandardJvmtiClient.classFileReplacements();
+            scenario.check("noopObserver", 0, StandardJvmtiClient.setClassFileReplacements(
+                    new String[]{RetransformSubject.class.getName().replace('.', '/'), RetransformPeer.class.getName().replace('.', '/')},
+                    new byte[][]{null, null}));
+            long calls = StandardJvmtiClient.classFileCalls();
             scenario.check("noopCode", 0, StandardJvmtiClient.retransform(
-                    new Class<?>[]{RetransformSubject.class, ToolHost.class}));
+                    new Class<?>[]{RetransformSubject.class, RetransformPeer.class}));
+            scenario.check("noopCalls", 2L, StandardJvmtiClient.classFileCalls() - calls);
+            scenario.check("noopCleared", 0, StandardJvmtiClient.setClassFileReplacement(null, null));
             scenario.check("noopReplacements", 0L,
                     StandardJvmtiClient.classFileReplacements() - replacements);
             scenario.check("noopBody", 1, subject.compute());
-            scenario.check("noopToolDispatch", 1543, ToolHost.run());
+            scenario.check("noopPeer", 17, RetransformPeer.value());
             scenario.check("noopRejection", "", DcevmRuntime.capabilities().optString("lastRejection"));
-            scenario.retransform(RetransformSubject.class, "retransform-add", ToolHost.class);
+            scenario.retransform(RetransformSubject.class, "retransform-add", RetransformPeer.class);
             addedField[0] = RetransformSubject.class.getDeclaredField("added");
             addedMethod[0] = RetransformSubject.class.getDeclaredMethod("extra");
             scenario.check("oldValue", 5, subject.value);
@@ -4015,11 +4027,11 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("extraAfterGc", 3, addedMethod[0].invoke(subject));
             scenario.check("oldAddedAfterGc", 0, addedField[0].getInt(subject));
             scenario.check("newAddedAfterGc", 7, addedField[0].getInt(new RetransformSubject()));
-            scenario.check("unchangedMembers", unchangedToolSchema, memberSchema(ToolHost.class));
-            scenario.check("toolDispatch", 1543, ToolHost.run());
+            scenario.check("unchangedMembers", unchangedPeerSchema, memberSchema(RetransformPeer.class));
+            scenario.check("unchangedDispatch", 17, RetransformPeer.value());
         });
         runScenario("tool-retransform-restore", 0, scenario -> {
-            scenario.retransform(RetransformSubject.class, "retransform-original", ToolHost.class);
+            scenario.retransform(RetransformSubject.class, "retransform-original", RetransformPeer.class);
             scenario.check("oldValue", 5, subject.value);
             scenario.check("body", 1, subject.compute());
             scenario.check("newBody", 1, new RetransformSubject().compute());
@@ -4035,8 +4047,96 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.expectError("retiredFieldAfterGc", IllegalArgumentException.class,
                     () -> addedField[0].getInt(subject));
             scenario.expectReflectionError("retiredMethodAfterGc", () -> addedMethod[0].invoke(subject));
-            scenario.check("unchangedMembers", unchangedToolSchema, memberSchema(ToolHost.class));
-            scenario.check("toolDispatch", 1543, ToolHost.run());
+            scenario.check("unchangedMembers", unchangedPeerSchema, memberSchema(RetransformPeer.class));
+            scenario.check("unchangedDispatch", 17, RetransformPeer.value());
+        });
+        Field valueField = RetransformSubject.class.getDeclaredField("value");
+        Method computeMethod = RetransformSubject.class.getDeclaredMethod("compute");
+        runScenario("tool-retransform-add-again", 0, scenario -> {
+            scenario.retransform(RetransformSubject.class, "retransform-add", RetransformPeer.class);
+            scenario.check("body", 2, subject.compute());
+            scenario.check("oldAdded", 0, RetransformSubject.class.getDeclaredField("added").getInt(subject));
+            scenario.expectError("stillRetiredField", IllegalArgumentException.class, () -> addedField[0].getInt(subject));
+            scenario.expectReflectionError("stillRetiredMethod", () -> addedMethod[0].invoke(subject));
+        });
+        String repeatedSchema = memberSchema(RetransformSubject.class);
+        runScenario("tool-retransform-no-replacement", 0, scenario -> {
+            scenario.retransformBatch(new Class<?>[]{RetransformSubject.class, RetransformPeer.class},
+                    new Class<?>[]{RetransformSubject.class, RetransformPeer.class}, new String[]{null, null}, null);
+            scenario.check("body", 2, subject.compute());
+            scenario.check("oldValue", 5, subject.value);
+            scenario.check("keptAdded", 0, RetransformSubject.class.getDeclaredField("added").getInt(subject));
+            scenario.check("unchangedSubject", repeatedSchema, memberSchema(RetransformSubject.class));
+            System.gc(); scenario.check("afterGc", 2, subject.compute());
+        });
+        runScenario("tool-retransform-add-for-retire", 0, scenario -> {
+            scenario.retransform(RetransformSubject.class, "retransform-add", RetransformPeer.class);
+            scenario.check("body", 2, subject.compute());
+            scenario.check("oldValue", 5, subject.value);
+            scenario.check("extra", 3, RetransformSubject.class.getDeclaredMethod("extra").invoke(subject));
+        });
+        String addedSchema = memberSchema(RetransformSubject.class);
+        runScenario("tool-retransform-invalid-batch", 60, scenario -> {
+            scenario.retransformBatch(new Class<?>[]{RetransformSubject.class, RetransformPeer.class},
+                    new Class<?>[]{RetransformSubject.class, RetransformPeer.class},
+                    new String[]{"retransform-retire", "invalid-dex"}, null);
+            scenario.check("unchangedSubject", addedSchema, memberSchema(RetransformSubject.class));
+            scenario.check("oldValue", 5, subject.value); scenario.check("body", 2, subject.compute());
+            scenario.check("peer", 17, RetransformPeer.value());
+            System.gc(); scenario.check("afterGc", 2, subject.compute());
+        });
+        runScenario("tool-retransform-abort", 110, scenario -> {
+            scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+            scenario.retransformBatch(new Class<?>[]{RetransformSubject.class, RetransformPeer.class},
+                    new Class<?>[]{RetransformSubject.class, RetransformPeer.class},
+                    new String[]{"retransform-retire", "retransform-peer-add"}, null);
+            scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+            scenario.check("unchangedSubject", addedSchema, memberSchema(RetransformSubject.class));
+            scenario.check("unchangedPeer", unchangedPeerSchema, memberSchema(RetransformPeer.class));
+            scenario.check("body", 2, subject.compute()); scenario.check("oldValue", 5, subject.value);
+            scenario.check("peer", 17, RetransformPeer.value());
+            System.gc(); scenario.check("afterGc", 2, subject.compute());
+            scenario.check("peerAfterGc", 17, RetransformPeer.value());
+        });
+        runScenario("tool-retransform-retire", 0, scenario -> {
+            scenario.retransform(RetransformSubject.class, "retransform-retire", RetransformPeer.class);
+            scenario.expectError("removedValue", NoSuchFieldException.class, () -> RetransformSubject.class.getDeclaredField("value"));
+            scenario.expectError("oldField", IllegalArgumentException.class, () -> valueField.getInt(subject));
+            scenario.expectReflectionError("oldMethod", () -> computeMethod.invoke(subject));
+            scenario.expectError("oldBytecode", NoSuchMethodError.class, subject::compute);
+            scenario.check("keptField", 0, RetransformSubject.class.getDeclaredField("added").getInt(subject));
+            scenario.check("keptMethod", 20, RetransformSubject.class.getDeclaredMethod("extra").invoke(subject));
+            System.gc(); scenario.expectError("oldFieldAfterGc", IllegalArgumentException.class, () -> valueField.getInt(subject));
+            scenario.expectReflectionError("oldMethodAfterGc", () -> computeMethod.invoke(subject));
+        });
+        runScenario("tool-retransform-restore-retired", 0, scenario -> {
+            scenario.retransform(RetransformSubject.class, "retransform-original", RetransformPeer.class);
+            scenario.check("oldValue", 0, subject.value); scenario.check("newValue", 5, new RetransformSubject().value);
+            scenario.check("body", 1, subject.compute());
+            scenario.expectError("stillRetiredField", IllegalArgumentException.class, () -> valueField.getInt(subject));
+            scenario.expectReflectionError("stillRetiredMethod", () -> computeMethod.invoke(subject));
+            System.gc(); scenario.check("afterGc", 1, subject.compute());
+        });
+        RetransformNestedSubject nested = new RetransformNestedSubject();
+        runScenario("tool-retransform-nested", 0, scenario -> {
+            scenario.retransformBatch(new Class<?>[]{RetransformSubject.class, RetransformPeer.class},
+                    new Class<?>[]{RetransformSubject.class, RetransformNestedSubject.class, RetransformPeer.class},
+                    new String[]{"retransform-add", "retransform-nested-add", null},
+                    new Class<?>[]{RetransformNestedSubject.class, RetransformPeer.class});
+            scenario.check("body", 2, subject.compute()); scenario.check("oldValue", 0, subject.value);
+            scenario.check("nestedValue", 11, nested.value);
+            scenario.check("oldBonus", 0, RetransformNestedSubject.class.getDeclaredField("bonus").getInt(nested));
+            scenario.check("newBonus", 13, RetransformNestedSubject.class.getDeclaredField("bonus").getInt(new RetransformNestedSubject()));
+            System.gc(); scenario.check("nestedAfterGc", 11, RetransformNestedSubject.class.getDeclaredMethod("extra").invoke(nested));
+        });
+        runScenario("tool-retransform-nested-restore", 0, scenario -> {
+            scenario.retransformBatch(new Class<?>[]{RetransformSubject.class, RetransformNestedSubject.class},
+                    new Class<?>[]{RetransformSubject.class, RetransformNestedSubject.class},
+                    new String[]{"retransform-original", "retransform-nested-original"}, null);
+            scenario.check("body", 1, subject.compute()); scenario.check("oldValue", 0, subject.value);
+            scenario.check("nestedValue", 11, nested.value);
+            scenario.expectError("removedBonus", NoSuchFieldException.class, () -> RetransformNestedSubject.class.getDeclaredField("bonus"));
+            System.gc(); scenario.check("afterGc", 1, subject.compute());
         });
     }
 
@@ -4842,31 +4942,45 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
         void retransform(Class<?> klass, String variant, Class<?>... unchanged) throws Exception {
             Class<?>[] requested = new Class<?>[unchanged.length + 1];
-            requested[0] = klass;
-            System.arraycopy(unchanged, 0, requested, 1, unchanged.length);
+            requested[0] = klass; System.arraycopy(unchanged, 0, requested, 1, unchanged.length);
+            String[] variants = new String[requested.length]; variants[0] = variant;
+            retransformBatch(requested, requested, variants, null);
+        }
+
+        void retransformBatch(Class<?>[] requested, Class<?>[] configured, String[] variants,
+                Class<?>[] nested) throws Exception {
             check("requestedClasses", 2, requested.length);
-            result.put("variants", new JSONArray().put(variant));
-            writeReport(false);
-            byte[] dex = readAsset(variant + "/" + klass.getName().replace('.', '/') + ".dex");
-            check("hookInstalled", 0, StandardJvmtiClient.setClassFileReplacement(
-                    klass.getName().replace('.', '/'), dex));
-            long replacements = StandardJvmtiClient.classFileReplacements();
+            JSONArray submitted = new JSONArray();
+            String[] names = new String[configured.length]; byte[][] dexes = new byte[configured.length][];
+            int replacementsExpected = 0;
+            for (int i = 0; i < configured.length; i++) {
+                names[i] = configured[i].getName().replace('.', '/');
+                if (variants[i] == null) continue;
+                submitted.put(variants[i]); replacementsExpected++;
+                dexes[i] = "invalid-dex".equals(variants[i]) ? new byte[]{0, 1}
+                        : readAsset(variants[i] + "/" + names[i] + ".dex");
+            }
+            result.put("variants", submitted); writeReport(false);
+            if (nested != null) check("nestedInstalled", 0, StandardJvmtiClient.setNestedRetransform(
+                    requested[0].getName().replace('.', '/'), nested));
+            check("hookInstalled", 0, StandardJvmtiClient.setClassFileReplacements(names, dexes));
+            long replacements = StandardJvmtiClient.classFileReplacements(), calls = StandardJvmtiClient.classFileCalls();
             try {
-                int actualCode;
-                long started = System.nanoTime();
-                try {
-                    actualCode = StandardJvmtiClient.retransform(requested);
-                } finally {
-                    jvmtiNanos += System.nanoTime() - started;
-                }
-                result.put("actualCode", actualCode);
-                check("returnCode", expectedCode, actualCode);
-                checkRejectionReason(new Class<?>[]{klass});
+                int actualCode; long started = System.nanoTime();
+                try { actualCode = StandardJvmtiClient.retransform(requested); }
+                finally { jvmtiNanos += System.nanoTime() - started; }
+                result.put("actualCode", actualCode); check("returnCode", expectedCode, actualCode);
+                if (expectedCode == 60) {
+                    String reason = DcevmRuntime.capabilities().optString("lastRejection"); result.put("lastRejection", reason);
+                    check("nativeFallbackReason", true, reason.contains("kept ART's own rules: final definitions did not match"));
+                } else checkRejectionReason(requested);
+                if (nested != null) check("nestedResult", 0, StandardJvmtiClient.nestedRetransformResult());
             } finally {
+                if (nested != null) check("nestedCleared", 0, StandardJvmtiClient.setNestedRetransform(null, null));
                 check("hookCleared", 0, StandardJvmtiClient.setClassFileReplacement(null, null));
             }
-            // Exactly one callback proves the enhanced route does not re-enter the hooks.
-            check("hookReplacements", 1L, StandardJvmtiClient.classFileReplacements() - replacements);
+            check("hookCalls", (long) (requested.length + (nested == null ? 0 : nested.length)), StandardJvmtiClient.classFileCalls() - calls);
+            check("hookReplacements", (long) replacementsExpected, StandardJvmtiClient.classFileReplacements() - replacements);
             check("retransformRouted", true, DcevmRuntime.capabilities().getBoolean("retransformRouted"));
             writeReport(false);
         }

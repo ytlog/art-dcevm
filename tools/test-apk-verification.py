@@ -29,7 +29,9 @@ def complete_report(api=36, self_selection=None):
         self_selection = api >= 36
     if type(self_selection) is bool:
         self_selection = {"class": self_selection, "interface": self_selection}
-    def rejection_check(code):
+    def rejection_check(name, code):
+        if name == "tool-retransform-invalid-batch":
+            return {"name": "nativeFallbackReason", "expected": True, "actual": True, "passed": True}
         if code == 0:
             return {"name": "lastRejection", "expected": "", "actual": "", "passed": True}
         prefix = "Lcom/github/ytlog/artdcevm/fixture/Evolving;: "
@@ -39,7 +41,7 @@ def complete_report(api=36, self_selection=None):
         "device": {"model": "Mock Android", "api": api, "release": str(api - 20)},
         "initialization": {"passed": True, "runtimeInitialized": True, "clientAttached": True,
                            "capabilities": {
-            "installed": True, "standardRedefineRouted": True, "retransformRouted": 33 <= api <= 37,
+            "installed": True, "standardRedefineRouted": True, "retransformRouted": 30 <= api <= 37,
             "memberAddition": True, "memberModifierChange": True, "classModifierChange": True,
             "interfaceAddition": True, "superclassWidening": True,
             "interfaceRedefinition": False, "interfaceRuntime": "unverified: interface runtime declarations",
@@ -53,7 +55,7 @@ def complete_report(api=36, self_selection=None):
                for kind, value in self_selection.items()}, "interfaceMethodSelection": True}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
-                       "capabilities": {"interfaceMethodSelection": True, "retransformRouted": 33 <= api <= 37, "memberMapping": "verified: android16 class layout",
+                       "capabilities": {"interfaceMethodSelection": True, "retransformRouted": 30 <= api <= 37, "memberMapping": "verified: android16 class layout",
                                         "interfaceRedefinition": True,
                                         "interfaceRuntime": "verified: android16 Class/Thread/HandleScope/holder probes"},
                        "threadSingleStepCallbacks": 1 if name.startswith("methods-retire") else 0,
@@ -65,7 +67,7 @@ def complete_report(api=36, self_selection=None):
                                     for key, value in required.items()],
                                   *[{"name": key, "expected": "captured baseline", "actual": "captured baseline",
                                      "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())],
-                                  rejection_check(code)]}
+                                  rejection_check(name, code)]}
                       for name, variants, base_code in runner.scenario_sequence("full", api, self_selection)
                       for code, required in [runner.release_expectation(
                           name, base_code, runner.REQUIRED_CHECKS[name], api, self_selection)]],
@@ -373,8 +375,12 @@ class ApkVerificationTests(unittest.TestCase):
 
     def test_tool_group_requires_append_and_later_redefinition(self):
         names = {item[0] for item in runner.scenario_sequence("tool")}
-        self.assertEqual(names, {"tool-add-classes", "tool-redefine-added",
-                                 "tool-retransform-structural", "tool-retransform-restore"})
+        self.assertEqual(names, {"tool-add-classes", "tool-redefine-added", "tool-retransform-structural",
+                                 "tool-retransform-restore", "tool-retransform-add-again",
+                                 "tool-retransform-no-replacement", "tool-retransform-add-for-retire",
+                                 "tool-retransform-invalid-batch", "tool-retransform-abort", "tool-retransform-retire",
+                                 "tool-retransform-restore-retired", "tool-retransform-nested",
+                                 "tool-retransform-nested-restore"})
         report = complete_report()
         report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
         runner.validate_report(report, scenario_group="tool")
@@ -404,8 +410,30 @@ class ApkVerificationTests(unittest.TestCase):
         for api in (30, 31, 32):
             legacy = complete_report(api)
             legacy["scenarios"] = [item for item in legacy["scenarios"] if item["name"].startswith("tool-")]
-            self.assertEqual(len(legacy["scenarios"]), 2)
+            self.assertEqual(len(legacy["scenarios"]), 13)
             runner.validate_report(legacy, scenario_group="tool")
+
+    def test_legacy_retransform_requires_enhanced_success(self):
+        for api in (30, 31, 32, 33, 36, 37):
+            report = complete_report(api)
+            names = {item[0] for item in runner.scenario_sequence("retransform")}
+            report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+            self.assertEqual(len(report["scenarios"]), 11)
+            runner.validate_report(report, scenario_group="retransform")
+            for name in names:
+                item = next(x for x in report["scenarios"] if x["name"] == name)
+                for key in ("hookCalls", "hookReplacements", "retransformRouted"):
+                    broken = copy.deepcopy(report)
+                    target = next(x for x in broken["scenarios"] if x["name"] == name)
+                    target["checks"] = [x for x in target["checks"] if x["name"] != key]
+                    with self.assertRaises(runner.RunFailure): runner.validate_report(broken, scenario_group="retransform")
+                if item["actualCode"] == 0:
+                    saved = item["actualCode"]; item["actualCode"] = 64
+                    with self.assertRaises(runner.RunFailure): runner.validate_report(report, scenario_group="retransform")
+                    item["actualCode"] = saved
+            invalid = next(x for x in report["scenarios"] if x["name"] == "tool-retransform-invalid-batch")
+            invalid["checks"] = [x for x in invalid["checks"] if x["name"] != "nativeFallbackReason"]
+            with self.assertRaises(runner.RunFailure): runner.validate_report(report, scenario_group="retransform")
 
     def test_abstract_group_requires_all_focused_scenarios(self):
         report = complete_report()

@@ -302,6 +302,15 @@ SCENARIOS = (
     ("tool-redefine-added", ["tool-v2"], 0),
     ("tool-retransform-structural", ["retransform-add"], 0),
     ("tool-retransform-restore", ["retransform-original"], 0),
+    ("tool-retransform-add-again", ["retransform-add"], 0),
+    ("tool-retransform-no-replacement", [], 0),
+    ("tool-retransform-add-for-retire", ["retransform-add"], 0),
+    ("tool-retransform-invalid-batch", ["retransform-retire", "invalid-dex"], 60),
+    ("tool-retransform-abort", ["retransform-retire", "retransform-peer-add"], 110),
+    ("tool-retransform-retire", ["retransform-retire"], 0),
+    ("tool-retransform-restore-retired", ["retransform-original"], 0),
+    ("tool-retransform-nested", ["retransform-add", "retransform-nested-add"], 0),
+    ("tool-retransform-nested-restore", ["retransform-original", "retransform-nested-original"], 0),
     ("field-retire", ["field-delete"], 0),
     ("field-restore", ["field-original"], 0),
     ("field-types", ["field-types"], 0),
@@ -771,13 +780,14 @@ REQUIRED_CHECKS = {
     "tool-redefine-added": {"classified": "added=;changed=ToolAdded", "appendCode": -1, "run": 1543},
     "tool-retransform-structural": {
         "hookInstalled": 0, "hookCleared": 0, "hookReplacements": 1, "retransformRouted": True,
-        "requestedClasses": 2, "toolDispatch": 1543,
-        "noopCode": 0, "noopReplacements": 0, "noopBody": 1, "noopToolDispatch": 1543, "noopRejection": "",
+        "requestedClasses": 2, "unchangedDispatch": 17, "hookCalls": 2,
+        "noopCode": 0, "noopReplacements": 0, "noopBody": 1, "noopPeer": 17, "noopRejection": "",
+        "noopObserver": 0, "noopCalls": 2, "noopCleared": 0,
         "before": 1, "oldValue": 5, "body": 2, "extra": 3, "oldAdded": 0, "newAdded": 7,
         "bodyAfterGc": 2, "extraAfterGc": 3, "oldAddedAfterGc": 0, "newAddedAfterGc": 7},
     "tool-retransform-restore": {
         "hookInstalled": 0, "hookCleared": 0, "hookReplacements": 1, "retransformRouted": True,
-        "requestedClasses": 2, "toolDispatch": 1543,
+        "requestedClasses": 2, "unchangedDispatch": 17, "hookCalls": 2,
         "oldValue": 5, "body": 1, "newBody": 1, "bodyAfterGc": 1,
         "removedField": "java.lang.NoSuchFieldException", "removedMethod": "java.lang.NoSuchMethodException",
         "retiredField": "java.lang.IllegalArgumentException", "retiredFieldAfterGc": "java.lang.IllegalArgumentException",
@@ -1182,6 +1192,38 @@ for _suffix in ("", "-again"):
         MAPPED_SCENARIOS.update({_name, _name + "-restore"})
 MAPPED_SCENARIOS.add("method-private-active-target")
 
+RETRANSFORM_COMMON = {"hookInstalled": 0, "hookCleared": 0, "requestedClasses": 2,
+                      "hookCalls": 2, "hookReplacements": 1, "retransformRouted": True}
+REQUIRED_CHECKS.update({
+    "tool-retransform-add-again": {**RETRANSFORM_COMMON, "body": 2, "oldAdded": 0,
+        "stillRetiredField": "java.lang.IllegalArgumentException",
+        "stillRetiredMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
+    "tool-retransform-no-replacement": {**RETRANSFORM_COMMON, "hookReplacements": 0,
+        "body": 2, "oldValue": 5, "keptAdded": 0, "afterGc": 2},
+    "tool-retransform-add-for-retire": {**RETRANSFORM_COMMON, "body": 2, "oldValue": 5, "extra": 3},
+    "tool-retransform-invalid-batch": {**RETRANSFORM_COMMON, "hookReplacements": 2,
+        "oldValue": 5, "body": 2, "peer": 17, "afterGc": 2},
+    "tool-retransform-abort": {**RETRANSFORM_COMMON, "hookReplacements": 2, "armed": 0, "failureHits": 1,
+        "body": 2, "oldValue": 5, "peer": 17, "afterGc": 2, "peerAfterGc": 17},
+    "tool-retransform-retire": {**RETRANSFORM_COMMON, "removedValue": "java.lang.NoSuchFieldException",
+        "oldField": "java.lang.IllegalArgumentException", "oldFieldAfterGc": "java.lang.IllegalArgumentException",
+        "oldMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+        "oldMethodAfterGc": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+        "oldBytecode": "java.lang.NoSuchMethodError", "keptField": 0, "keptMethod": 20},
+    "tool-retransform-restore-retired": {**RETRANSFORM_COMMON, "oldValue": 0, "newValue": 5, "body": 1, "afterGc": 1,
+        "stillRetiredField": "java.lang.IllegalArgumentException",
+        "stillRetiredMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
+    "tool-retransform-nested": {**RETRANSFORM_COMMON, "hookCalls": 4, "hookReplacements": 2,
+        "nestedInstalled": 0, "nestedResult": 0, "nestedCleared": 0, "body": 2, "oldValue": 0,
+        "nestedValue": 11, "oldBonus": 0, "newBonus": 13, "nestedAfterGc": 11},
+    "tool-retransform-nested-restore": {**RETRANSFORM_COMMON, "hookReplacements": 2,
+        "body": 1, "oldValue": 0, "nestedValue": 11, "removedBonus": "java.lang.NoSuchFieldException", "afterGc": 1},
+})
+UNCHANGED_CHECKS["tool-retransform-abort"] = ("unchangedSubject", "unchangedPeer")
+UNCHANGED_CHECKS["tool-retransform-invalid-batch"] = ("unchangedSubject",)
+UNCHANGED_CHECKS["tool-retransform-no-replacement"] = ("unchangedSubject",)
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("tool-retransform-") and code == 0)
+
 for _name, _, _code in SCENARIOS:
     if _name.startswith("proxy-interface-group-"):
         REQUIRED_CHECKS[_name] = {"base": 21, "child": 22, "side": 23}
@@ -1275,9 +1317,6 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         return tuple(item for item in scenario_sequence(scenario_group, api)
                      if not item[0].endswith("-retain") or
                      any(self_selection.values()))
-    if api is not None and not 33 <= api <= 37:
-        return tuple(item for item in scenario_sequence(scenario_group)
-                     if not item[0].startswith("tool-retransform-"))
     if scenario_group == "class-kinds":
         return tuple(CLASS_KIND_SCENARIOS)
     if scenario_group == "interface-selection":
@@ -1293,6 +1332,8 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
     if scenario_group == "invoke-interface-kind":
         return tuple(item for item in SCENARIOS
                      if item[0].startswith("interface-kind-static") or item[0] == "interface-kind-instance-legacy")
+    if scenario_group == "retransform":
+        return tuple(item for item in SCENARIOS if item[0].startswith("tool-retransform-"))
     if scenario_group == "tool":
         return tuple(item for item in SCENARIOS if item[0].startswith("tool-"))
     if scenario_group == "method-private-self":
@@ -1354,7 +1395,7 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")
-    if capabilities.get("retransformRouted") is not (33 <= device["api"] <= 37):
+    if capabilities.get("retransformRouted") is not (30 <= device["api"] <= 37):
         raise RunFailure("Retransform routing capability disagrees with the supported API range")
     interface_runtime = capabilities.get("interfaceRuntime")
     interface_pending = interface_runtime == "unverified: interface runtime declarations"
@@ -1447,6 +1488,10 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
             reason = observed.get("lastRejection")
             if reason is None or reason["expected"] != "":
                 raise RunFailure("Scenario " + name + " does not prove an empty policy rejection")
+        elif name == "tool-retransform-invalid-batch":
+            reason = observed.get("nativeFallbackReason")
+            if reason is None or reason["expected"] is not True:
+                raise RunFailure("Invalid retransform batch does not prove native fallback")
         else:
             reason = observed.get("rejectedByPolicy")
             prefix = reason and reason["expected"]
@@ -1544,7 +1589,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "interface-shadow", "interface-selection", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")
