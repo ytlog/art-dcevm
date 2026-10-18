@@ -245,6 +245,17 @@ void Installed(bool value) { installed.store(value); }
 bool Available() { return ready.load() && installed.load(); }
 jvmtiError Capture(jvmtiEnv* env, JNIEnv* jni, jint count, const jclass* classes, std::string* why) {
   if (!Available()) return JVMTI_ERROR_NONE;
+  if (jni->PushLocalFrame(16) != JNI_OK) {
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    *why = "reference snapshot local frame allocation failed";
+    return JVMTI_ERROR_OUT_OF_MEMORY;
+  }
+  struct LocalFrame {
+    JNIEnv* jni;
+    ~LocalFrame() { jni->PopLocalFrame(nullptr); }
+  } frame{jni};
+  // Borrowed loaded-class locals and affected global roots predate this frame.
+  // Only this capture's temporary Proxy/interface references are popped.
   auto next = std::make_unique<State>();
   jclass proxy = jni->FindClass("java/lang/reflect/Proxy");
   jmethodID is_proxy = proxy ? jni->GetStaticMethodID(proxy, "isProxyClass", "(Ljava/lang/Class;)Z") : nullptr;

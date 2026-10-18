@@ -51,6 +51,9 @@ int probe_loads = 0;
 std::set<void*> sealing_tokens;
 int reference_hooks = 0;
 bool failed_reference_hook = false;
+int local_frames = 0, popped_frames = 0, borrowed_deletions = 0;
+bool pending_exception = false, failed_frame = false;
+std::set<jobject> frame_locals;
 interface_redefinition::Backend* prepared_interface = nullptr;
 using Route = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Route routed = nullptr;
@@ -197,10 +200,27 @@ jclass JNICALL FindClass(JNIEnv*, const char* name) {
     if (hooked_fill_super) hooked_fill_super(nullptr, {}, nullptr, &conflict_token, &fresh, imt);
     probe_running = false;
   }
-  return std::string(name) == "java/lang/Object" ? root_type : reinterpret_cast<jclass>(0x1000);
+  jclass result = std::string(name) == "java/lang/Object" ? root_type : reinterpret_cast<jclass>(0x1000);
+  if (local_frames > popped_frames) frame_locals.insert(result);
+  return result;
 }
 jobject JNICALL NewGlobalRef(JNIEnv*, jobject object) { ++global_refs[object]; return object; }
-void JNICALL DeleteLocalRef(JNIEnv*, jobject) {}
+void JNICALL DeleteLocalRef(JNIEnv*, jobject object) {
+  frame_locals.erase(object);
+  if (mode >= 21 && object == first_type) ++borrowed_deletions;
+}
+jint JNICALL PushLocalFrame(JNIEnv*, jint) {
+  if (mode == 22 && !failed_frame) {
+    failed_frame = true; pending_exception = true; return JNI_ERR;
+  }
+  ++local_frames;
+  return JNI_OK;
+}
+jobject JNICALL PopLocalFrame(JNIEnv*, jobject) {
+  ++popped_frames; frame_locals.clear(); return nullptr;
+}
+jboolean JNICALL IsProxy(JNIEnv*, jclass, jmethodID, va_list) { return JNI_FALSE; }
+void JNICALL ClearException(JNIEnv*) { pending_exception = false; }
 jmethodID JNICALL GetMethodID(JNIEnv*, jclass, const char*, const char*) {
   return reinterpret_cast<jmethodID>(0x2001);
 }
@@ -223,7 +243,7 @@ jvmtiError JNICALL Callbacks(jvmtiEnv*, const jvmtiEventCallbacks*, jint) {
 }
 void JNICALL DeleteGlobal(JNIEnv*, jobject value) { --global_refs[value]; }
 jboolean JNICALL Same(JNIEnv*, jobject a, jobject b) { return a == b; }
-jboolean JNICALL Exception(JNIEnv*) { return false; }
+jboolean JNICALL Exception(JNIEnv*) { return pending_exception; }
 jclass JNICALL Super(JNIEnv*, jclass klass) {
   return klass == child_type ? first_type : klass == root_type ? nullptr : root_type;
 }
@@ -245,12 +265,20 @@ jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
   *value = nullptr; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Signature(jvmtiEnv*, jclass klass, char** value, char**) {
+  if (mode == 21 && klass == reinterpret_cast<jclass>(0x4100)) return JVMTI_ERROR_INTERNAL;
   const std::string text = klass == root_type ? "Ljava/lang/Object;" :
       "Lfixture/Type" + std::to_string(reinterpret_cast<uintptr_t>(klass)) + ";";
   *value = static_cast<char*>(std::malloc(text.size() + 1));
   std::strcpy(*value, text.c_str()); return JVMTI_ERROR_NONE;
 }
-jvmtiError JNICALL Interfaces(jvmtiEnv*, jclass, jint* n, jclass** value) {
+jvmtiError JNICALL Interfaces(jvmtiEnv*, jclass klass, jint* n, jclass** value) {
+  if (mode == 21 && klass == first_type) {
+    *n = 2; *value = static_cast<jclass*>(std::malloc(2 * sizeof(jclass)));
+    (*value)[0] = reinterpret_cast<jclass>(0x4100);
+    (*value)[1] = reinterpret_cast<jclass>(0x4200);
+    frame_locals.insert((*value)[0]); frame_locals.insert((*value)[1]);
+    return JVMTI_ERROR_NONE;
+  }
   *n = 0; *value = nullptr; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Fields(jvmtiEnv*, jclass, jint* n, jfieldID** value) {
@@ -279,6 +307,8 @@ int main(int argc, char** argv) {
     invocation.GetEnv = GetEnv;
     functions.FindClass = FindClass; functions.NewGlobalRef = NewGlobalRef;
     functions.DeleteLocalRef = DeleteLocalRef; functions.GetMethodID = GetMethodID;
+    functions.PushLocalFrame = PushLocalFrame; functions.PopLocalFrame = PopLocalFrame;
+    functions.CallStaticBooleanMethodV = IsProxy; functions.ExceptionClear = ClearException;
     tooling.GetPotentialCapabilities = Potential; tooling.RedefineClasses = Redefine;
     tooling.GetJNIFunctionTable = GetJni; tooling.SetJNIFunctionTable = SetJni;
     tooling.SetEventCallbacks = Callbacks;
@@ -339,6 +369,22 @@ int main(int argc, char** argv) {
       Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE &&
               reference_hooks == 2 && narrowed_references::Available() && imt_sealing::Available(),
               "Retry skipped the prepared reference visitor hook");
+    } else if (mode == 21 || mode == 22) {
+      Require(result == JVMTI_ERROR_NONE && narrowed_references::Available(), "Reference snapshot service unavailable");
+      transaction::Scope capture;
+      std::string why;
+      const auto error = narrowed_references::Capture(&env, &jni, 1, &first_type, &why);
+      Require(error == (mode == 21 ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_OUT_OF_MEMORY),
+              "Reference snapshot failure lost its error code");
+      Require(!capture.context().references && frame_locals.empty() && !pending_exception && borrowed_deletions == 0,
+              "Failed capture retained temporary locals, damaged borrowed roots or left an exception");
+      Require(local_frames == popped_frames && local_frames == (mode == 21 ? 1 : 0),
+              "Reference snapshot did not balance successful local frames");
+      if (mode == 22) {
+        Require(narrowed_references::Capture(&env, &jni, 0, nullptr, &why) == JVMTI_ERROR_NONE &&
+                capture.context().references && local_frames == 1 && popped_frames == 1 && frame_locals.empty(),
+                "Reference snapshot could not retry after local frame allocation failed");
+      }
     } else if (mode >= 6) {
       if (mode == 8) {
         Require(result == JVMTI_ERROR_INTERNAL && !imt_sealing::Available() && active.empty(),
@@ -501,7 +547,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(21):
+        for case in range(23):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:
