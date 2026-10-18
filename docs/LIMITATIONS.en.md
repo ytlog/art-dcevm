@@ -126,7 +126,7 @@ The following conflicts reject the transaction:
 ## Process-wide effects
 
 - When method retirement is enabled, the library wraps JNI calls and field access through JVMTI `SetJNIFunctionTable`. ART disables this process's Core Platform API checks when the table is overridden; those checks apply only to callers in platform modules.
-- Before each standard-entry redefinition, the library loads every class referenced by the new definitions through the target's defining loader, without initialization. This prevents ART from first loading a subclass during the transaction and leaving it under the old class; see [class loading during transactions](STRUCTURAL_REDEFINE_ENGINE.en.md#class-loading-during-transactions). The engine enables JVMTI `ClassPrepare` events during the transaction. If a subclass of a target is still loaded during that interval, for example because ClassFileLoadHook introduces a reference or another thread loads it concurrently, the attempt fails before commit and is retried automatically. ClassFileLoadHook is called again on each attempt. Three consecutive failed attempts return `JVMTI_ERROR_INTERNAL`.
+- Before each standard-entry redefinition, the library loads every class referenced by the new definitions through the target's defining loader, without initialization. This prevents ART from first loading a subclass during the transaction and leaving it under the old class; see [class loading during transactions](STRUCTURAL_REDEFINE_ENGINE.en.md#class-loading-during-transactions). The engine enables JVMTI `ClassPrepare` events during the transaction. If a subclass of a target is still loaded during that interval, for example because ClassFileLoadHook introduces a reference or another thread loads it concurrently, the attempt fails before commit and is retried automatically. RedefineClasses calls ClassFileLoadHook again on each attempt; RetransformClasses retries only Direct with the same final bytes. Three consecutive failed attempts return `JVMTI_ERROR_INTERNAL`.
 
 ## Providing new classes
 
@@ -143,7 +143,7 @@ Appending only adds to the end of the loader's path, cannot be undone and does n
 
 - Fields added to existing objects start at zero or `null`; their constructors are not run again. New objects execute the new constructors.
 - Structural changes make ART walk the heap to migrate instances, deoptimize every thread's frames and clear JIT code. The cost grows with heap size, and code needs to warm up again afterwards.
-- Patch delivery, signature verification and access control are the caller's responsibility. `RetransformClasses` is outside the enhanced scope.
+- Patch delivery, signature verification and access control are the caller's responsibility. On arm64 Android 13–17, `RetransformClasses` sends final ClassFileLoadHook DEX through the enhanced structural path with the same addition and retirement rules; Android 11/12 retain ART rules. Both named services, a matching public table and fixed-declaration validation are required; validation failure falls back to ART rules. Routing and retries do not call ClassFileLoadHook again. `retransformRouted` reports installation capability.
 
 ## Comparison with JBR DCEVM
 

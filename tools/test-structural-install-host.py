@@ -22,6 +22,9 @@ from evidence_paths import new_evidence_directory
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/structural_redefine_engine.h"
+#include "platform/common/structural_redefine_internal.h"
+#include "platform/abi/arm64/android13/class_definition.h"
+#include "platform/symbols/retransform_symbols.h"
 #include "platform/common/interface_redefinition_internal.h"
 #include "platform/common/class_layout.h"
 #include "platform/common/verification_redirect.h"
@@ -44,6 +47,79 @@ SOURCE = r'''
 using namespace artdcevm;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 bool route_hooked = false;
+using RetransformEntry = jvmtiError (*)(jvmtiEnv*, jint, const jclass*);
+RetransformEntry routed_retransform = nullptr;
+structural_redefine::detail::Direct routed_direct = nullptr;
+int direct_hook_order = 0, retransform_hook_order = 0, direct_type = -1;
+bool failed_retransform_hook = false;
+int transform_behavior = 0, transform_calls = 0, retry_calls = 0;
+const void* retry_definitions = nullptr;
+extern JNIEnv jni;
+extern jclass child_type;
+extern jclass first_type, second_type;
+jvmtiError direct_result = JVMTI_ERROR_NONE;
+namespace defs = abi::arm64::android13;
+jvmtiError DirectOriginal(void*, void*, void*, const void* definitions, int type, void*) {
+  direct_type = type;
+  if (transform_behavior == 3) throw std::bad_alloc();
+  if (transform_behavior == 11) {
+    if (++retry_calls == 1) {
+      retry_definitions = definitions;
+      auto* batch = structural_redefine::detail::BatchOf(transaction::Current());
+      if (!batch || !batch->subclass_loaded) throw std::runtime_error("Retry lacked a Native snapshot watch");
+      structural_redefine::detail::ClassPrepared(nullptr, &jni, nullptr, child_type);
+      structural_redefine::detail::Diagnose("injected late subclass", true);
+      return JVMTI_ERROR_INTERNAL;
+    }
+    if (retry_definitions != definitions) throw std::runtime_error("Retry replaced the final definitions");
+  }
+  if (transform_behavior == 15 || transform_behavior == 16) {
+    auto* batch = structural_redefine::detail::BatchOf(transaction::Current());
+    const auto* list = static_cast<const defs::ClassDefinitions*>(definitions);
+    if (!batch || batch->classes.size() != 1 || !batch->classes.count(first_type) ||
+        batch->classes.count(second_type) || list->end - list->begin != 2)
+      throw std::runtime_error("Mixed retransform changed its original vector or snapshotted an unchanged target");
+  }
+  return direct_result;
+}
+jvmtiError JNICALL RetransformOriginal(jvmtiEnv* env, jint count, const jclass* classes) {
+  ++transform_calls;
+  if (transform_behavior == 1) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+  if (transform_behavior == 2) throw std::bad_alloc();
+  if (transform_behavior >= 5 && transform_behavior <= 7) {
+    const int behavior = transform_behavior;
+    transform_behavior = behavior == 5 ? 0 : behavior == 6 ? 2 : 3;
+    const auto expected = behavior == 5 ? JVMTI_ERROR_NONE : JVMTI_ERROR_OUT_OF_MEMORY;
+    if (routed_retransform(env, count, classes) != expected)
+      throw std::runtime_error("Nested retransform lost its result");
+    transform_behavior = 0;
+  }
+  unsigned char dex[0x70] = {'d', 'e', 'x', '\n', '0', '3', '5', 0};
+  unsigned char current[0x70]; std::memcpy(current, dex, sizeof(dex)); current[8] = 1;
+  unsigned char equal[0x70]; std::memcpy(equal, dex, sizeof(dex));
+  defs::ArtClassDefinition entries[2]{};
+  auto& definition = entries[0];
+  definition.klass = transform_behavior == 8 ? nullptr : classes[0];
+  definition.initialized = transform_behavior != 4;
+  definition.redefined = transform_behavior == 12;
+  if (transform_behavior == 10) dex[0] = 0;
+  definition.dex_data = {dex, sizeof(dex)};
+  definition.current_dex_file = {current, sizeof(current)};
+  if (transform_behavior == 14) definition.current_dex_file = definition.dex_data;
+  const bool mixed = transform_behavior == 15 || transform_behavior == 16;
+  if (mixed) {
+    entries[1] = definition; entries[1].klass = classes[1];
+    entries[1].current_dex_file = {transform_behavior == 15 ? dex : equal, sizeof(dex)};
+  }
+  const defs::ClassDefinitions list{entries, entries + (transform_behavior == 9 ? 0 : mixed ? 2 : 1), entries + 2};
+  if (transform_behavior == 13) {
+    definition.redefined = true;
+    if (routed_direct(env, nullptr, nullptr, &list, 1, nullptr) != JVMTI_ERROR_NONE || direct_type != 1)
+      throw std::runtime_error("A nested explicit definition borrowed the retransform route");
+    definition.redefined = false;
+  }
+  return routed_direct(env, nullptr, nullptr, &list, 1, nullptr);
+}
 int sealing_hooks = 0;
 bool failed_sealing_hook = false;
 int probe_loads = 0;
@@ -111,7 +187,7 @@ jvmtiError JNICALL Structural(jvmtiEnv*, jint count, const jvmtiClassDefinition*
   }
   return JVMTI_ERROR_NONE;
 }
-extern "C" int android_get_device_api_level() { return mode == 5 ? 29 : 33; }
+extern "C" int android_get_device_api_level() { return mode == 5 ? 29 : mode == 27 ? 32 : 33; }
 extern "C" int __android_log_write(int, const char*, const char*) { return 0; }
 extern "C" int __android_log_print(int, const char*, const char*, ...) { return 0; }
 void* Current() { return nullptr; }
@@ -126,6 +202,10 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
       std::strstr(name, "ClassLinker15ResolveMethodId") ||
       std::strcmp(name, "NterpGetMethod") == 0) return nullptr;
   const std::string key(name);
+  if (key == symbols::retransform::kJvmtiRetransformClasses.name)
+    return mode >= 23 ? reinterpret_cast<void*>(RetransformOriginal) : nullptr;
+  if (key == symbols::retransform::kRedefineClassesDirect.name)
+    return mode >= 23 ? reinterpret_cast<void*>(DirectOriginal) : nullptr;
   if (key == symbols::structural::kStructurallyRedefineClasses.name) return reinterpret_cast<void*>(Structural);
   if (key == symbols::structural::kJvmtiRedefineClasses.name) return reinterpret_cast<void*>(Redefine);
   if (key == symbols::runtime_thread::kCurrentThread.name) return reinterpret_cast<void*>(Current);
@@ -152,7 +232,20 @@ extern "C" int shadowhook_get_errno() { return 1; }
 extern "C" const char* shadowhook_to_errmsg(int) { return "injected hook error"; }
 extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void** original) {
   ++hook_calls;
-  if (target == reinterpret_cast<void*>(Redefine)) std::cout << "HOOK public-redefine\n";
+  if (target == reinterpret_cast<void*>(Redefine)) {
+    if (mode >= 23 && mode != 26 && mode != 27)
+      Require(direct_hook_order < retransform_hook_order && retransform_hook_order < hook_calls,
+              "Public redefine was hooked before the retransform services");
+    std::cout << "HOOK public-redefine\n";
+  } else if (target == reinterpret_cast<void*>(DirectOriginal)) {
+    direct_hook_order = hook_calls;
+    std::cout << "HOOK retransform-direct\n";
+  } else if (target == reinterpret_cast<void*>(RetransformOriginal)) {
+    retransform_hook_order = hook_calls;
+    Require(direct_hook_order > 0 && direct_hook_order < hook_calls,
+            "Retransform was hooked before Direct");
+    std::cout << "HOOK public-retransform\n";
+  }
   else {
     bool found = false;
     for (const auto& [name, address] : addresses) {
@@ -170,6 +263,16 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
     if (mode == 20 && !failed_reference_hook) { failed_reference_hook = true; return nullptr; }
   }
   if (mode == 1 && hook_calls == 2) return nullptr;
+  if (!failed_retransform_hook &&
+      ((mode == 24 && target == reinterpret_cast<void*>(DirectOriginal)) ||
+       (mode == 25 && target == reinterpret_cast<void*>(RetransformOriginal)))) {
+    failed_retransform_hook = true;
+    return nullptr;
+  }
+  if (target == reinterpret_cast<void*>(DirectOriginal))
+    routed_direct = reinterpret_cast<structural_redefine::detail::Direct>(replacement);
+  if (target == reinterpret_cast<void*>(RetransformOriginal))
+    routed_retransform = reinterpret_cast<RetransformEntry>(replacement);
   *original = target;
   if (target == &addresses[symbols::imt_sealing::kLinkMethods64.name]) {
     *original = reinterpret_cast<void*>(LinkOriginal); hooked_link = reinterpret_cast<LinkFn>(replacement);
@@ -240,7 +343,7 @@ jvmtiError JNICALL SetJni(jvmtiEnv*, const jniNativeInterface*) {
   prepared_interface = interface_redefinition::detail::process->backend.get();
   Require(route_hooked, "JNI table changed before the final inline hook");
   hooks_at_set = hook_calls;
-  return (mode == 2 || mode == 9) ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE;
+  return (mode == 2 || mode == 9 || mode == 28) ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Callbacks(jvmtiEnv*, const jvmtiEventCallbacks*, jint) {
   return JVMTI_ERROR_NONE;
@@ -261,6 +364,9 @@ jvmtiError JNICALL Modifiable(jvmtiEnv*, jclass klass, jboolean* value) {
   *value = klass != nested_type; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
+  if ((transform_behavior == 14 && klass == first_type) ||
+      ((transform_behavior == 15 || transform_behavior == 16) && klass == second_type))
+    return JVMTI_ERROR_INTERNAL;
   if (mode == 4 && klass == second_type && !nested_preload) {
     nested_preload = true;
     const jvmtiClassDefinition definition{nested_type, 0, nullptr};
@@ -302,17 +408,20 @@ jvmtiError JNICALL Hash(jvmtiEnv*, jobject value, jint* hash) {
 }
 jvmtiError JNICALL IsInterface(jvmtiEnv*, jclass, jboolean* value) { *value = false; return JVMTI_ERROR_NONE; }
 jvmtiError JNICALL Status(jvmtiEnv*, jclass, jint* value) { *value = JVMTI_CLASS_STATUS_PREPARED; return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL ErrorName(jvmtiEnv*, jvmtiError, char**) { return JVMTI_ERROR_NOT_AVAILABLE; }
 jvmtiError JNICALL Deallocate(jvmtiEnv*, unsigned char* value) { std::free(value); return JVMTI_ERROR_NONE; }
 jvmtiError JNICALL Events(jvmtiEnv*, jvmtiEventMode, jvmtiEvent, jthread, ...) { return JVMTI_ERROR_NONE; }
 int main(int argc, char** argv) {
   try {
     Require(argc == 2, "Missing installation case");
+    std::cout << std::unitbuf;
     mode = std::stoi(argv[1]);
     invocation.GetEnv = GetEnv;
     functions.FindClass = FindClass; functions.NewGlobalRef = NewGlobalRef;
     functions.DeleteLocalRef = DeleteLocalRef; functions.GetMethodID = GetMethodID;
     functions.PushLocalFrame = PushLocalFrame; functions.PopLocalFrame = PopLocalFrame;
     functions.CallStaticBooleanMethodV = IsProxy; functions.ExceptionClear = ClearException;
+    if (mode >= 23 && mode != 26) tooling.RetransformClasses = RetransformOriginal;
     tooling.GetPotentialCapabilities = Potential; tooling.RedefineClasses = Redefine;
     tooling.GetJNIFunctionTable = GetJni; tooling.SetJNIFunctionTable = SetJni;
     tooling.SetEventCallbacks = Callbacks;
@@ -324,7 +433,7 @@ int main(int argc, char** argv) {
     tooling.GetImplementedInterfaces = Interfaces; tooling.GetClassFields = Fields;
     tooling.GetClassMethods = Methods; tooling.GetLoadedClasses = Loaded;
     tooling.GetObjectHashCode = Hash; tooling.IsInterface = IsInterface;
-    tooling.GetClassStatus = Status; tooling.Deallocate = Deallocate;
+    tooling.GetClassStatus = Status; tooling.Deallocate = Deallocate; tooling.GetErrorName = ErrorName;
     tooling.SetEventNotificationMode = Events;
     const auto cold = structural_redefine::Capabilities();
     std::cout << "COLD " << cold << '\n';
@@ -352,6 +461,84 @@ int main(int argc, char** argv) {
               "Failed inline install changed JNI table or retained hooks");
       Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE && set_calls == 1,
               "Retry after rollback did not reuse process state");
+    } else if (mode >= 23) {
+      if (mode == 24 || mode == 25) {
+        Require(result == JVMTI_ERROR_INTERNAL && active.empty() && !route_hooked &&
+                structural_redefine::Capabilities().find("\"retransformRouted\":false") != std::string::npos,
+                "Retransform installation failure retained hooks or published routing");
+        Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE,
+                "Retransform hook rollback prevented a later installation");
+      } else Require(result == JVMTI_ERROR_NONE, "Retransform services broke installation");
+      const auto caps = structural_redefine::Capabilities();
+      const bool supported = mode != 26 && mode != 27;
+      Require(caps.find(supported ? "\"retransformRouted\":true" : "\"retransformRouted\":false") != std::string::npos,
+              "Retransform capability ignored public table, API gate or rollback");
+      if (!supported) Require(!routed_direct && !routed_retransform,
+                              "Unsupported retransform entry installed private hooks");
+      if (mode == 28) Require(caps.find("\"methodDeletion\":false") != std::string::npos && active.size() == 6,
+                              "JNI guard rollback lost base retransform hooks");
+      if (supported) {
+        if (mode == 23) {
+          transform_behavior = 11;
+          const int before = transform_calls;
+          Require(routed_retransform(&env, 1, &first_type) == JVMTI_ERROR_NONE && direct_type == 0 &&
+                  transform_calls == before + 1 && retry_calls == 2 &&
+                  structural_redefine::Capabilities().find("\"subclassLoadRetries\":1") != std::string::npos &&
+                  structural_redefine::Capabilities().find("\"lastRejection\":\"\"") != std::string::npos,
+                  "Retransform retry repeated transformations, lost final bytes or retained a rejection");
+          transform_behavior = 0;
+        }
+        Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_NONE && direct_type == 0,
+                "Final retransform bytes did not use the structural commit");
+        for (int behavior : {5, 6, 7}) {
+          transform_behavior = behavior;
+          Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_NONE && direct_type == 0,
+                  "Nested success or exception did not restore the outer retransform request");
+        }
+        transform_behavior = 14;
+        Require(routed_retransform(&env, 1, &first_type) == JVMTI_ERROR_NONE && direct_type == 1,
+                "An unchanged class incorrectly required a Native schema snapshot");
+        for (int behavior : {15, 16}) {
+          transform_behavior = behavior;
+          const jclass mixed[] = {first_type, second_type};
+          Require(routed_retransform(&env, 2, mixed) == JVMTI_ERROR_NONE && direct_type == 0,
+                  "Mixed retransform did not skip unchanged targets with shared or equal bytes");
+        }
+        transform_behavior = 13;
+        Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_NONE && direct_type == 0,
+                "Nested explicit Direct did not preserve the enclosing retransform request");
+        direct_result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
+        for (int behavior : {4, 8, 9, 10, 12}) {
+          transform_behavior = behavior;
+          Require(routed_retransform(&env, 1, &nested_type) == direct_result && direct_type == 1 &&
+                  structural_redefine::Capabilities().find("final definitions did not match") != std::string::npos,
+                  "Rejected fixed declaration did not retain native rules and a rejection reason");
+        }
+        transform_behavior = 1;
+        Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_ILLEGAL_ARGUMENT &&
+                structural_redefine::Capabilities().find("ART rejected the request") != std::string::npos &&
+                structural_redefine::Capabilities().find("final definitions did not match") == std::string::npos,
+                "Entry failure retained the preceding rejection");
+        for (int behavior : {2, 3}) {
+          transform_behavior = behavior;
+          Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_OUT_OF_MEMORY,
+                  "Hook exception lost its error code");
+          transform_behavior = 0;
+          direct_result = JVMTI_ERROR_NONE;
+          // An unrelated Direct call must keep its original transaction type.
+          Require(routed_direct(&env, nullptr, nullptr, nullptr, 1, nullptr) == JVMTI_ERROR_NONE && direct_type == 1,
+                  "Exception left a dangling retransform request");
+        }
+        {
+          transaction::Scope engine;
+          engine.context().batch = std::make_unique<structural_redefine::detail::Batch>();
+          Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_NONE && direct_type == 1,
+                  "An existing engine transaction was routed twice");
+        }
+        Require(routed_retransform(&env, 1, &nested_type) == JVMTI_ERROR_NONE && direct_type == 0 &&
+                structural_redefine::Capabilities().find("\"lastRejection\":\"\"") != std::string::npos,
+                "A successful request retained a stale rejection or failed to restore routing");
+      }
     } else if (mode == 19) {
       Require(result == JVMTI_ERROR_NONE && imt_sealing::Available() &&
               !narrowed_references::Available() && proxy_relink::Available(),
@@ -545,7 +732,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(23):
+        for case in range(29):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:

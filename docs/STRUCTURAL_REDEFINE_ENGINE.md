@@ -66,6 +66,14 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 
 `Check*` 等 ART 内部阶段不调用 JNI/JVMTI 进行类加载、遍历、可赋值比较或策略计算。唯一例外是分配 Hook 在当前线程上对本事务私有数组和 holder 使用 JNI `SetObjectArrayElement`（含命名局部引用桥接和异常检查）：ART 13/14/15/16 的 `ScopedThreadStateChange` 在新旧状态同为 Runnable 时不切换状态；该元素写入执行 ART 自己的写屏障，不分配托管对象且没有挂起点。局部引用容量在 Native 状态预留。这一例外禁止用于任何 ART 回调或持有 ART 锁的区域，也不适用于已发布数组。
 
+### RetransformClasses
+
+arm64 Android 13–17（API 33–37）复用标准入口的 Native 快照、校验、映射和退役路径。安装时核对公开表指向命名 `JvmtiFunctions::RetransformClasses`，先 Hook `Redefiner::RedefineClassesDirect`，再 Hook 该包装器，最后安装标准重定义入口。缺少服务或公开表不匹配时不安装这组 Hook；`retransformRouted` 为 false。Android 11/12 的定义包含 MemMap，保持 ART 原生规则。
+
+包装器用线程局部作用域保存请求，返回或异常退出时恢复。ART 完成全部 ClassFileLoadHook 后，Direct Hook 在引擎批次之外读取固定 [ArtClassDefinition 声明](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/openjdkjvmti/ti_class_definition.h)：逐项核对条目数、同一个 `klass_` 句柄、初始化、`redefined_==false` 等标志、DEX 长度和魔数。13–17 的该声明一致，arm64 libc++ 的 dex_data_ 位于 72、结构大小 136；不以运行库反汇编推算。校验不通过就以原参数调用 Direct，保持 ART 原生规则，失败时记录本次 lastRejection。
+
+逐项校验通过后，按固定源码的 `IsModified` 规则比较最终字节与当前字节，仅为实际变化类建立共享快照；整批未变化则直接调用原始 Direct。提交仍保留原始完整 Native 定义向量。变化类的最终 DEX 交给共享 RouteWith，以 `kStructural` 调用原始 Direct。事务中的重试继续使用 ART 持有的同一组不可变最终定义，不重新进入 ClassFileLoadHook；实例迁移、引用替换、去优化和缓存失效仍由 ART 完成。已有引擎批次内的 Direct 不再路由，线程局部请求在 Direct 及其回调期间暂时清空。成功请求清空旧拒绝；入口校验与回退失败也写入本次拒绝。
+
 ### 事务中的类加载
 
 ART 的结构事务分两步处理子类：
@@ -84,7 +92,7 @@ ART 的结构事务分两步处理子类：
 
 为此，引擎在自有 jvmtiEnv 上登记 JVMTI `ClassPrepare`，只在事务进行期间启用，覆盖所有线程。从读取已加载类开始，任何目标类的新子类完成准备，都会标记本次尝试。ART 替换用的类对象经 `LinkClass` 建立，不触发该事件。
 
-被标记的尝试在 `CollectAndCreateNewInstances`（ART 最后可失败的一步）以 `JVMTI_ERROR_INTERNAL` 失败，整批不提交。此时该子类已经加载，标准入口随即重新快照并重试，最多三次尝试；每次尝试都会再调用 ClassFileLoadHook。能力报告的 `subclassLoadRetries` 统计重试次数。没有方法退役 Hook 时没有这个失败点，只做提前加载。
+被标记的尝试在 `CollectAndCreateNewInstances`（ART 最后可失败的一步）以 `JVMTI_ERROR_INTERNAL` 失败，整批不提交。此时该子类已经加载，标准入口随即重新快照并重试，最多三次尝试；RedefineClasses 每次尝试都会再调用 ClassFileLoadHook；RetransformClasses 复用已生成的最终定义，仅重试 Direct。能力报告的 `subclassLoadRetries` 统计重试次数。没有方法退役 Hook 时没有这个失败点，只做提前加载。
 
 ### 接口事务的失败清理
 

@@ -230,6 +230,8 @@ SCENARIOS = (
     ("preload-hook-subclass", ["preload-hook-original"], 0),
     ("tool-add-classes", ["tool-v1", "tool-v1"], 0),
     ("tool-redefine-added", ["tool-v2"], 0),
+    ("tool-retransform-structural", ["retransform-add"], 0),
+    ("tool-retransform-restore", ["retransform-original"], 0),
     ("field-retire", ["field-delete"], 0),
     ("field-restore", ["field-original"], 0),
     ("field-types", ["field-types"], 0),
@@ -320,7 +322,7 @@ MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
 MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "nested-interface-parents",
                          "interface-kind-abstract-missing", "interface-parent-missing",
                          "multi-interface-unimplemented", "interface-default-conflict"})
-MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy"})
+MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy", "tool-retransform-structural", "tool-retransform-restore"})
 MAPPED_SCENARIOS.update({"interface-shadow-static", "interface-shadow-private"})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
 VAR_HANDLE_API = 33
@@ -685,6 +687,20 @@ REQUIRED_CHECKS = {
         "appendCode": 0, "subclassLoadRetries": 0, "run": 1443, "oldOwn": 6, "oldDescribe": 1,
         "dormantValue": 2},
     "tool-redefine-added": {"classified": "added=;changed=ToolAdded", "appendCode": -1, "run": 1543},
+    "tool-retransform-structural": {
+        "hookInstalled": 0, "hookCleared": 0, "hookReplacements": 1, "retransformRouted": True,
+        "requestedClasses": 2, "toolDispatch": 1543,
+        "noopCode": 0, "noopReplacements": 0, "noopBody": 1, "noopToolDispatch": 1543, "noopRejection": "",
+        "before": 1, "oldValue": 5, "body": 2, "extra": 3, "oldAdded": 0, "newAdded": 7,
+        "bodyAfterGc": 2, "extraAfterGc": 3, "oldAddedAfterGc": 0, "newAddedAfterGc": 7},
+    "tool-retransform-restore": {
+        "hookInstalled": 0, "hookCleared": 0, "hookReplacements": 1, "retransformRouted": True,
+        "requestedClasses": 2, "toolDispatch": 1543,
+        "oldValue": 5, "body": 1, "newBody": 1, "bodyAfterGc": 1,
+        "removedField": "java.lang.NoSuchFieldException", "removedMethod": "java.lang.NoSuchMethodException",
+        "retiredField": "java.lang.IllegalArgumentException", "retiredFieldAfterGc": "java.lang.IllegalArgumentException",
+        "retiredMethod": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+        "retiredMethodAfterGc": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
     "field-retire": {
         **FIELD_CHECKS, **field_live_checks(7, 9_000_000_000, 1, 7, 1),
         "keptInstance": 43, "keptStatic": 44, "retiredOldCompute": 44, "retiredNewCompute": 42,
@@ -810,6 +826,7 @@ REQUIRED_CHECKS.update({
             for i in range(200) for kind in ("oldAdded", "newAdded", "oldDispatch", "oldMarker", "afterGc")}},
 })
 UNCHANGED_CHECKS = {
+    **{name: ("unchangedMembers",) for name in ("tool-retransform-structural", "tool-retransform-restore")},
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-protected', 'interface-shadow-package', 'interface-shadow-other-package']},
     "interface-overlap-superclass": ("unchangedParent",),
     **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
@@ -1061,7 +1078,10 @@ REQUIRED_CHECKS["static-narrow-loaders"] = {
     "distinctClasses": False, **{name + str(i): value for i in range(2)
         for name, value in (("selfCleared", None), ("compatibleKept", True), ("retypedKept", True), ("ownLoader", True))}}
 
-def scenario_sequence(scenario_group):
+def scenario_sequence(scenario_group, api=None):
+    if api is not None and not 33 <= api <= 37:
+        return tuple(item for item in scenario_sequence(scenario_group)
+                     if not item[0].startswith("tool-retransform-"))
     if scenario_group == "interface-shadow":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-shadow-"))
     if scenario_group == "full":
@@ -1132,6 +1152,8 @@ def validate_report(report, scenario_group="full"):
                  "memberDeletion", "memberTypeChange"):
         if capabilities.get(name) is not True:
             raise RunFailure("The initialization report is missing a required capability")
+    if capabilities.get("retransformRouted") is not (33 <= device["api"] <= 37):
+        raise RunFailure("Retransform routing capability disagrees with the supported API range")
     interface_runtime = capabilities.get("interfaceRuntime")
     interface_pending = interface_runtime == "unverified: interface runtime declarations"
     interface_disabled = (scenario_group == "ordinary" and isinstance(interface_runtime, str)
@@ -1145,7 +1167,7 @@ def validate_report(report, scenario_group="full"):
     self_selection = capabilities.get("privateSelfSelection")
     if type(self_selection) is not bool:
         raise RunFailure("The initialization report is missing privateSelfSelection")
-    expected_scenarios = scenario_sequence(scenario_group)
+    expected_scenarios = scenario_sequence(scenario_group, device["api"])
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
         raise RunFailure("The device report does not contain the complete scenario sequence")
@@ -1171,6 +1193,8 @@ def validate_report(report, scenario_group="full"):
         verified_interface = str(scenario_capabilities.get("interfaceRuntime", "")).startswith("verified: ")
         if scenario_capabilities.get("interfaceRedefinition") is not verified_interface:
             raise RunFailure("Interface capability disagrees with runtime probe state")
+        if name.startswith("tool-retransform-") and scenario_capabilities.get("retransformRouted") is not True:
+            raise RunFailure("Retransform scenario ran without its installed route")
         mapping = (scenario.get("capabilities") or {}).get("memberMapping")
         if name in MAPPED_SCENARIOS and not (isinstance(mapping, str)
                                              and mapping.startswith("verified: ")):

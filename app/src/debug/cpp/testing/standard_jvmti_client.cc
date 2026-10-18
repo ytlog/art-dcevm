@@ -310,6 +310,21 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefine(
   return Redefine(jni, classes, dexes, false);
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_retransform(
+    JNIEnv* jni, jclass, jobjectArray classes) {
+  if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  if (!classes) return JVMTI_ERROR_NULL_POINTER;
+  const jint count = jni->GetArrayLength(classes);
+  std::vector<jclass> batch;
+  batch.reserve(count);
+  for (jint i = 0; i < count; ++i)
+    batch.push_back(static_cast<jclass>(jni->GetObjectArrayElement(classes, i)));
+  const jvmtiError result = client_env->RetransformClasses(count, batch.data());
+  for (jclass klass : batch) if (klass) jni->DeleteLocalRef(klass);
+  return result;
+}
+
 // ART's own structural extension, bypassing the standard entry the engine routes.
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefineStructurally(

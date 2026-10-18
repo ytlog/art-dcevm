@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <android/api-level.h>
 #include <android/log.h>
 #include "shadowhook.h"
 #include "platform/common/imt_sealing.h"
@@ -11,6 +12,7 @@
 #include "platform/common/invoke_kind.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/verification_redirect.h"
+#include "platform/symbols/retransform_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
 namespace artdcevm::structural_redefine {
@@ -191,6 +193,22 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       {prepared.superclass_change, prepared.runtime_thread,
       process->layout_services.mirror_class, process->layout_services.find_instance_field}, &replacements, &interface_note, &process->interface_runtime));
   const size_t retirement_hook_count = replacements.size();
+  // Optional: RetransformClasses reaches the same structural route once ART
+  // has run its hooks. Verify the public table as for RedefineClasses.
+  {
+    using namespace symbols::retransform;
+    void* retransform = symbols::Find(kJvmtiRetransformClasses);
+    void* direct = symbols::Find(kRedefineClassesDirect);
+    const int api = android_get_device_api_level();
+    if (api >= 33 && api <= 37 && retransform && direct &&
+        reinterpret_cast<void*>(env->functions->RetransformClasses) == retransform) {
+      replacements.push_back({direct, reinterpret_cast<void*>(RedefineDirect), &process->original_direct,
+                              kRedefineClassesDirect.name});
+      replacements.push_back({retransform, reinterpret_cast<void*>(Retransform), &process->original_retransform,
+                              kJvmtiRetransformClasses.name});
+      prepared.retransform = true;
+    }
+  }
   // Route last, so a routed batch can only see a complete set of validators.
   const Hook validators[] = {
       {addresses[2], reinterpret_cast<void*>(CheckClass), &process->original_class, names[2].name},
@@ -238,7 +256,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     }
     // Preserve the existing optional-retirement failure semantics: the base
     // validators/route stay installed, and additions/body edits remain usable.
+    // The retransform route stays with the base validators.
+    const bool retransform = prepared.retransform;
     prepared = {};
+    prepared.retransform = retransform;
     prepared.runtime_thread = runtime_thread::Available();
     retirement_note = "method retirement unavailable: " + failure;
     class_layout::Prepare({});

@@ -34,7 +34,7 @@ def complete_report(api=36, self_selection=None):
         "device": {"model": "Mock Android", "api": api, "release": str(api - 20)},
         "initialization": {"passed": True, "runtimeInitialized": True, "clientAttached": True,
                            "capabilities": {
-            "installed": True, "standardRedefineRouted": True,
+            "installed": True, "standardRedefineRouted": True, "retransformRouted": 33 <= api <= 37,
             "memberAddition": True, "memberModifierChange": True, "classModifierChange": True,
             "interfaceAddition": True, "superclassWidening": True,
             "interfaceRedefinition": False, "interfaceRuntime": "unverified: interface runtime declarations",
@@ -45,7 +45,7 @@ def complete_report(api=36, self_selection=None):
             "privateSelfSelection": self_selection}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
-                       "capabilities": {"memberMapping": "verified: android16 class layout",
+                       "capabilities": {"retransformRouted": 33 <= api <= 37, "memberMapping": "verified: android16 class layout",
                                         "interfaceRedefinition": True,
                                         "interfaceRuntime": "verified: android16 Class/Thread/HandleScope/holder probes"},
                        "threadSingleStepCallbacks": 1 if name.startswith("methods-retire") else 0,
@@ -58,7 +58,7 @@ def complete_report(api=36, self_selection=None):
                                   *[{"name": key, "expected": "captured baseline", "actual": "captured baseline",
                                      "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())],
                                   rejection_check(code)]}
-                      for name, variants, base_code in runner.SCENARIOS
+                      for name, variants, base_code in runner.scenario_sequence("full", api)
                       for code, required in [runner.release_expectation(
                           name, base_code, runner.REQUIRED_CHECKS[name], api, self_selection)]],
     }
@@ -229,13 +229,39 @@ class ApkVerificationTests(unittest.TestCase):
 
     def test_tool_group_requires_append_and_later_redefinition(self):
         names = {item[0] for item in runner.scenario_sequence("tool")}
-        self.assertEqual(names, {"tool-add-classes", "tool-redefine-added"})
+        self.assertEqual(names, {"tool-add-classes", "tool-redefine-added",
+                                 "tool-retransform-structural", "tool-retransform-restore"})
         report = complete_report()
         report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
         runner.validate_report(report, scenario_group="tool")
         report["scenarios"].pop()
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(report, scenario_group="tool")
+
+    def test_retransform_requires_behavior_and_installed_capability(self):
+        report = complete_report()
+        names = {item[0] for item in runner.scenario_sequence("tool")}
+        report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+        for name in ("tool-retransform-structural", "tool-retransform-restore"):
+            scenario = next(item for item in report["scenarios"] if item["name"] == name)
+            for key in runner.REQUIRED_CHECKS[name]:
+                broken = copy.deepcopy(report)
+                target = next(item for item in broken["scenarios"] if item["name"] == name)
+                target["checks"] = [item for item in target["checks"] if item["name"] != key]
+                with self.subTest(name=name, missing=key), self.assertRaises(runner.RunFailure):
+                    runner.validate_report(broken, scenario_group="tool")
+            scenario["capabilities"]["retransformRouted"] = False
+            with self.assertRaises(runner.RunFailure):
+                runner.validate_report(report, scenario_group="tool")
+            scenario["capabilities"]["retransformRouted"] = True
+        del report["initialization"]["capabilities"]["retransformRouted"]
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group="tool")
+        for api in (30, 31, 32):
+            legacy = complete_report(api)
+            legacy["scenarios"] = [item for item in legacy["scenarios"] if item["name"].startswith("tool-")]
+            self.assertEqual(len(legacy["scenarios"]), 2)
+            runner.validate_report(legacy, scenario_group="tool")
 
     def test_abstract_group_requires_all_focused_scenarios(self):
         report = complete_report()

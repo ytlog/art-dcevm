@@ -122,7 +122,7 @@
 ## 进程内的副作用
 
 - 方法退役启用时，库通过 JVMTI `SetJNIFunctionTable` 包装 JNI 调用与字段访问；ART 设置覆盖表后会关闭本进程的 Core Platform API 检查，该检查只约束平台模块的调用方。
-- 每次经标准入口重定义前，库通过目标类的定义加载器加载（不初始化）新定义引用的全部类，防止 ART 在事务中途才加载子类、使其留在旧类之下（见 [结构重定义引擎](STRUCTURAL_REDEFINE_ENGINE.md#事务中的类加载)）。事务期间库启用 JVMTI `ClassPrepare` 事件。若仍有目标类的子类在事务中加载（例如 ClassFileLoadHook 改写后才引用它，或其他线程并发加载），该次尝试会在提交前失败并自动重试，ClassFileLoadHook 随之再次被调用；连续三次失败时返回 `JVMTI_ERROR_INTERNAL`。
+- 每次经标准入口重定义前，库通过目标类的定义加载器加载（不初始化）新定义引用的全部类，防止 ART 在事务中途才加载子类、使其留在旧类之下（见 [结构重定义引擎](STRUCTURAL_REDEFINE_ENGINE.md#事务中的类加载)）。事务期间库启用 JVMTI `ClassPrepare` 事件。若仍有目标类的子类在事务中加载（例如 ClassFileLoadHook 改写后才引用它，或其他线程并发加载），该次尝试会在提交前失败并自动重试，RedefineClasses 会再次调用 ClassFileLoadHook，RetransformClasses 仅用相同最终字节重试 Direct；连续三次失败时返回 `JVMTI_ERROR_INTERNAL`。
 
 ## 提供新类
 
@@ -139,7 +139,7 @@
 
 - 已有对象的新增字段取零值或 `null`，不重新执行构造器；新建对象执行新构造器。
 - 结构变化会让 ART 遍历堆迁移实例、去优化所有线程帧并清空 JIT 代码，耗时随堆大小增加，提交后需要重新预热。
-- 补丁分发、签名校验和访问控制由调用方负责；`RetransformClasses` 不属于增强范围。
+- 补丁分发、签名校验和访问控制由调用方负责。arm64 Android 13–17 的 `RetransformClasses` 将 ClassFileLoadHook 最终 DEX 送入增强结构路径，使用相同的新增与退役规则；Android 11/12 保持 ART 原生规则。需两个命名服务、匹配的公开函数表和固定声明校验通过；不通过则回退 ART 原生规则。路由及其重试不重复调用 ClassFileLoadHook，`retransformRouted` 报告安装能力。
 
 ## 与 JBR DCEVM 的对照
 

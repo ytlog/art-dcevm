@@ -24,6 +24,8 @@ done
 
 `python3 tools/test-structural-install-host.py` 编译公共生产模块，以公开 JNI/JVMTI 表与 ShadowHook 替身验证安装顺序、幂等性、inline hook 失败时不尝试 JNI 覆盖、JNI 表失败后保留基础能力，以及映射名称缺失后线程服务仍准备且诊断保留。测试不执行 ART 对象、收集器或真实 Hook，不能代替设备 ABI 验证。
 
+`tool` 组还包含 `tool-retransform-structural` 与 `tool-retransform-restore`（arm64 Android 13–17）。独立 agent 调用标准 RetransformClasses，经 ClassFileLoadHook 换入新增字段/方法与恢复 DEX，核对返回码、空 lastRejection、retransformRouted、旧实例新增字段为 0、新实例为 7、方法体和反射调用、退役成员及 GC 后行为；精确一次替换回调证明不重复调用 Hook。Android 11/12 保持 ART 原生规则，不适用这两个增强场景。安装主机测试另查服务与公开表匹配、Hook 顺序、回滚、异常与嵌套请求恢复；主机替身不替代真机 ABI 验证。
+
 ## JBR 对照
 
 `tools/compare-jbr-interface-removal.py` 将同一组 Java 夹具编译为 ClassFile，在固定 JBR `21.0.11+10-b1163.116` 上执行。源码基准为 `cf1f197170a0f04c6559feb873e362583be021d1`，运行时不匹配时拒绝把结果记为该基准的对齐证据：

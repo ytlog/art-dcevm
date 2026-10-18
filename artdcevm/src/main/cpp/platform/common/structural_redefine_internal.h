@@ -19,6 +19,14 @@ using abi::arm64::RedefinitionDataIter;
 using Entry = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 using Check = bool (*)(ClassRedefinitionPrefix*);
 using Record = void (*)(ClassRedefinitionPrefix*);
+// Redefiner::RedefineClassesDirect(ArtJvmTiEnv*, Runtime*, Thread*,
+// const std::vector<ArtClassDefinition>&, RedefinitionType, std::string*).
+using Direct = jvmtiError (*)(void*, void*, void*, const void*, int, void*);
+// The final call of a routed transaction once its Native phase is done.
+struct Commit {
+  jvmtiError (*call)(const void* state, jvmtiEnv*, jint, const jvmtiClassDefinition*);
+  const void* state;
+};
 
 struct ProcessCapabilities {
   bool runtime_thread = false;
@@ -28,6 +36,7 @@ struct ProcessCapabilities {
   bool superclass_change = false;
   bool instance_check = false;
   bool subclass_watch = false;
+  bool retransform = false;
 };
 struct RetiredKinds {
   jobject klass;
@@ -46,6 +55,8 @@ struct Process {
   void* original_methods = nullptr;
   void* original_instances = nullptr;
   void* original_allocate = nullptr;
+  void* original_retransform = nullptr;
+  void* original_direct = nullptr;
   class_layout::Services layout_services{};
   // Filled only by Install. Per-transaction probes further restrict these abilities.
   ProcessCapabilities capabilities;
@@ -111,6 +122,10 @@ inline Batch* BatchOf(const transaction::Context* context) {
 void Diagnose(const std::string&, bool rejection = false);
 void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv*, jthread, jclass) noexcept;
 jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) noexcept;
+jvmtiError RouteWith(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions, const Commit& commit);
+jvmtiError Retransform(jvmtiEnv* env, jint count, const jclass* classes) noexcept;
+jvmtiError RedefineDirect(void* env, void* runtime, void* self, const void* definitions, int type,
+                          void* error) noexcept;
 bool CheckClass(ClassRedefinitionPrefix* self) noexcept;
 bool CheckFields(ClassRedefinitionPrefix* self) noexcept;
 bool CheckMethods(ClassRedefinitionPrefix* self) noexcept;

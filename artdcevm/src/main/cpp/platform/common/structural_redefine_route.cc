@@ -1,8 +1,12 @@
 #include "platform/common/structural_redefine_internal.h"
 
+#include <android/api-level.h>
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <utility>
+#include <vector>
+#include "platform/abi/arm64/android13/class_definition.h"
 #include "platform/common/art_hook.h"
 #include "platform/common/fault_injection.h"
 #include "platform/common/runtime_thread.h"
@@ -153,8 +157,8 @@ std::string DescribeFailure(jint count, const jvmtiClassDefinition* definitions,
 }
 
 jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
-                            transaction::Context* context) {
-  const jvmtiError result = process->structural_entry(env, count, definitions);
+                            transaction::Context* context, const Commit& commit) {
+  const jvmtiError result = commit.call(commit.state, env, count, definitions);
   interface_redefinition::Backend* interfaces = InterfaceBackend();
   if (std::string reason = interfaces ? interfaces->TakeRejection() : std::string{}; !reason.empty()) Diagnose(reason, true);
   // A rejection decided after allocation (CollectAndCreateNewInstances).
@@ -220,7 +224,7 @@ bool PredictsNarrowing(JNIEnv* jni, const Batch& batch, jint count, const jvmtiC
   return false;
 }
 
-jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
+jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions, const Commit& commit,
                      bool* subclass_loaded, bool* capture_references) {
   interface_redefinition::Backend* interfaces = InterfaceBackend();
   transaction::Scope scope;
@@ -228,13 +232,13 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   context->batch = std::make_unique<Batch>();
   Batch& batch = *BatchOf(context);
   if (!context->enclosing) {
-    // lastRejection describes the latest standard-entry transaction only.
+    // lastRejection describes the latest routed transaction only.
     std::lock_guard<std::mutex> lock(process->report_mutex);
     process->last_rejection.clear();
   }
   // ART retains responsibility for arguments, caller capabilities and the
   // ClassFileLoadHook. Snapshots precede its ScopedObjectAccess transition.
-  if (count <= 0 || !definitions) return InvokeStructural(env, count, definitions, context);
+  if (count <= 0 || !definitions) return InvokeStructural(env, count, definitions, context, commit);
   JNIEnv* jni = nullptr;
   if (process->runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
     return JVMTI_ERROR_UNATTACHED_THREAD;
@@ -257,7 +261,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     if (!definitions[i].klass ||
         (process->snapshot_env->IsModifiableClass(definitions[i].klass, &modifiable) == JVMTI_ERROR_NONE &&
          !modifiable))
-      return InvokeStructural(env, count, definitions, context);
+      return InvokeStructural(env, count, definitions, context, commit);
   }
   // Retention covers every submitted target even if a nested preload-time
   // transaction invalidates and clears some of the declaration snapshots.
@@ -419,7 +423,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     }
   }
   ARTDCEVM_TEST(fault_injection::SnapshotFinished(loaded_start, count, loaded.count));
-  result = InvokeStructural(env, count, definitions, context);
+  result = InvokeStructural(env, count, definitions, context, commit);
   *capture_references |= context->capture_references_on_retry;
   *subclass_loaded = watch.SubclassLoaded() || ((context->narrowing || context->protect_invocations) && watch.AnyClassPrepared()) ||
                      context->capture_references_on_retry;
@@ -430,7 +434,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
 // may name others, and another thread may load a subclass before ART pauses
 // class definition. Such an attempt fails before ART's no-failure point and
 // leaves the class loaded, so the next attempt includes it.
-jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) noexcept try {
+jvmtiError RouteWith(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions, const Commit& commit) {
   std::lock_guard<std::recursive_mutex> transaction_lock(process->transaction_mutex);
   constexpr int kAttempts = 3;
   // Keep this request within the routed transaction, including nested calls
@@ -438,7 +442,7 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
   bool capture_references = false;
   for (int attempt = 1;; ++attempt) {
     bool subclass_loaded = false;
-    const jvmtiError result = RouteOnce(env, count, definitions, &subclass_loaded, &capture_references);
+    const jvmtiError result = RouteOnce(env, count, definitions, commit, &subclass_loaded, &capture_references);
     if (result == JVMTI_ERROR_NONE) return result;
     if (subclass_loaded && attempt < kAttempts) {
       process->subclass_retries.fetch_add(1);
@@ -453,8 +457,135 @@ jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definiti
     if (!explained) Diagnose(DescribeFailure(count, definitions, result), true);
     return result;
   }
+}
+
+jvmtiError CommitStructural(const void*, jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) {
+  return process->structural_entry(env, count, definitions);
+}
+
+jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) noexcept try {
+  return RouteWith(env, count, definitions, {CommitStructural, nullptr});
 } catch (...) {
   return ArtHookExceptionError();
 }
 
+namespace {
+namespace defs = abi::arm64::android13;
+// The classes of the RetransformClasses call on this thread, while ART runs it.
+struct Retransforming {
+  jint count;
+  const jclass* classes;
+};
+thread_local const Retransforming* retransforming = nullptr;
+class RetransformScope {
+ public:
+  explicit RetransformScope(const Retransforming* call)
+      : enclosing_(std::exchange(retransforming, call)) {}
+  ~RetransformScope() { retransforming = enclosing_; }
+  RetransformScope(const RetransformScope&) = delete;
+  RetransformScope& operator=(const RetransformScope&) = delete;
+ private:
+  const Retransforming* enclosing_;
+};
+
+// ART's arguments to RedefineClassesDirect, committed with kStructural.
+struct DirectCall {
+  void* env;
+  void* runtime;
+  void* self;
+  const defs::ClassDefinitions* definitions;
+  void* error;
+};
+constexpr int kStructuralType = 0;  // RedefinitionType::kStructural.
+jvmtiError CommitDirect(const void* state, jvmtiEnv*, jint, const jvmtiClassDefinition*) {
+  const auto* call = static_cast<const DirectCall*>(state);
+  return reinterpret_cast<Direct>(process->original_direct)(call->env, call->runtime, call->self,
+                                                            call->definitions, kStructuralType, call->error);
+}
+
+// ART's definitions match the fixed Android 13--17 declaration: one entry per
+// requested class, in order, each initialized and holding a DEX image.
+bool ReadDefinitions(const defs::ClassDefinitions& definitions, const Retransforming& call,
+                     std::vector<jvmtiClassDefinition>* out) {
+  const int api = android_get_device_api_level();
+  if (api < 33 || api > 37 || call.count <= 0 || !call.classes ||
+      !definitions.begin || definitions.end < definitions.begin ||
+      definitions.end - definitions.begin != call.count)
+    return false;
+  for (jint i = 0; i < call.count; ++i) {
+    const defs::ArtClassDefinition& definition = definitions.begin[i];
+    const auto flag = [](const bool& value) { return *reinterpret_cast<const unsigned char*>(&value); };
+    if (definition.klass != call.classes[i] || flag(definition.initialized) != 1 || flag(definition.redefined) != 0 ||
+        flag(definition.structural_transform_update) > 1 || !definition.dex_data.data ||
+        definition.dex_data.size < 0x70 || definition.dex_data.size > (size_t{1} << 30) ||
+        !definition.current_dex_file.data || definition.current_dex_file.size < 0x70 ||
+        definition.current_dex_file.size > (size_t{1} << 30) ||
+        std::memcmp(definition.dex_data.data, "dex\n", 4) != 0)
+      return false;
+    // Match ArtClassDefinition::IsModified (fixed 13--17 source). These
+    // spans own native vectors or reference DexFiles that ART keeps live.
+    // Direct skips unchanged entries; they must not become snapshot targets.
+    if (definition.dex_data.data == definition.current_dex_file.data ||
+        (definition.dex_data.size == definition.current_dex_file.size &&
+         std::memcmp(definition.dex_data.data, definition.current_dex_file.data,
+                     definition.dex_data.size) == 0))
+      continue;
+    out->push_back({definition.klass, static_cast<jint>(definition.dex_data.size), definition.dex_data.data});
+  }
+  return true;
+}
+}  // namespace
+
+jvmtiError Retransform(jvmtiEnv* env, jint count, const jclass* classes) noexcept try {
+  std::lock_guard<std::recursive_mutex> transaction_lock(process->transaction_mutex);
+  if (!transaction::Current()) {
+    std::lock_guard<std::mutex> lock(process->report_mutex);
+    process->last_rejection.clear();
+  }
+  const Retransforming call{count, classes};
+  RetransformScope scope(&call);
+  const jvmtiError result = reinterpret_cast<jvmtiError (*)(jvmtiEnv*, jint, const jclass*)>(
+      process->original_retransform)(env, count, classes);
+  if (result != JVMTI_ERROR_NONE) {
+    bool explained;
+    {
+      std::lock_guard<std::mutex> lock(process->report_mutex);
+      explained = !process->last_rejection.empty();
+    }
+    if (!explained) Diagnose("RetransformClasses: ART rejected the request with " + ErrorName(result), true);
+  }
+  return result;
+} catch (...) {
+  return ArtHookExceptionError();
+}
+
+// Transformer::RetransformClasses hands its definitions here after every
+// ClassFileLoadHook. Outside an engine transaction, run the standard entry's
+// Native phase on those final bytes and let ART commit them structurally.
+// RouteWith retries only Direct with the same immutable definitions; hooks
+// have already finished and must not run again on any of those attempts.
+// A definition that does not match the fixed declaration keeps ART's rules.
+jvmtiError RedefineDirect(void* env, void* runtime, void* self, const void* definitions, int type,
+                          void* error) noexcept try {
+  const auto original = reinterpret_cast<Direct>(process->original_direct);
+  const Retransforming* call = retransforming;
+  RetransformScope scope(nullptr);
+  if (!call || BatchOf(transaction::Current()))
+    return original(env, runtime, self, definitions, type, error);
+  std::vector<jvmtiClassDefinition> read;
+  const auto* list = static_cast<const defs::ClassDefinitions*>(definitions);
+  if (!list || !ReadDefinitions(*list, *call, &read)) {
+    const jvmtiError result = original(env, runtime, self, definitions, type, error);
+    if (result != JVMTI_ERROR_NONE)
+      Diagnose("RetransformClasses kept ART's own rules: final definitions did not match the fixed declaration; " +
+                   ErrorName(result), true);
+    return result;
+  }
+  if (read.empty()) return original(env, runtime, self, definitions, type, error);
+  const DirectCall direct{env, runtime, self, list, error};
+  return RouteWith(static_cast<jvmtiEnv*>(env), static_cast<jint>(read.size()), read.data(),
+                   {CommitDirect, &direct});
+} catch (...) {
+  return ArtHookExceptionError();
+}
 }  // namespace artdcevm::structural_redefine::detail

@@ -66,6 +66,14 @@ The interface backend is the sole exception to the principle of taking over deci
 
 ART-internal stages such as `Check*` do not use JNI/JVMTI for loading, traversal, assignability or policy computation. The sole exception is JNI `SetObjectArrayElement` (with named local-reference bridging and exception checks) in the allocation hook, on the current thread's transaction-private arrays and holder. ART 13/14/15/16 `ScopedThreadStateChange` does not transition when both states are Runnable. This store executes ART's own GC write barrier, allocates no managed object and has no suspension point. Local-reference capacity is reserved while Native. This exception never applies inside an ART callback, while holding ART locks, or to published arrays.
 
+### RetransformClasses
+
+On arm64 Android 13–17 (API 33–37), retransform shares the standard route's Native snapshots, validation, mapping and retirement. Installation verifies the public table points to named `JvmtiFunctions::RetransformClasses`, hooks `Redefiner::RedefineClassesDirect` before that wrapper, and installs the standard redefine entry last. Missing services or a mismatched public table leave this hook group uninstalled and `retransformRouted` false. Android 11/12 definitions contain MemMaps and retain ART rules.
+
+A thread-local scope saves the wrapper request and restores it on return or exception. After ART finishes all ClassFileLoadHooks, the Direct hook, outside an engine batch, reads the fixed [ArtClassDefinition declaration](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/openjdkjvmti/ti_class_definition.h). It checks the entry count, identical `klass_` handles, initialization, `redefined_==false` and other flags, DEX length and magic. That declaration is identical in 13–17: arm64 libc++ places dex_data_ at 72 and the structure size is 136. No disassembly-derived offsets are used. Failed validation calls Direct with its original arguments and ART rules, recording lastRejection on failure.
+
+After validating every entry, the hook compares final and current bytes using ART's fixed `IsModified` rule. Only changed classes enter the shared snapshots; an entirely unchanged request delegates to original Direct. The original complete native definition vector is retained for commit. Validated changed DEX enters shared RouteWith and original Direct with `kStructural`. Retries reuse the same immutable final definitions owned by ART and do not re-enter ClassFileLoadHook. ART still performs instance migration, reference replacement, deoptimization and cache invalidation. Direct calls inside an existing engine batch are not routed again; the thread-local request is suspended during Direct and its callbacks. Success clears old rejection state; entry validation and fallback failures also record the current rejection.
+
 ### Class loading during transactions
 
 ART's structural transaction handles subclasses in two steps:
@@ -87,7 +95,7 @@ Preloading covers only the bytes submitted to the standard entry. Subclasses can
 
 The engine therefore registers JVMTI `ClassPrepare` on its own jvmtiEnv and enables it only during a transaction, covering all threads. Starting with inspection of loaded classes, preparation of any new subclass of a target marks the attempt. ART creates replacement class objects through `LinkClass`, which does not trigger that event.
 
-A marked attempt fails with `JVMTI_ERROR_INTERNAL` in `CollectAndCreateNewInstances`, ART's last fallible step, without committing the batch. The subclass is now loaded, so the standard entry takes a fresh snapshot and retries, up to three attempts. Each attempt calls ClassFileLoadHook again. `subclassLoadRetries` counts retries in the capability report. Without the method-retirement hooks, this failure point is unavailable and only preloading is performed.
+A marked attempt fails with `JVMTI_ERROR_INTERNAL` in `CollectAndCreateNewInstances`, ART's last fallible step, without committing the batch. The subclass is now loaded, so the standard entry takes a fresh snapshot and retries, up to three attempts. Each RedefineClasses attempt calls ClassFileLoadHook again; RetransformClasses reuses its final definitions and retries only Direct. `subclassLoadRetries` counts retries in the capability report. Without the method-retirement hooks, this failure point is unavailable and only preloading is performed.
 
 ### Interface transaction failure cleanup
 

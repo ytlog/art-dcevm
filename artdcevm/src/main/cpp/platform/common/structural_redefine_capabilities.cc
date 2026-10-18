@@ -31,6 +31,7 @@ std::string Capabilities() {
           (methods && state.capabilities.superclass_change ? "true" : "false") +
       ",\"interfaceRemoval\":" + (methods && state.capabilities.subclass_watch && imt_sealing::Available() && narrowed_references::Available() ? "true" : "false") +
       ",\"interfaceDispatchSealing\":" + QuoteJsonMutf8(imt_sealing::State()) +
+      ",\"retransformRouted\":" + (state.installed && state.capabilities.retransform ? "true" : "false") +
       ",\"privateSelfSelection\":" + (methods && invoke_kind::SelectionServices() ? "true" : "false") +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +

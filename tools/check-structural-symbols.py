@@ -30,6 +30,7 @@ OPTIONAL_CATALOGS = (
     ('invokeKindServices', 'Invoke kind', 'invoke_kind_symbols.h', 'invoke_kind.cc'),
     ('imtSealingServices', 'IMT sealing', 'imt_sealing_symbols.h', 'imt_sealing.cc'),
     ('narrowedReferenceServices', 'Narrowed references', 'narrowed_reference_symbols.h', 'narrowed_references.cc'),
+    ('retransformServices', 'Retransform', 'retransform_symbols.h', 'structural_redefine_engine.cc'),
 )
 LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
 TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')

@@ -66,6 +66,7 @@ import com.github.ytlog.artdcevm.fixture.ProxyGroupFixture;
 import com.github.ytlog.artdcevm.fixture.StaticNarrowingFixture;
 import com.github.ytlog.artdcevm.fixture.ParentRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.ToolHost;
+import com.github.ytlog.artdcevm.fixture.RetransformSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
 
@@ -3271,6 +3272,57 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.redefine(tool.existingClasses(), "tool-v2");
             scenario.check("run", 1543, ToolHost.run());
         });
+        if (Build.VERSION.SDK_INT < 33 || Build.VERSION.SDK_INT > 37) return;
+        String unchangedToolSchema = memberSchema(ToolHost.class);
+        RetransformSubject subject = new RetransformSubject();
+        Field[] addedField = new Field[1];
+        Method[] addedMethod = new Method[1];
+        runScenario("tool-retransform-structural", 0, scenario -> {
+            scenario.check("before", 1, subject.compute());
+            long replacements = StandardJvmtiClient.classFileReplacements();
+            scenario.check("noopCode", 0, StandardJvmtiClient.retransform(
+                    new Class<?>[]{RetransformSubject.class, ToolHost.class}));
+            scenario.check("noopReplacements", 0L,
+                    StandardJvmtiClient.classFileReplacements() - replacements);
+            scenario.check("noopBody", 1, subject.compute());
+            scenario.check("noopToolDispatch", 1543, ToolHost.run());
+            scenario.check("noopRejection", "", DcevmRuntime.capabilities().optString("lastRejection"));
+            scenario.retransform(RetransformSubject.class, "retransform-add", ToolHost.class);
+            addedField[0] = RetransformSubject.class.getDeclaredField("added");
+            addedMethod[0] = RetransformSubject.class.getDeclaredMethod("extra");
+            scenario.check("oldValue", 5, subject.value);
+            scenario.check("body", 2, subject.compute());
+            scenario.check("extra", 3, addedMethod[0].invoke(subject));
+            scenario.check("oldAdded", 0, addedField[0].getInt(subject));
+            scenario.check("newAdded", 7, addedField[0].getInt(new RetransformSubject()));
+            System.gc();
+            scenario.check("bodyAfterGc", 2, subject.compute());
+            scenario.check("extraAfterGc", 3, addedMethod[0].invoke(subject));
+            scenario.check("oldAddedAfterGc", 0, addedField[0].getInt(subject));
+            scenario.check("newAddedAfterGc", 7, addedField[0].getInt(new RetransformSubject()));
+            scenario.check("unchangedMembers", unchangedToolSchema, memberSchema(ToolHost.class));
+            scenario.check("toolDispatch", 1543, ToolHost.run());
+        });
+        runScenario("tool-retransform-restore", 0, scenario -> {
+            scenario.retransform(RetransformSubject.class, "retransform-original", ToolHost.class);
+            scenario.check("oldValue", 5, subject.value);
+            scenario.check("body", 1, subject.compute());
+            scenario.check("newBody", 1, new RetransformSubject().compute());
+            scenario.expectError("removedField", NoSuchFieldException.class,
+                    () -> RetransformSubject.class.getDeclaredField("added"));
+            scenario.expectError("removedMethod", NoSuchMethodException.class,
+                    () -> RetransformSubject.class.getDeclaredMethod("extra"));
+            scenario.expectError("retiredField", IllegalArgumentException.class,
+                    () -> addedField[0].getInt(subject));
+            scenario.expectReflectionError("retiredMethod", () -> addedMethod[0].invoke(subject));
+            System.gc();
+            scenario.check("bodyAfterGc", 1, subject.compute());
+            scenario.expectError("retiredFieldAfterGc", IllegalArgumentException.class,
+                    () -> addedField[0].getInt(subject));
+            scenario.expectReflectionError("retiredMethodAfterGc", () -> addedMethod[0].invoke(subject));
+            scenario.check("unchangedMembers", unchangedToolSchema, memberSchema(ToolHost.class));
+            scenario.check("toolDispatch", 1543, ToolHost.run());
+        });
     }
 
     private static void checkWidenedSuperclass(Scenario scenario, SuperSubject subject,
@@ -4052,6 +4104,31 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             result.put("actualCode", actualCode);
             check("returnCode", expectedCode, actualCode);
             checkRejectionReason(classes);
+            writeReport(false);
+        }
+
+        void retransform(Class<?> klass, String variant, Class<?>... unchanged) throws Exception {
+            Class<?>[] requested = new Class<?>[unchanged.length + 1];
+            requested[0] = klass;
+            System.arraycopy(unchanged, 0, requested, 1, unchanged.length);
+            check("requestedClasses", 2, requested.length);
+            result.put("variants", new JSONArray().put(variant));
+            writeReport(false);
+            byte[] dex = readAsset(variant + "/" + klass.getName().replace('.', '/') + ".dex");
+            check("hookInstalled", 0, StandardJvmtiClient.setClassFileReplacement(
+                    klass.getName().replace('.', '/'), dex));
+            long replacements = StandardJvmtiClient.classFileReplacements();
+            try {
+                int actualCode = StandardJvmtiClient.retransform(requested);
+                result.put("actualCode", actualCode);
+                check("returnCode", expectedCode, actualCode);
+                checkRejectionReason(new Class<?>[]{klass});
+            } finally {
+                check("hookCleared", 0, StandardJvmtiClient.setClassFileReplacement(null, null));
+            }
+            // Exactly one callback proves the enhanced route does not re-enter the hooks.
+            check("hookReplacements", 1L, StandardJvmtiClient.classFileReplacements() - replacements);
+            check("retransformRouted", true, DcevmRuntime.capabilities().getBoolean("retransformRouted"));
             writeReport(false);
         }
 

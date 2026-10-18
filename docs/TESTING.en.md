@@ -24,6 +24,8 @@ Host substitutes execute no ART objects, real hooks or collector and cannot repl
 
 `python3 tools/test-structural-install-host.py` compiles shared production modules with fake public JNI/JVMTI tables and ShadowHook services. It checks installation order, idempotence, no JNI override attempt after inline-hook failure, base-capability fallback after JNI-table failure, and independent Thread preparation/diagnostic preservation when mapping names are missing. It executes no ART objects, collector or real hooks and does not replace device ABI validation.
 
+The `tool` group also includes `tool-retransform-structural` and `tool-retransform-restore` on arm64 Android 13–17. An independent agent calls standard RetransformClasses while ClassFileLoadHook supplies addition/restoration DEX. Checks cover return codes, empty lastRejection, retransformRouted, zero added fields on old instances and 7 on new ones, method bodies, reflection, retired members and GC. Exactly one replacement callback proves the route does not repeat the hook. Android 11/12 retain ART rules and these two enhanced scenarios do not apply. Installer host cases additionally cover service/public-table matching, hook order, rollback, exceptions and nested request restoration; host substitutes do not validate device ABI.
+
 ## JBR comparisons
 
 `tools/compare-jbr-interface-removal.py` compiles the shared Java fixtures to ClassFile and runs them on fixed JBR `21.0.11+10-b1163.116`, using source revision `cf1f197170a0f04c6559feb873e362583be021d1`. A mismatched runtime is rejected as evidence for that reference:
