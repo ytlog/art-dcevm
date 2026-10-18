@@ -22,7 +22,7 @@
 
 ## 接口重定义
 
-接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法（含 default/abstract），已有 public 实例方法在 abstract 与 default 之间切换，方法在 default/abstract、static、private 之间改变调用方式（规则同普通类，见下表 71），新增、删除或改类型静态字段，以及新增父接口。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
+接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法（含 default/abstract），已有 public 实例方法在 abstract 与 default 之间切换，方法在 default/abstract、static、private 之间改变调用方式（规则同普通类，见下表 71），新增、删除或改类型静态字段，以及新增或移除父接口。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
 
 此能力仅在 Android 13（API 33）、Android 14（API 34）、Android 15（API 35）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
 
@@ -32,11 +32,12 @@
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
 | 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 abstract 而 IfTable 探测不通过；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
-| 移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法；新父接口的 abstract 方法缺少 IfTable 探测 | `HIERARCHY_CHANGED`（66） |
+| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法；新父接口的 abstract 方法缺少 IfTable 探测 | `HIERARCHY_CHANGED`（66） |
 | 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
-| boot 接口、有 Proxy 实现类、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
+| boot 接口、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
+| 有 Proxy 实现类的接口改变父接口 | `HIERARCHY_CHANGED`（66） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
 删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 一样，要求每个已加载具体实现类都有有效实现，否则以 63 拒绝；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法，与新增 abstract 一样要求每个已加载具体实现类都有有效实现，否则以 63 拒绝，原因写明新父接口方法与缺实现的类；其 default 由实现类获得 copied default。
@@ -55,13 +56,16 @@
 
 接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
 
+`java.lang.reflect.Proxy` 生成的实现类（例如 Retrofit 服务或注解实例）保留原类与 `InvocationHandler`：保留的方法照常交给处理器，处理器收到的是新接口的 `Method`；Proxy 没有的新增 abstract 方法调用时抛 `AbstractMethodError`，新增 default 执行其方法体；之后用同一接口创建的代理复用这个类，行为相同，与 JBR 一致。新增 abstract 方法不因 Proxy 缺实现而拒绝（Proxy 没有可以同批补齐的源码），普通实现类仍按上文验收。
+
 ## 不支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
 | 方法在 static 与实例之间变化、实例方法改为 private，或已删除的方法以另一种调用方式重新加入，而批次之外仍有已加载类的代码按旧调用方式引用它，或批次类有活动帧 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化)；把这些调用方同批提交即可 |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
-| 移除接口，以及任何失去父类型的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
+| 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
+| 普通类移除接口，而该类属于本批某个接口组（实现了同批重定义的接口，或是组成员的父类），或成员映射、分派封闭不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
 
 方法删除/改签名与字段删除/改类型/存储变化在退役不可用时分别以 `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67）与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝，native 改 Java 以 71 拒绝；新增接口与父类变化在没有探测通过的类布局时以 66 拒绝；父类变化还需要校验重定向。
 
@@ -88,6 +92,14 @@
 
 - 已有实例与已加载子类的实例随即成为新接口的实例。新增的接口在重定义前经目标类的加载器加载但不初始化，其静态初始化照常在首次需要时执行；该加载器随之成为这个接口的发起加载器。
 
+
+## 移除接口的语义
+
+- 普通类可以不再实现某个接口。已有实例与已加载子类的实例随即不再是该接口的实例（`instanceof`、`isInstance` 与强制转换按新层级判断）。
+- 仍把这些对象当作被移除接口调用的已校验代码，以及字段、数组中以该接口类型保存的旧引用，调用其方法时抛 `IncompatibleClassChangeError`，与 JVM 相同；解释执行、JIT 编译后的代码与 boot 代码（例如 `Thread.run` 调用 `Runnable.run`）都如此。该类自己以被移除接口声明的静态字段若值已不实现该接口则置为 `null`（与 JBR 相同）；其他旧引用不会被置空。
+- 类从被移除接口继承的 default 方法随之消失：以类本身调用它的旧字节码抛 `NoSuchMethodError`。
+- 这些类的接口调用经分派槽位查找执行，会稍慢。之后加载的具体子类继承这一行为；失去接口的抽象类之后才加载的具体子类除外，见引擎文档[移除接口](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。
+- 接口目标也可以移除父接口：其子接口、实现类及其子类随之失去该父接口，语义同上；有 Proxy 实现类时以 66 拒绝。
 ## 方法种类的语义
 
 - 删除的 native 方法与其他方法一样退役；正在执行它的线程继续执行。native 改为 Java 后，已有的调用点、缓存的反射对象与 JNI 方法 ID 执行新的 Java 方法体。
@@ -104,7 +116,7 @@
 
 ## ART 自身的限制
 
-- 普通类结构重定义沿用 ART 的检查：数组、基本类型、代理类、`java.lang.String`、mirror 类、`java.lang.Thread` 及其子类不可重定义；在本线程类初始化过程中不能重定义该类；存在指针形式 JNI ID 的类不能做结构变化。
+- 普通类结构重定义沿用 ART 的检查：数组、基本类型、代理类、`java.lang.String`、mirror 类，以及 `java.lang.Thread` 本身和它的父类型不可重定义；应用自己的 `Thread` 子类可以重定义，已启动线程的对象身份、名称、ID、中断与 join 保持不变，正在执行的 `run()` 帧继续执行旧方法体；在本线程类初始化过程中不能重定义该类；存在指针形式 JNI ID 的类不能做结构变化。
 - `sun.misc.Unsafe`、`Atomic*FieldUpdater` 等缓存的原始字段 offset 不经过 ART 的任何入口；任何改变实例布局的结构重定义（包括新增字段）都会使其失效。
 
 ## 进程内的副作用
@@ -128,3 +140,17 @@
 - 已有对象的新增字段取零值或 `null`，不重新执行构造器；新建对象执行新构造器。
 - 结构变化会让 ART 遍历堆迁移实例、去优化所有线程帧并清空 JIT 代码，耗时随堆大小增加，提交后需要重新预热。
 - 补丁分发、签名校验和访问控制由调用方负责；`RetransformClasses` 不属于增强范围。
+
+## 与 JBR DCEVM 的对照
+
+下表对照 JetBrains Runtime 的增强重定义（`-XX:+AllowEnhancedClassRedefinition`），只列两者语义不同或需要说明的地方；方法、字段、修饰符、父类放宽、新增与移除接口、接口成员、Proxy 实现类与 `Thread` 子类的结构变化两者都接受。
+
+| 变化 | JBR DCEVM | art-dcevm |
+| --- | --- | --- |
+| 接口新增 abstract 方法，而已加载的实现类没有实现 | 接受，调用时抛 `AbstractMethodError` | 拒绝 63，提交前指出缺实现的类；Proxy 实现类除外，与 JBR 相同 |
+| 方法在 static 与实例之间变化，或改为 private，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 拒绝 71：ART 重新解析时不检查调用方式，无法抛出该错误；同批提交调用方即可接受 |
+| 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
+| 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 可能分派到同一 IMT 槽位的其他方法，见[引擎风险](STRUCTURAL_REDEFINE_ENGINE.md#风险) |
+| 类在普通类与接口等种类之间变化 | 接受，旧调用点抛 `IncompatibleClassChangeError` | 拒绝 70 |
+| boot 类、`Thread` 及其父类型、数组、代理类自身 | 部分可重定义 | 按 ART 的规则拒绝 |
+| 新类（新 lambda、匿名类） | 由 HotswapAgent 等工具定义 | 由热重载工具追加到加载器，见[提供新类](#提供新类) |

@@ -22,7 +22,7 @@ Member retirement also requires Native-phase thread and named read-barrier check
 
 ## Redefining interfaces
 
-Interface targets support body edits to default, static and private methods, new public abstract/default/static methods and private instance methods, deletion or signature changes of any method including default/abstract ones, switching an existing public instance method between abstract and default, changing a method's invoke kind among default/abstract, static and private (same rules as ordinary classes; see 71 below), adding, deleting or retyping static fields, and adding parent interfaces. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
+Interface targets support body edits to default, static and private methods, new public abstract/default/static methods and private instance methods, deletion or signature changes of any method including default/abstract ones, switching an existing public instance method between abstract and default, changing a method's invoke kind among default/abstract, static and private (same rules as ordinary classes; see 71 below), adding, deleting or retyping static fields, and adding or removing parent interfaces. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
 
 This capability is available only on Android 13 (API 33), Android 14 (API 34), Android 15 (API 35) and Android 16 (API 36) arm64 devices. Other versions disable it with a reason in `capabilities()`. Runtime declarations must still pass probes; a version number alone does not establish availability.
 
@@ -32,11 +32,12 @@ This capability is available only on Android 13 (API 33), Android 14 (API 34), A
 | Deleting or changing method signatures without member mapping | `METHOD_DELETED` (67) |
 | Field modifier changes; field additions, deletions or type changes without member mapping | `SCHEMA_CHANGED` (64) |
 | Interface method modifier changes other than abstract/default switches and invoke-kind changes; switching to abstract without a verified IfTable accessor; switching to default where it would shadow static/non-public class-chain methods | `METHOD_MODIFIERS_CHANGED` (71) |
-| Removing a parent interface; adding one without member mapping; a static/private method hiding a new parent's method, or a new parent default shadowing static/non-public class-chain methods; a new parent's abstract methods without a verified IfTable accessor | `HIERARCHY_CHANGED` (66) |
+| Removing a parent interface without member mapping or dispatch sealing; adding one without member mapping; a static/private method hiding a new parent's method, or a new parent default shadowing static/non-public class-chain methods; a new parent's abstract methods without a verified IfTable accessor | `HIERARCHY_CHANGED` (66) |
 | An added interface is rebuilt by the batch, and the new class and that rebuild depend on each other, or the new class precedes it within one rebuild | `HIERARCHY_CHANGED` (66) |
 | Changing the kind between interface, annotation and enum (an interface's access level, synthetic and similar modifiers may change as a class's) | `CLASS_MODIFIERS_CHANGED` (70) |
 | An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |
-| A boot interface, a Proxy implementation, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
+| A boot interface, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
+| An interface with Proxy implementations changing its parent interfaces | `HIERARCHY_CHANGED` (66) |
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
 
 A deleted default/abstract method retires like an ordinary-class method: bytecode calls through the interface or an implementation, cached reflection, JNI and MethodHandle throw `NoSuchMethodError`, while a same-named method declared by an implementation stays. A signature change retires the old signature and adds the new one. Switching a default to abstract requires, like an abstract addition, a valid implementation in every loaded concrete implementation, otherwise 63; switching abstract to default gives implementations without their own declaration a copied default. The interface is initialized before redefinition, so an added static field keeps its default value; as for a class, an added or changed `<clinit>` never runs on an initialized interface; callers usually inline constant expressions. When a parent interface is added, the abstract methods of the new parent, and of its parents the target did not inherit, require like abstract additions a valid implementation in every loaded concrete implementation, otherwise 63 naming the new parent method and the class without it; their defaults reach implementations as copied defaults.
@@ -55,6 +56,8 @@ Interface groups whose subtypes intersect, and a structurally edited class outsi
 
 Even a body-only interface edit reallocates every instance of all loaded implementations and their subclasses, preserves compatible fields, rewrites references and deoptimizes code. Its cost grows with affected instance count and heap size. Existing instances do not run their constructors again.
 
+
+Classes generated by `java.lang.reflect.Proxy` (for example Retrofit services or annotation instances) keep their class and `InvocationHandler`. Kept methods still reach the handler, which receives the new interface's `Method`; a new abstract method the Proxy lacks throws `AbstractMethodError` when called, and a new default runs its body. Proxies created later for the same interface reuse that class and behave the same, as with JBR. A new abstract method is not rejected because a Proxy lacks it (a Proxy has no source to update in the same batch); ordinary implementations are still checked as described above.
 ## Unsupported changes
 
 These changes are rejected with a JVMTI error, leaving the old definitions intact.
@@ -63,7 +66,8 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 | --- | --- | --- |
 | Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind, while code of a loaded class outside the batch still names it with the old kind or a batch class has an active frame | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kind changes](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kind-changes). Submit those callers in the same batch |
 | Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
-| Removing an interface, or changing the superclass in a way that drops an existing supertype | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
+| Changing the superclass in a way that drops an existing superclass | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
+| An ordinary class removing an interface while it belongs to an interface group of the batch (it implements an interface the batch redefines, or is the superclass of a group member), or without member mapping or dispatch sealing | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | See [removing interfaces](#removing-interfaces) |
 
 When retirement is unavailable, method deletion or signature changes are rejected with `UNSUPPORTED_REDEFINITION_METHOD_DELETED` (67), and field deletion, type changes or storage changes with `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED` (64). Changing native to Java is rejected with 71. Adding an interface or changing the superclass is rejected with 66 when no probed class layout is available. Superclass changes also require verification redirection.
 
@@ -92,6 +96,14 @@ The following conflicts reject the transaction:
 
 - Existing instances and instances of loaded subclasses immediately become instances of the new interface. The interface is loaded through the target's loader before redefinition, without initialization. Its static initialization runs when first needed, as usual; the target's loader becomes an initiating loader for the interface.
 
+
+## Removing interfaces
+
+- An ordinary class may stop implementing an interface. Its existing instances and those of loaded subclasses immediately stop being instances of that interface (`instanceof`, `isInstance` and casts follow the new hierarchy).
+- Verified code that still calls them as the removed interface, and old references stored in fields or arrays typed with it, throw `IncompatibleClassChangeError` when calling its methods, as on a JVM. This holds for interpreted code, JIT-compiled code and boot code (for example `Thread.run` calling `Runnable.run`). The class's own static fields declared with the removed interface become `null` when the value no longer implements it, as on JBR; other old references are not cleared.
+- Default methods the class inherited from the removed interface disappear: old bytecode that calls one on the class throws `NoSuchMethodError`.
+- Interface calls on these classes are looked up through their dispatch slots and become slightly slower. Concrete subclasses loaded later inherit this, except a concrete subclass, loaded later, of an abstract class that lost the interface; see [removing interfaces](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces) in the engine design.
+- An interface target may also remove a parent interface: its subinterfaces, implementations and their subclasses lose it, with the same semantics; with Proxy implementations it is rejected with 66.
 ## Method kinds
 
 - A deleted native method is retired like any other method. Threads already executing it continue to do so. When a native method becomes Java, existing call sites, cached reflection objects and JNI method IDs execute the new Java body.
@@ -108,7 +120,7 @@ The following conflicts reject the transaction:
 
 ## ART's own restrictions
 
-- Ordinary class structural redefinition retains ART's checks: arrays, primitive types, proxy classes, `java.lang.String`, mirror classes, `java.lang.Thread` and its subclasses cannot be redefined. A class cannot be redefined while its initializer is executing on the current thread. Classes with pointer-form JNI IDs cannot undergo structural changes.
+- Ordinary class structural redefinition retains ART's checks: arrays, primitive types, proxy classes, `java.lang.String`, mirror classes, and `java.lang.Thread` itself and its supertypes cannot be redefined. Application subclasses of `Thread` can be: a started thread keeps its object identity, name, ID, interruption and join, and an executing `run()` frame continues the old body. A class cannot be redefined while its initializer is executing on the current thread. Classes with pointer-form JNI IDs cannot undergo structural changes.
 - Raw field offsets cached by `sun.misc.Unsafe`, `Atomic*FieldUpdater` and similar APIs bypass ART's entry points. Any structural redefinition that changes the instance layout, including adding fields, invalidates those offsets.
 
 ## Process-wide effects
@@ -132,3 +144,17 @@ Appending only adds to the end of the loader's path, cannot be undone and does n
 - Fields added to existing objects start at zero or `null`; their constructors are not run again. New objects execute the new constructors.
 - Structural changes make ART walk the heap to migrate instances, deoptimize every thread's frames and clear JIT code. The cost grows with heap size, and code needs to warm up again afterwards.
 - Patch delivery, signature verification and access control are the caller's responsibility. `RetransformClasses` is outside the enhanced scope.
+
+## Comparison with JBR DCEVM
+
+This table compares JetBrains Runtime's enhanced redefinition (`-XX:+AllowEnhancedClassRedefinition`), listing only behavior that differs or needs a note. Both accept structural changes to methods, fields and modifiers, superclass widening, adding and removing interfaces, interface members, Proxy implementations and `Thread` subclasses.
+
+| Change | JBR DCEVM | art-dcevm |
+| --- | --- | --- |
+| A new abstract interface method that a loaded implementation does not implement | Accepted; calls throw `AbstractMethodError` | Rejected with 63 before commit, naming the class; Proxy implementations behave as on JBR |
+| A method switching between static and instance, or becoming private, while loaded code outside the batch still calls the old kind | Accepted; calls re-resolve and throw `IncompatibleClassChangeError` | Rejected with 71: ART re-resolves without checking the invoke kind and cannot throw that error. Submitting the callers in the same batch is accepted |
+| Superclass narrowing (the new chain omits an old superclass) | Rejected | Rejected with 66 |
+| A concrete subclass, loaded later, of an abstract class that lost an interface | Dispatches by the new hierarchy | May dispatch to another method in the same IMT slot; see [engine risks](STRUCTURAL_REDEFINE_ENGINE.en.md#risks) |
+| Switching a class between class, interface and other kinds | Accepted; old call sites throw `IncompatibleClassChangeError` | Rejected with 70 |
+| Boot classes, `Thread` and its supertypes, arrays, proxy classes themselves | Partly redefinable | Rejected under ART's rules |
+| New classes (new lambdas, anonymous classes) | Defined by tools such as HotswapAgent | Appended to the class loader by the reload tool; see [providing new classes](#providing-new-classes) |

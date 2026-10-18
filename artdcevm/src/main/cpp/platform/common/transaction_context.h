@@ -42,6 +42,9 @@ struct Requirements {
   // During ART verification, resolve the descriptor to the target's
   // replacement. Superclass changes and interface groups need it.
   bool redirect_verification = false;
+  // The target stops implementing an interface: seal the interface dispatch of
+  // its replacement classes before ART's no-failure point (imt_sealing.h).
+  bool seal_dispatch = false;
   // Added interfaces (global references) that the batch may also rebuild: the
   // target links their replacements, so those rebuilds are allocated first.
   std::vector<jclass> linked_interfaces;
@@ -50,6 +53,8 @@ struct Requirements {
   // (global references): their structural rebuilds are allocated first, and
   // the target links under the replacement of its new superclass.
   std::vector<jclass> chain_rebuilds;
+  // Statics typed with an interface the target stops implementing (imt_sealing.h).
+  std::vector<RetypedType> narrowed_statics;
 };
 
 struct Context {
@@ -62,6 +67,7 @@ struct Context {
   std::unique_ptr<Part> dispatch;  // Pending interface dispatch obligations.
   std::unique_ptr<Part> verification;  // Current verification redirection scope.
   std::unique_ptr<Part> thread;  // Native-probed runtime thread services.
+  std::unique_ptr<Part> proxies;  // Proxy classes of interface targets (proxy_relink.h).
   // Source-declared class layouts (class_layout.h) that every probe of this
   // transaction accepted, as a mask over the layout table; `probed` once any
   // probe ran.

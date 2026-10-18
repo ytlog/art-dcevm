@@ -5,6 +5,8 @@
 #include "platform/common/art_hook.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/fault_injection.h"
+#include "platform/common/imt_sealing.h"
+#include "platform/common/proxy_relink.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/runtime_thread.h"
@@ -113,6 +115,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // target may evolve its members whenever the engine owns the mapping.
   abilities.interface_members = abilities.member_mapping;
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
+  abilities.interface_removal = abilities.member_mapping && imt_sealing::Available();
   abilities.batch_interfaces = interfaces && interfaces->Available();
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
@@ -156,6 +159,13 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
                       (decision.superclass_changed ? ", which changes its superclass too"
                                                    : ", whose rebuild cannot be allocated first");
   }
+  // An interface group re-links its members and their ancestors in its own
+  // allocation, which does not seal interface dispatch.
+  if (decision.error == JVMTI_ERROR_NONE && decision.interfaces_removed && !interface_target &&
+      interfaces && (interfaces->IsAffected(self) || interfaces->SharesImplementationGroup(self))) {
+    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+    decision.reason = "interface removal overlaps an interface group of the batch";
+  }
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
     if (std::string callers = KindCallers(*thread, self, snapshot, *batch, decision.kind_changes); !callers.empty()) {
       decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
@@ -182,6 +192,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
+  requirements.seal_dispatch = decision.interfaces_removed;
   requirements.linked_interfaces.clear();
   if (snapshot.hierarchy.added_interface_in_batch)
     for (const auto& [descriptor, type] : snapshot.interface_classes) requirements.linked_interfaces.push_back(type);
@@ -189,6 +200,10 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   requirements.retyped_fields.clear();
   for (const auto& field : snapshot.retyped_fields)
     requirements.retyped_fields.push_back({field.name, field.is_static, field.descriptor, field.type});
+  requirements.narrowed_statics.clear();
+  if (decision.interfaces_removed)
+    for (const auto& field : snapshot.narrowed_statics)
+      requirements.narrowed_statics.push_back({field.name, field.is_static, field.descriptor, field.type});
   requirements.redirect_verification = decision.superclass_changed || snapshot.moved_ancestor ||
       !requirements.linked_interfaces.empty() || (interfaces && interfaces->IsAffected(self));
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
@@ -263,6 +278,11 @@ bool CheckInstances(const runtime_thread::VerifiedThread& thread,
   }
   return true;
 }
+bool SealsDispatch(const transaction::Context& context) {
+  for (const auto& [target, requirements] : context.targets)
+    if (requirements.seal_dispatch) return true;
+  return false;
+}
 bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) noexcept try {
   interface_redefinition::Backend* interfaces = InterfaceBackend();
   auto* context = transaction::Current();
@@ -278,8 +298,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         named("a subtype of a redefined class was loaded during the transaction"));
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
   const auto collect = reinterpret_cast<Function>(process->original_instances);
-  if (!collect(self, data)) return false;
-  if (interfaces && !interfaces->CompleteInstances(self, data, collect)) return false;
+  if (interfaces ? !interfaces->CompleteInstances(self, data, collect) : !collect(self, data)) return false;
   // Corrupt only the transaction-private holder; cleanup roots are independent.
   ARTDCEVM_TEST(
     if (ARTDCEVM_FAULT_IF(4, (interfaces && interfaces->IsTarget(self)) && data->Classes(true))) {
@@ -302,6 +321,17 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         !member_mapping::CheckDefaultConflicts(*data, &rejection))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                              std::move(rejection));
+    if (!proxy_relink::Plan(*thread, self, *data, selected, &why))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                             named(("Proxy implementation cannot be relinked: " + why).c_str()));
+    // Last: every check above may still reject, and only the unpublished
+    // replacements change here.
+    // An interface group's replacements sit in its owner entry's arrays, which
+    // need not be the entry of the interface that dropped a parent: once any
+    // target of the transaction narrows, every entry's replacements are sealed.
+    if (SealsDispatch(*context) && !imt_sealing::Seal(*thread, self, *data, selected, &why))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                             named(("interface dispatch cannot be sealed: " + why).c_str()));
     class_layout::Select(selected);
     if (ARTDCEVM_FAULT(22))
       return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY,

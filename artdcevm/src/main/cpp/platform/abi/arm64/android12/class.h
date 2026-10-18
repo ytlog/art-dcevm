@@ -37,11 +37,18 @@ struct Class {
   uint32_t primitive_type;
   uint32_t reference_instance_offsets;
   uint32_t status;
+  // copied_methods_offset_ and virtual_methods_offset_ end the object.
+  uint16_t copied_methods_offset, virtual_methods_offset;
 };
 static_assert(offsetof(Class, ifields) == 40 && offsetof(Class, methods) == 48 &&
               offsetof(Class, sfields) == 56 && offsetof(Class, access_flags) == 64);
 
 static_assert(offsetof(Class, status) == 112);
+
+// sizeof(mirror::Class) (MANAGED is PACKED(4)): Class::EmbeddedVTableLengthOffset.
+// The embedded IMT pointer follows at ImtPtrOffset = RoundUp(this + 4, 8).
+inline constexpr size_t ObjectSize(const Class*) { return offsetof(Class, virtual_methods_offset) + sizeof(uint16_t); }
+static_assert(ObjectSize(nullptr) == 120);
 
 // Class.java names used to probe the fixed native slots through ART.
 inline constexpr std::array<const char*, 2> kFieldArrayNames{"iFields", "sFields"};

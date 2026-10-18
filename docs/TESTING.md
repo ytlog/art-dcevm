@@ -37,7 +37,7 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
   --scenario-group full --checkjni-mode checkjni
 ```
 
-`ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
+`ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，`thread-subclass` 单独运行应用 `Thread` 子类场景，`interface-removal` 单独运行接口移除与恢复场景，`proxy-interface` 单独运行 Proxy 实现类场景，`interface-drop-parent` 单独运行接口移除父接口场景，这些都不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
 
 ## 失败恢复与故障隔离
 
@@ -149,7 +149,9 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | `methodDeletion`、`methodSignatureChange`、`interfaceAddition` | 方法退役 Hook 已安装 |
 | `fieldDeletion`、`fieldTypeChange`、`memberDeletion`、`memberTypeChange` | 字段守卫也可用 |
 | `superclassWidening` | 方法退役 Hook 与校验重定向均已安装 |
-| `hierarchyChange`、`fullDcevmComplete` | 始终为 false：收窄不支持，完整 DCEVM 尚未完成 |
+| `interfaceRemoval` | 方法退役 Hook 已安装且接口分派封闭服务可用；普通类可以移除接口 |
+| `interfaceDispatchSealing` | `available` 或 `unavailable: 原因`（命名 `Runtime::CreateImtConflictMethod`、`LinearAlloc::Alloc` 或类加载器分配器读取不可用） |
+| `hierarchyChange`、`fullDcevmComplete` | 始终为 false：父类收窄不支持，完整 DCEVM 尚未完成 |
 | `interfaceRedefinition` | 布尔值；安装且 Class/Thread/HandleScope/holder 全部探测通过时为 true。初始化后尚未探测、版本或服务不可用、进程级探测停用时为 false；单个目标拒绝不清除此值 |
 | `interfaceRuntime` | `unavailable`、`unverified: interface runtime declarations`、`verified: androidNN Class/Thread/HandleScope/holder probes` 或 `disabled: 原因`；可用版本仅 API 33–36，其他版本禁用并说明原因 |
 | `interfaceAbstractMethodAddition` | 接口运行时与分派探测均通过、必要链接错误服务可用时为 true；每次事务仍须全部实现类验收 |

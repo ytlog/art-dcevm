@@ -104,6 +104,11 @@ struct Abilities {
   // An added interface the batch also rebuilds can link as its replacement:
   // the engine allocates that rebuild first.
   bool batch_interfaces = false;
+  // An ordinary class may stop implementing interfaces: the engine seals the
+  // interface dispatch of its replacement classes so that verified callers
+  // still treating them as the removed interface throw
+  // IncompatibleClassChangeError (requires member_mapping).
+  bool interface_removal = false;
   std::string interface_abstract_unavailable_reason = {};
 };
 
@@ -125,6 +130,8 @@ struct Decision {
   bool requires_member_mapping = false;
   // ART must link the new class under the new superclass.
   bool superclass_changed = false;
+  // The class stops implementing some interface: seal its replacements' dispatch.
+  bool interfaces_removed = false;
   // Added public abstract interface declarations, checked on the linked group.
   std::vector<MemberKey> interface_obligations;
   // Abstract methods of added parent interfaces, by declaring interface

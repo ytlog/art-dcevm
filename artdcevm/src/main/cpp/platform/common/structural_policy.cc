@@ -85,17 +85,27 @@ Decision CheckCopiedMembers(const ClassSchema& live, const ClassSchema& incoming
 // ART links the new class's direct interfaces by looking each up in its class
 // loader (ClassLinker::LookupResolvedType) and checks only that it is an
 // interface; the access check of LoadSuperAndInterfaces is not on that path.
-// Removing an interface would narrow the type of live instances.
+// Removing an interface narrows the type of live instances. Verified code may
+// still treat them as the removed interface; an ordinary class may drop it
+// only when the engine seals its replacements' interface dispatch, so such
+// calls throw IncompatibleClassChangeError as on a JVM.
 Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
                          const LoadedHierarchy& hierarchy, const Abilities& abilities) {
   const std::set<std::string> before(live.interfaces.begin(), live.interfaces.end());
   const std::set<std::string> after(incoming.interfaces.begin(), incoming.interfaces.end());
   if (after.size() != incoming.interfaces.size())
     return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "duplicate interface");
-  for (const auto& old : live.interfaces)
-    if (!after.count(old))
+  Decision decision;
+  for (const auto& old : live.interfaces) {
+    if (after.count(old)) continue;
+    // An interface target drops a parent for its whole implementation group,
+    // which the interface engine re-links (interface_members).
+    if (!abilities.member_mapping || !abilities.interface_removal ||
+        ((live.access & acc::kAccInterface) && !abilities.interface_members))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                     "interface removed: " + old);
+    decision.interfaces_removed = true;
+  }
   // The new class links the added interface's published Class: one the batch
   // also replaces would leave its copied defaults and slots on the old version.
   if (hierarchy.added_interface_in_batch && !abilities.batch_interfaces)
@@ -115,7 +125,7 @@ Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
     if (!(access & acc::kAccPublic) && !resolved->second.same_runtime_package)
       return Reject(JVMTI_ERROR_FAILS_VERIFICATION, "added interface is inaccessible: " + added);
   }
-  return {};
+  return decision;
 }
 // AllocateNewClassObject links the new class under the superclass the engine
 // supplies; LinkClass alone would fail with a link error for a final or
@@ -305,7 +315,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   Decision decision;
   decision.requires_no_instances = becomes_abstract;
   decision.superclass_changed = superclass_changed;
-  decision.requires_member_mapping = superclass_changed;
+  decision.interfaces_removed = interfaces.interfaces_removed;
+  // Copies of the removed interfaces' methods vanish from the re-linked classes.
+  decision.requires_member_mapping = superclass_changed || interfaces.interfaces_removed;
   if (interface_target && parents_changed) {
     // CheckInterfaces already rejected removed or unresolvable parents.
     Decision parents = CheckInterfaceParents(incoming, hierarchy, abilities);

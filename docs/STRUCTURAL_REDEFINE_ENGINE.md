@@ -90,7 +90,7 @@ ART 的结构事务分两步处理子类：
 
 每组新旧 `Class[]` 在 Native 快照阶段通过公开 `NewObjectArray` 创建并提升为 JNI 全局引用。`ClassArrayRoots` 随事务持有它们，在返回 Native 后释放；任一数组或全局引用创建失败都在进入 ART 前拒绝并清理。Runnable 分配阶段只调用命名 `JavaVMExt::DecodeGlobal` 读取当前根，并立即放入 ART HandleScope；不缓存跨分配的裸对象指针，不调用私有 `ObjectArray::Alloc` 或选择 allocator。固定 [11 声明](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/jni/java_vm_ext.h)至 [17 实现](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/jni/java_vm_ext.cc)的签名一致。失败替换类仍先由 Run 清理，再释放数组全局根。
 
-API 33–36 的接口引擎接受多个接口目标受支持的方法体与成员更新，可与无关类、实现类或实现类的子类同批。父子接口合并到最高批次父接口的一组；其余接口根的已加载子类型若相交，经并查集合并为一组，互不相交的各自一组，每个类型只被替换和迁移一次。ART 的 `CollectAndCreateNewInstances` 在 11–17 都只收集 `InstanceOf(拥有者条目的类)` 的实例，因此 Native 快照为每个候选拥有者按“该拥有者在前”生成拓扑顺序（私有数组只取决于长度，各顺序共用），并记下每个类型最先可赋值的根；覆盖全部具体（非接口、非 abstract）成员的拥有者排在前面。没有覆盖拥有者时，引擎在 `CollectAndCreateNewInstances` 原函数之后，把 holder 的原类槽位依次换成其余各根并再调用原函数，由 ART 收集实例并分配替换实例；每轮只保留类的首个根正是该轮的实例，经公开 JNI 在本 Runnable 线程分配合并数组并写回 holder，再恢复槽位。实例的分配与迁移仍由 ART 完成。接口的替换类由自有分配路径准备，无关类使用 ART 原分配路径，校验、提交与失败返回仍属于同一 ART 原子事务。holder 按实际批次核对数组长度、固定 `ClassRedefinition` 元素声明及三个标志 vector，并使用 ART 排序后的条目索引。它在 Native 状态复用标准入口的 `GetLoadedClasses` 快照，收集全部已准备的实现类、实现类子类及子接口，使用公开 `Proxy.isProxyClass` 拒绝 Proxy；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
+API 33–36 的接口引擎接受多个接口目标受支持的方法体与成员更新，可与无关类、实现类或实现类的子类同批。父子接口合并到最高批次父接口的一组；其余接口根的已加载子类型若相交，经并查集合并为一组，互不相交的各自一组，每个类型只被替换和迁移一次。ART 的 `CollectAndCreateNewInstances` 在 11–17 都只收集 `InstanceOf(拥有者条目的类)` 的实例，因此 Native 快照为每个候选拥有者按“该拥有者在前”生成拓扑顺序（私有数组只取决于长度，各顺序共用），并记下每个类型最先可赋值的根；覆盖全部具体（非接口、非 abstract）成员的拥有者排在前面。没有覆盖拥有者时，引擎在 `CollectAndCreateNewInstances` 原函数之后，把 holder 的原类槽位依次换成其余各根并再调用原函数，由 ART 收集实例并分配替换实例；每轮只保留类的首个根正是该轮的实例，经公开 JNI 在本 Runnable 线程分配合并数组并写回 holder，再恢复槽位。实例的分配与迁移仍由 ART 完成。接口的替换类由自有分配路径准备，无关类使用 ART 原分配路径，校验、提交与失败返回仍属于同一 ART 原子事务。holder 按实际批次核对数组长度、固定 `ClassRedefinition` 元素声明及三个标志 vector，并使用 ART 排序后的条目索引。它在 Native 状态复用标准入口的 `GetLoadedClasses` 快照，收集全部已准备的实现类、实现类子类及子接口，使用公开 `Proxy.isProxyClass` 把 Proxy 类从重建组中分出，交给 [Proxy 实现类](#proxy-实现类)；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
 
 同批实现类与子类按它们自己的新 DEX 和 holder 的新 DexCache 分配；未提交 DEX 的受影响类型仍用原 DEX 的私有链接缓存。`FinishNewClassAllocations` 的第一个受影响条目先完成接口整组分配，与 ART 按父类深度生成的条目顺序无关。固定 holder 声明经全批探测后，只在事务私有的 `initialized_`、`actually_structural_`、`initial_structural_` 中标记整组：接口为唯一初始结构条目，同批实现类条目已分配且不是初始结构条目，后续分配跳过。与 ART 的 `setup_single_redefinition` 一样，各条目保留自己的新类槽位用于 DEX 校验，但只有接口条目携带整组新旧类及实例数组，原 `CollectAndCreateNewInstances`、公共映射计划和 `UpdateClassStructurally` 因而仅处理整组一次。“类加 abstract”对整组收集的实例检查各目标，避免从属条目的空实例数组漏检。实现类的新增、退役与修饰符仍由现有策略评估。实现类的外部父类（批次中不属于任何接口根类型关系、却是组内类型父类的类）作为组的候选祖先：Native 阶段另外选出其已加载子树，生成含祖先子树的扩展成员与候选拥有者。`CheckAllRedefinitionAreValid` 与 `MarkStructuralChanges` 在分配之前完成，组内第一个受影响条目据此选择：任一祖先条目确需结构路径时使用扩展成员，否则使用接口成员，祖先仍由 ART 原地更新；随后取第一个为 ART 初始结构条目的候选作为拥有者，覆盖全部具体成员者优先，其余根的实例按上述轮次收集。扩展成员中只改方法体的祖先随之走结构路径。祖先改变父类仍以 66 拒绝，因为整组按未变的父类链链接。结构祖先自身的 pointer-id 子类型检查由 ART 对该目标的准入完成。校验重定向也覆盖本事务整组的新类，按命名 `LookupClass` 和类加载器身份匹配原类，仅本线程的 `CheckVerification` 返回替换类；旧类表和旧 DexCache 不写入替换类。
 
@@ -141,7 +141,7 @@ Thread 布局表位于 `platform/abi/arm64/runtime_thread_table.h`，编译期�
 
 ## 接口成员演进
 
-Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 的 arm64 接口目标在运行时与成员映射探测通过后，支持新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法，已有 public 实例方法在 abstract 与 default 之间切换，静态字段的增删与改类型，以及新增父接口。新增 native 以 63 拒绝；新增 `<clinit>` 与普通类一样接受但不会在已初始化的接口上执行；字段修饰符、移除父接口与其余方法修饰符变化仍分别拒绝 64、66、71。
+Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 的 arm64 接口目标在运行时与成员映射探测通过后，支持新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法，已有 public 实例方法在 abstract 与 default 之间切换，静态字段的增删与改类型，以及新增或移除父接口（移除见[移除接口](#移除接口)）。新增 native 以 63 拒绝；新增 `<clinit>` 与普通类一样接受但不会在已初始化的接口上执行；字段修饰符与其余方法修饰符变化仍分别拒绝 64、71。
 
 删除的 default/abstract 声明按普通退役映射到自身；重链接后的实现类不再携带的 copied default/miranda 走现有“消失的 copied 方法映射到声明类的 canonical 成员”路径，canonical 即已退役的旧声明，因此 DexCache 清除、重新解析抛 `NoSuchMethodError`，JNI、反射与 MethodHandle 由现有守卫拒绝。default 改为 abstract 复用新增 abstract 的待验证条件与 IfTable 验收；abstract 改为 default 复用新增 default 的 `subtype_shadows` 检查，冲突仍由映射计划拒绝。字段沿用普通类的字段退役与静态字段复制；接口在准入时已初始化，新增静态字段取默认值。
 
@@ -184,7 +184,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 接口目标的方法体更新 | 接受；需接口运行时探测与成员映射通过 |
 | 接口目标新增 public abstract/default/static/private 实例方法；删除或改签名任一方法；public 实例方法 abstract ↔ default；静态字段增删或改类型 | 成员映射与接口运行时可用、且继承／遮蔽／default 冲突与 abstract 分派检查通过时接受 |
 | 接口目标新增 native；新增 abstract 无有效实现或 IfTable 探测不通过；direct 遮蔽或 default 冲突 | 拒绝 `METHOD_ADDED`（63） |
-| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；移除父接口或新父接口方法遮蔽检查失败；类种类变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
+| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；新父接口方法遮蔽检查失败；类种类变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
 | 接口运行时能力不可用（版本、命名服务或探测不支持） | 拒绝 `NOT_AVAILABLE`（98）；声明变化使用上述标准错误码 |
 | 新增字段、方法 | 接受 |
 | 已有成员的访问级别、final、volatile、transient、synchronized 变化（实例方法改为 private 除外）；Java → native；abstract ↔ concrete | 接受 |
@@ -198,7 +198,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 而有已加载子类时拒绝 `CLASS_MODIFIERS_CHANGED`（70）；加 abstract 而该类自身仍有实例时，在 `CollectAndCreateNewInstances` 之后拒绝 70 |
 | 类在接口、注解、枚举之间变化 | 拒绝 70 |
 | 新增接口（可同时调整顺序） | 运行时标志可读取且解析与访问检查通过时接受，普通类不单独依赖成员映射，接口目标需要；该接口本身或其父接口同批重建时先完成该重建并链接其替换类；无法解析、不是接口或不可访问时拒绝 `FAILS_VERIFICATION`（62）；没有可用布局读取标志时拒绝 `HIERARCHY_CHANGED`（66）；使用自有映射时新产生的 default 冲突拒绝 63 |
-| 移除接口；重复接口 | 移除拒绝 66（见[收窄不支持](#收窄不支持)）；重复拒绝 62 |
+| 移除接口；重复接口 | 普通类与接口目标（移除父接口）在成员映射与分派封闭可用时接受，见[移除接口](#移除接口)；普通类属于本批的接口组，或上述服务不可用时拒绝 66；重复拒绝 62 |
 | 父类变化 | 新父类扩展原父类时接受；其余按[放宽的父类变化](#放宽的父类变化)中的条件以 62、61 或 66 拒绝 |
 
 ## 运行时探测
@@ -301,14 +301,37 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
 
 B 不在重定义时初始化，其静态初始化照常在首次需要时执行；已有实例不执行 B 的构造器。
 
+## 移除接口
+
+普通类 T 不再实现接口 L（直接移除，或因此失去 L 的父接口）时，已校验的代码仍可能把 T 的值当作 L 使用：ART 校验器不检查 invoke-interface 的接收者（[method_verifier.cc](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/verifier/method_verifier.cc)），`L l = t;` 这类代码也不带运行时转换。解释器经 `FindVirtualMethodForInterface` 按接收者的 IfTable 查找，找不到时抛 `IncompatibleClassChangeError`；IMT 冲突蹦床在冲突表未命中时回到同一查找（[artInvokeInterfaceTrampoline](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/entrypoints/quick/quick_trampoline_entrypoints.cc)）。不检查接收者的只有 IMT 中的直接项：JIT 代码、boot 镜像的 AOT 代码与 nterp 按 L 方法的 IMT 槽位取出实现直接调用，ART 自己在 arm64 代码生成器中把这一点记为 b/18116999。只有一个方法的槽位直接存放该实现（`ClassLinker::SetIMTRef`），调用可能跳到 T 的其他方法。
+
+引擎因此在 `CollectAndCreateNewInstances` 的最后（ART 仍可失败、新类尚未发布）封闭目标及其已加载子类中每个具体替换类的接口分派：从该类加载器的 LinearAlloc（经 ART 字段查找读取 `ClassLoader.allocator`）分配一张新 IMT，每个槽位放一个由命名 `Runtime::CreateImtConflictMethod` 新建、带空冲突表的冲突方法，再写入该类的嵌入 IMT 指针。此后对这些类的每次接口调用都经冲突蹦床：命中时 ART 以 `AddMethodToConflictTable` 填充该槽位自己的表；L 的方法查不到，抛 `IncompatibleClassChangeError`，与 JVM 一致。每个槽位使用独立的冲突方法，因为 ART 原地修改非共享冲突方法的表，而子类会逐槽复制父类的 IMT。
+
+- **布局**：11–17 的 `Class::ImtPtrOffset` 都是 `RoundUp(sizeof(Class) + 4, 8)`，`sizeof(Class)` 来自各版本固定声明（11–16 以 `virtual_methods_offset_` 结尾，17 以 `status_` 结尾）。写入前核对嵌入 vtable 长度落在类大小之内、每个自有或拷贝的虚方法位于其 `method_index` 处，以及 IMT 每个槽位非空；不符时以 66 拒绝。LinearAlloc 分配使用命名 `LinearAlloc::Alloc`，ART 14 起的版本带 `LinearAllocKind::kNoGCRoots`。
+- **之后加载的子类**：11–17 的 `LinkClass` 从父类的 IMT 开始（`FillImtFromSuperClass`／`LinkMethods`），只对子类新实现所在的槽位调用 `SetIMTRef`。这些槽位已是运行时方法，结果为冲突方法，不会出现直接项；未重新设置的槽位沿用父类的冲突方法，其查找结果对子类同样成立。抽象类没有 IMT，它之后才加载的具体子类从 IfTable 重建 IMT，仍可能出现直接项，见[风险](#风险)。
+- **成员**：被移除接口的 copied default/miranda 从重链接的类中消失，沿用“消失的 copied 方法映射到声明类的 canonical 成员”路径，旧 `invoke-virtual` 重新解析时抛 `NoSuchMethodError`。因此移除需要自有成员映射。
+- **接口目标移除父接口**：接口 L 不再继承 M 时，L 的整个重建组（子接口、实现类及其子类）失去 M。接口组的替换类保存在拥有者条目的数组中，未必是 L 的条目，因此事务中只要有目标收窄，每个条目的替换类都被封闭；没有类数组的条目跳过。有 Proxy 实现类时仍以 66 拒绝（见 [Proxy 实现类](#proxy-实现类)）。
+- **拒绝**：普通类目标属于本批某个接口组（实现了同批重建的接口，或是组成员的父类）时 66，因为接口组自行分配这些类而不封闭分派；成员映射或封闭服务不可用时 66。
+- **已有引用**：与 JBR 一致，目标类自己以被移除接口声明的静态字段，在 `UpdateClassStructurally` 替换引用之后若值已不实现该接口则置 null（Native 阶段解析接口类型，提交时用 `Planner::Assignable` 判断）；实例字段、数组、局部变量与其他类的字段保持不变，经它们调用 L 的方法抛 `IncompatibleClassChangeError`。
+- **边界**：非 CheckJNI 的 JNI 调用与 `MethodHandle` 以不实现 L 的接收者调用 L 的方法时，ART 找不到实现即进入未定义行为，与 JVM 上对应的误用相同。
+
+## Proxy 实现类
+
+`java.lang.reflect.Proxy` 生成的类没有 DEX，ART 无法为它重新 `LinkClass`；它的实例也只持有 `InvocationHandler`，无需迁移。因此接口目标的 Proxy 实现类保留原 Class，只在提交时把它 IfTable 中该接口的方法数组换成为新接口建立的数组（`proxy_relink.{h,cc}`）：
+
+- **Native**：组快照把 Proxy 类单独列出；对每个 Proxy 类及其实现的每个接口目标，按提交的 DEX 中新接口的虚方法数用 JNI 预分配 `long[]`（即 arm64 的 PointerArray），保留全局根。新定义改变父接口时以 66 拒绝，因为 Proxy 的 IfTable 无法增加接口项。
+- **提交前**（`CollectAndCreateNewInstances`，该接口自己的重定义）：核对 Proxy 的 IfTable 恰好有一项指向旧接口；按名称与完整描述符，把新接口的第 j 个虚方法对应到 Proxy 方法（其 `data_` 是生成时的接口方法），没有对应的则放新接口方法本身。新增 abstract 方法因此经解释器入口抛 `AbstractMethodError`，新增 default 执行其方法体，与 JVM 上重新链接的 Proxy 类一致；Proxy 类按 `Proxy` 缓存被新代理复用，同样如此。同时为该 Proxy 类建立封闭的 IMT（见[移除接口](#移除接口)），因为新方法可能落在其他槽位。
+- **提交时**（`UpdateClassStructurally` 之后，所有线程已挂起，不调用 JNI）：ART 的引用替换已把 IfTable 的接口项换成新接口；经命名 `JavaVMExt::DecodeGlobal` 取得数组，原始写入 IfTable 的方法数组项并按固定源码执行写屏障：在当前线程 `tlsPtr_.card_table`（偏置起点）的 `地址 >> 10` 处写入 `0x70`（`CardTable::MarkCard`，11–17 一致）。随后把对应的 Proxy 方法的 `data_` 与 `dex_method_index` 改为新接口方法，使 `InvocationHandler` 收到新接口的 `Method`，再发布封闭的 IMT。
+
+- **实例收集**：ART 的 `CollectAndCreateNewInstances` 收集所有 `InstanceOf(接口)` 的对象，会把 Proxy 实例也收进来，却找不到它的替换类（release 构建中查找越过类数组末尾）。因此有 Proxy 时，组的每个候选拥有者改用类根：重建组中父类不在组内的每个类；接口没有类根。包括第一轮在内的每一轮都把条目的类暂时设为该类根后调用 ART 的收集，再按类根合并，Proxy 实例从不进入收集。
+
+被删除的接口方法不再出现在 IfTable 中，旧字节码重新解析时抛 `NoSuchMethodError`；Proxy 自己的方法仍保留旧原型。Proxy 的调用处理入口与 `Proxy` 缓存都不需要改动。
+
 ## 收窄不支持
 
-失去任何父类型（移除接口，或新父类链不再包含原有的某个父类）都以 66 拒绝。原因不在现存引用，而在已校验的代码：ART 校验器依据旧的类型关系证明了“T 的值可以当作 L 使用”，这类代码不带运行时转换。
+新父类链不再包含原有的某个父类时以 66 拒绝。原因不在现存引用，而在已校验的代码：ART 校验器依据旧的类型关系证明了“T 的值可以当作 A 使用”，这类代码不带运行时转换。已解析为父类 A 字段的访问，在解释器中同样不检查接收者类型，会按 A 的偏移读写 T 的实例；与接口调用不同，字段访问没有可以改为查找的分派表。
 
-- 接口：`L l = t; l.m();` 这类代码在收窄后若被 JIT 编译，会按 IMT 槽位分派；只有一个方法的槽位直接存放实现方法（`ClassLinker::SetIMTRef`），不检查接收者是否实现 L，可能跳到 T 的其他方法。
-- 父类：已解析为父类 A 字段的访问，在解释器中同样不检查接收者类型，会按 A 的偏移读写 T 的实例。
-
-在提交时检查堆和栈只能覆盖已经存在的引用，覆盖不了之后才执行的这类代码。安全的收窄需要 ART 重新校验所有可能依赖旧类型关系的已加载类，目前没有可用的命名入口。
+在提交时检查堆和栈只能覆盖已经存在的引用，覆盖不了之后才执行的这类代码。安全的父类收窄需要 ART 重新校验所有可能依赖旧类型关系的已加载类，目前没有可用的命名入口。
 
 ## 调用方式变化
 
@@ -342,6 +365,8 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | 事务上下文、嵌套事务作用域与每个目标的策略要求 | `platform/common/transaction_context.{h,cc}` |
 | 普通类与接口共用的 Native 线程探测、命名 GC 读屏障 | `platform/common/runtime_thread.{h,cc}` |
 | Class 布局探测与事务内布局选择 | `platform/common/class_layout.{h,cc}` |
+| 接口目标的 Proxy 实现类：方法数组、原型与 IMT 的提交 | `platform/common/proxy_relink.{h,cc}` |
+| 移除接口后的接口分派封闭（替换类的私有 IMT 与冲突方法） | `platform/common/imt_sealing.{h,cc}`、`platform/symbols/imt_sealing_symbols.h` |
 | 探测与映射共用的布局读取助手及字段数组探测 | `platform/common/class_layout_table.h`、`platform/common/field_array_probe.h` |
 | 成员映射计划、提交与新出现的 default 冲突检查 | `platform/common/member_mapping.{h,cc}` |
 | 退役登记、旧类保活、字段占位与 JNI／反射／MethodHandle 访问守卫 | `platform/common/member_retirement.{h,cc}` |
@@ -403,4 +428,5 @@ flowchart TD
 
 - **Mainline 更新**：ART APEX 会随 Play 系统更新替换，平台版本与 ART 源码版本可能不同。候选声明覆盖 11–17 源码，由运行时探测在每次事务中核对；新的 ART 源码版本须补充核对，确有差异时新增版本目录。
 - **ART 服务语义漂移**：探测只能核对有 ART 服务或 JVMTI 作对照的声明（Class、ArtField、ArtMethod、DexCache、槽位、map、obsolete 标志、MethodHandle 偏移）；visitor 虚表顺序与来源类型、Handle 与守卫签名依赖源码声明与精确符号名。扩展版本时核对源码与设备行为，差异只放 `platform/abi/arm64/androidNN/`，不复制后端。
+- **接口移除后加载的子类**：抽象类没有可封闭的 IMT；失去接口的抽象类之后才加载的具体子类从 IfTable 重建 IMT，可能为被移除接口的槽位放入直接项；若旧代码把这样的实例当作被移除的接口调用，编译代码可能分派到错误的方法。重定义时已加载的子类都会被封闭。
 - **退役访问边界**：保留真实旧 ArtMethod/ArtField 并守卫新访问；`Unsafe` 与字段更新器缓存的原始 offset 无法拦截。
