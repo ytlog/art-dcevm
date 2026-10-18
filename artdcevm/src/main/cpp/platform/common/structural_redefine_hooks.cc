@@ -134,6 +134,13 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
     decision.reason = "superclass change overlaps the interface implementation group";
   }
+  if (decision.error == JVMTI_ERROR_NONE && !snapshot.anchored_by.empty() &&
+      (decision.fields_structural || decision.methods_structural || decision.superclass_changed ||
+       !snapshot.hierarchy.added_interfaces.empty() || (interfaces && interfaces->IsAffected(self)))) {
+    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+    decision.reason = snapshot.anchored_by + " changes its superclass and links the published version of " +
+                      incoming.descriptor + ", which this batch changes structurally";
+  }
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
     if (std::string callers = KindCallers(*thread, self, snapshot, *batch, decision.kind_changes); !callers.empty()) {
       decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;

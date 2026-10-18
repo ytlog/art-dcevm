@@ -147,7 +147,7 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
                   "superclass change requires the engine's member mapping and verifier redirect");
   if (superclass.related_in_batch)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                  "superclass change shares the batch with a related class");
+                  "superclass change shares the batch with a subclass that changes its superclass");
   for (const auto& m : incoming.methods)
     if (Virtual(MethodModifiers(m.access)) && !Initializer(m.name) &&
         superclass.final_methods.count({m.name, m.descriptor}))

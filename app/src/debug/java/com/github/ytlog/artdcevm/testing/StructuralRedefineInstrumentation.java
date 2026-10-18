@@ -10,6 +10,7 @@ import android.os.Process;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.InterfaceMethodFixture;
 import com.github.ytlog.artdcevm.fixture.RetypeFixture;
+import com.github.ytlog.artdcevm.fixture.SuperChainFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
@@ -2101,6 +2102,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             checkWidenedSuperclass(scenario, subject, child);
         });
         runSuperBatchScenarios();
+        runSuperChainScenarios();
         runDescriptiveFlagScenarios();
         runKindChangeScenarios();
     }
@@ -2177,26 +2179,19 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         SuperBatchFixture.Child child = new SuperBatchFixture.Child();
         child.childValue = 13; child.own = 17; child.baseValue = 19;
         String schema = memberSchema(SuperBatchFixture.Subject.class);
-        String[] rejected = {"super-batch-parent", "super-batch-moving"};
-        Class<?>[][] batches = {{SuperBatchFixture.Subject.class, SuperBatchFixture.Base.class},
-                {SuperBatchFixture.Subject.class, SuperBatchFixture.Child.class}};
-        String[] variants = {"super-batch-child", "super-batch-moving"};
-        for (int i = 0; i < rejected.length; ++i) {
-            Class<?>[] batch = batches[i];
-            String variant = variants[i];
-            runScenario(rejected[i], 66, scenario -> {
-                // A supertype in the batch, or a subclass that moves too, stays rejected.
-                scenario.expectRejectionBy(SuperBatchFixture.Subject.class);
-                scenario.redefine(batch, variant, variant);
-                scenario.check("rejectionReason", true,
-                        DcevmRuntime.capabilities().getString("lastRejection").contains("related class"));
-                scenario.check("unchangedSubject", schema, memberSchema(SuperBatchFixture.Subject.class));
-                scenario.check("superclassUnchanged", SuperBatchFixture.Base.class.getName(),
-                        SuperBatchFixture.Subject.class.getSuperclass().getName());
-                scenario.check("base", 19, child.base());
-                scenario.check("childValue", 13, child.childValue);
-            });
-        }
+        runScenario("super-batch-moving", 66, scenario -> {
+            // A subclass that changes its superclass too stays rejected.
+            scenario.expectRejectionBy(SuperBatchFixture.Subject.class);
+            scenario.redefine(new Class<?>[]{SuperBatchFixture.Subject.class, SuperBatchFixture.Child.class},
+                    "super-batch-moving", "super-batch-moving");
+            scenario.check("rejectionReason", true,
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("changes its superclass"));
+            scenario.check("unchangedSubject", schema, memberSchema(SuperBatchFixture.Subject.class));
+            scenario.check("superclassUnchanged", SuperBatchFixture.Base.class.getName(),
+                    SuperBatchFixture.Subject.class.getSuperclass().getName());
+            scenario.check("base", 19, child.base());
+            scenario.check("childValue", 13, child.childValue);
+        });
         runScenario("super-batch-child", 0, scenario -> {
             scenario.redefine(new Class<?>[]{SuperBatchFixture.Child.class, SuperBatchFixture.Subject.class},
                     "super-batch-child", "super-batch-child");
@@ -2212,6 +2207,48 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("childValue", 13, child.childValue);
             System.gc(); System.runFinalization(); System.gc();
             scenario.check("viaMiddleAfterGc", 53, via.invoke(child));
+        });
+    }
+
+    // A superclass change may share the batch with its old superclass chain or
+    // the new one while those classes change only method bodies: the target
+    // links under the published classes, which keep their identity.
+    private void runSuperChainScenarios() throws Exception {
+        SuperChainFixture.Subject subject = new SuperChainFixture.Subject();
+        subject.own = 17; subject.baseValue = 19;
+        String schema = memberSchema(SuperChainFixture.Subject.class);
+        String[] rejected = {"super-chain-new-structural", "super-chain-old-structural"};
+        Class<?>[] anchors = {SuperChainFixture.Middle.class, SuperChainFixture.Base.class};
+        for (int i = 0; i < rejected.length; ++i) {
+            Class<?> anchor = anchors[i];
+            runScenario(rejected[i], 66, scenario -> {
+                scenario.expectRejectionBy(anchor);
+                scenario.redefine(new Class<?>[]{SuperChainFixture.Subject.class, anchor},
+                        "super-chain-structural", "super-chain-structural");
+                scenario.check("rejectionReason", true,
+                        DcevmRuntime.capabilities().getString("lastRejection").contains("changes structurally"));
+                scenario.check("unchangedSubject", schema, memberSchema(SuperChainFixture.Subject.class));
+                scenario.check("superclassUnchanged", SuperChainFixture.Base.class.getName(),
+                        SuperChainFixture.Subject.class.getSuperclass().getName());
+                scenario.check("base", 19, subject.base());
+            });
+        }
+        runScenario("super-chain-body", 0, scenario -> {
+            Class<?> middle = SuperChainFixture.Middle.class;
+            SuperChainFixture.Middle published = new SuperChainFixture.Middle();
+            scenario.redefine(new Class<?>[]{SuperChainFixture.Subject.class, middle, SuperChainFixture.Base.class},
+                    "super-chain-body", "super-chain-body", "super-chain-body");
+            scenario.check("middleIdentity", true, SuperChainFixture.Subject.class.getSuperclass() == middle);
+            scenario.check("existingIsMiddle", true, ((Object) subject) instanceof SuperChainFixture.Middle);
+            Method chain = SuperChainFixture.Subject.class.getMethod("chain");
+            // New middle() and base() bodies; the existing instance's new Middle field is zero.
+            scenario.check("existingChain", 87, chain.invoke(subject));
+            scenario.check("newChain", 74, chain.invoke(new SuperChainFixture.Subject()));
+            scenario.check("publishedMiddle", 61, published.middle());
+            scenario.check("publishedBase", 6, published.base());
+            scenario.check("own", 17, subject.own);
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("existingChainAfterGc", 87, chain.invoke(subject));
         });
     }
 

@@ -15,6 +15,10 @@ struct Snapshot {
   std::map<std::string, jclass> parent_interfaces;
   // A superclass of this target changes its own superclass in the batch.
   bool moved_ancestor = false;
+  // A batched target whose superclass changes links this supertype or class
+  // on its new superclass chain as published: this change must stay
+  // non-structural. Names that target in the rejection.
+  std::string anchored_by;
   // The submitted definition changes a method's invoke kind (static <->
   // instance, virtual -> private); ClassFileLoadHook output is checked again.
   bool changes_invoke_kind = false;

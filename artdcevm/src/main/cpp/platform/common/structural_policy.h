@@ -36,7 +36,7 @@ struct NewSuperclass {
   // Final instance methods it and its superclasses below the old superclass
   // declare, as far as the target's package may override them.
   std::set<MemberKey> final_methods;
-  // Another class of the batch is a subclass or superclass of the target, or of the new superclass.
+  // A subclass of the target in the batch changes its own superclass too.
   bool related_in_batch = false;
 };
 

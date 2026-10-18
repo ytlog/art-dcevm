@@ -272,18 +272,20 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   }
   // ART recreates a target's subclasses under its new class, allocating a
   // batched subclass from its own DEX. That subclass may evolve with the
-  // target unless it moves too; a supertype of the target or a class on the
-  // new superclass chain would link the version published before the batch.
+  // target unless it moves too. A supertype of the target or a class on the
+  // new superclass chain links as the Class published before the batch, which
+  // a non-structural redefinition keeps; CheckClass rejects a structural one.
   for (auto& [klass, snapshot] : batch.classes) {
     if (!snapshot.hierarchy.new_superclass) continue;
     for (auto& [other, other_snapshot] : batch.classes) {
       if (jni->IsSameObject(klass, other)) continue;
       const bool subclass = jni->IsAssignableFrom(other, klass);
-      if (jni->IsAssignableFrom(klass, other) || jni->IsAssignableFrom(snapshot.superclass_class, other) ||
-          (subclass && other_snapshot.hierarchy.new_superclass))
+      if (subclass && other_snapshot.hierarchy.new_superclass)
         snapshot.hierarchy.new_superclass->related_in_batch = true;
       else if (subclass)
         other_snapshot.moved_ancestor = true;
+      else if (jni->IsAssignableFrom(klass, other) || jni->IsAssignableFrom(snapshot.superclass_class, other))
+        other_snapshot.anchored_by = snapshot.live.descriptor;
     }
   }
   // A subclass prepared from here on is missing from the snapshot and may be

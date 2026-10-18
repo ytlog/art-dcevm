@@ -719,7 +719,7 @@ int main(int argc, char** argv) {
       expect(JVMTI_ERROR_FAILS_VERIFICATION, "subclass override of a final method");
       parent.final_methods.clear();
       parent.related_in_batch = true;
-      expect(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "related class in batch");
+      expect(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "moving subclass in batch");
     }
     // Interfaces: additions need a type resolved through the target's loader
     // and its runtime flags; removals and duplicates stay rejected.

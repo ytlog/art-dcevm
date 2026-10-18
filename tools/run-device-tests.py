@@ -178,9 +178,11 @@ SCENARIOS = (
     ("super-circular", ["super-circular"], 61),
     ("super-widen", ["super-widen"], 0),
     ("super-narrow", ["super-original"], 66),
-    ("super-batch-parent", ["super-batch-child", "super-batch-child"], 66),
     ("super-batch-moving", ["super-batch-moving", "super-batch-moving"], 66),
     ("super-batch-child", ["super-batch-child", "super-batch-child"], 0),
+    ("super-chain-new-structural", ["super-chain-structural", "super-chain-structural"], 66),
+    ("super-chain-old-structural", ["super-chain-structural", "super-chain-structural"], 66),
+    ("super-chain-body", ["super-chain-body", "super-chain-body", "super-chain-body"], 0),
     ("method-descriptive-flags", ["method-descriptive-flags"], 0),
     ("kind-instance", ["kind-instance"], 71),
     ("kind-instance-batch", ["kind-instance", "kind-instance"], 0),
@@ -215,7 +217,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "interface-parent-batch", "interface-parent-rebuilt",
                     "kind-instance-batch", "kind-private",
                     "interface-batch-unrelated", "interface-batch-after-rejection", "interface-batch-unrelated-reverse",
-                    "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child",
+                    "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child", "super-chain-body",
                     "field-retire", "field-restore", "field-types", "field-retype", "field-retype-restore"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
@@ -501,9 +503,13 @@ REQUIRED_CHECKS = {
     "super-widen": {**SUPER_WIDENED_CHECKS, "describeBefore": "base", "newMiddleValue": 11,
                     "newValue": 12},
     "super-narrow": SUPER_WIDENED_CHECKS,
-    **{"super-batch-" + variant: {"rejectionReason": True,
-        "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Base", "base": 19, "childValue": 13}
-       for variant in ("parent", "moving")},
+    "super-batch-moving": {"rejectionReason": True,
+        "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Base", "base": 19, "childValue": 13},
+    **{"super-chain-" + variant: {"rejectionReason": True,
+        "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperChainFixture$Base", "base": 19}
+       for variant in ("new-structural", "old-structural")},
+    "super-chain-body": {"middleIdentity": True, "existingIsMiddle": True, "existingChain": 87, "newChain": 74,
+        "publishedMiddle": 61, "publishedBase": 6, "own": 17, "existingChainAfterGc": 87},
     "kind-instance": {"rejectionReason": True, "callerUnchanged": 2, "staticUnchanged": 2},
     "kind-instance-batch": {"instanceKind": False, "caller": 3, "instanceCall": 4,
         "retiredStatic": "java.lang.NoSuchMethodError", "marker": 9, "callerAfterGc": 3},
@@ -612,7 +618,8 @@ UNCHANGED_CHECKS = {
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
     "interface-overlap-superclass": ("unchangedParent",),
     **{name: ("unchangedSubject",) for name in ("kind-instance", "kind-static-rejected")},
-    **{"super-batch-" + variant: ("unchangedSubject",) for variant in ("parent", "moving")},
+    **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-new-structural",
+                                                 "super-chain-old-structural")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
     "interface-batch-unrelated-invalid": ("unchangedInterface", "unchangedUnrelated"),
