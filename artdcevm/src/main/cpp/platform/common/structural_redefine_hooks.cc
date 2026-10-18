@@ -6,6 +6,7 @@
 #include "platform/common/class_layout_table.h"
 #include "platform/common/fault_injection.h"
 #include "platform/common/imt_sealing.h"
+#include "platform/common/proxy_relink.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/runtime_thread.h"
@@ -270,8 +271,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         named("a subtype of a redefined class was loaded during the transaction"));
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
   const auto collect = reinterpret_cast<Function>(process->original_instances);
-  if (!collect(self, data)) return false;
-  if (interfaces && !interfaces->CompleteInstances(self, data, collect)) return false;
+  if (interfaces ? !interfaces->CompleteInstances(self, data, collect) : !collect(self, data)) return false;
   // Corrupt only the transaction-private holder; cleanup roots are independent.
   ARTDCEVM_TEST(
     if (ARTDCEVM_FAULT_IF(4, (interfaces && interfaces->IsTarget(self)) && data->Classes(true))) {
@@ -294,6 +294,9 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         !member_mapping::CheckDefaultConflicts(*data, &rejection))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                              std::move(rejection));
+    if (!proxy_relink::Plan(*thread, self, *data, selected, &why))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                             named(("Proxy implementation cannot be relinked: " + why).c_str()));
     // Last: every check above may still reject, and only the unpublished
     // replacements change here.
     if (target && target->seal_dispatch && !imt_sealing::Seal(*thread, self, *data, selected, &why))

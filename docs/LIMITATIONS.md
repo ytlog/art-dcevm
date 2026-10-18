@@ -36,7 +36,8 @@
 | 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
-| boot 接口、有 Proxy 实现类、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
+| boot 接口、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
+| 有 Proxy 实现类的接口改变父接口 | `HIERARCHY_CHANGED`（66） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
 删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 一样，要求每个已加载具体实现类都有有效实现，否则以 63 拒绝；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法，与新增 abstract 一样要求每个已加载具体实现类都有有效实现，否则以 63 拒绝，原因写明新父接口方法与缺实现的类；其 default 由实现类获得 copied default。
@@ -54,6 +55,8 @@
 子类型相交的接口组，以及同批做结构修改、又是组内类型父类的组外类，合并为一次重建，每个类型只替换和迁移一次，与提交顺序无关。ART 的实例收集只覆盖拥有者条目所属类的实例；没有一个根覆盖全部具体成员时，引擎让 ART 以其余各根依次再收集一轮，每个实例只保留在它最先可赋值的根那一轮，因此无关接口共享实现类、接口与组外父类各有独立实例时同样只迁移一次。组外父类只改方法体时不并入重建，仍原地更新。
 
 接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
+
+`java.lang.reflect.Proxy` 生成的实现类（例如 Retrofit 服务或注解实例）保留原类与 `InvocationHandler`：保留的方法照常交给处理器，处理器收到的是新接口的 `Method`；Proxy 没有的新增 abstract 方法调用时抛 `AbstractMethodError`，新增 default 执行其方法体；之后用同一接口创建的代理复用这个类，行为相同，与 JBR 一致。新增 abstract 方法不因 Proxy 缺实现而拒绝（Proxy 没有可以同批补齐的源码），普通实现类仍按上文验收。
 
 ## 不支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 

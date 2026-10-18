@@ -90,7 +90,7 @@ ART 的结构事务分两步处理子类：
 
 每组新旧 `Class[]` 在 Native 快照阶段通过公开 `NewObjectArray` 创建并提升为 JNI 全局引用。`ClassArrayRoots` 随事务持有它们，在返回 Native 后释放；任一数组或全局引用创建失败都在进入 ART 前拒绝并清理。Runnable 分配阶段只调用命名 `JavaVMExt::DecodeGlobal` 读取当前根，并立即放入 ART HandleScope；不缓存跨分配的裸对象指针，不调用私有 `ObjectArray::Alloc` 或选择 allocator。固定 [11 声明](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/jni/java_vm_ext.h)至 [17 实现](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/jni/java_vm_ext.cc)的签名一致。失败替换类仍先由 Run 清理，再释放数组全局根。
 
-API 33–36 的接口引擎接受多个接口目标受支持的方法体与成员更新，可与无关类、实现类或实现类的子类同批。父子接口合并到最高批次父接口的一组；其余接口根的已加载子类型若相交，经并查集合并为一组，互不相交的各自一组，每个类型只被替换和迁移一次。ART 的 `CollectAndCreateNewInstances` 在 11–17 都只收集 `InstanceOf(拥有者条目的类)` 的实例，因此 Native 快照为每个候选拥有者按“该拥有者在前”生成拓扑顺序（私有数组只取决于长度，各顺序共用），并记下每个类型最先可赋值的根；覆盖全部具体（非接口、非 abstract）成员的拥有者排在前面。没有覆盖拥有者时，引擎在 `CollectAndCreateNewInstances` 原函数之后，把 holder 的原类槽位依次换成其余各根并再调用原函数，由 ART 收集实例并分配替换实例；每轮只保留类的首个根正是该轮的实例，经公开 JNI 在本 Runnable 线程分配合并数组并写回 holder，再恢复槽位。实例的分配与迁移仍由 ART 完成。接口的替换类由自有分配路径准备，无关类使用 ART 原分配路径，校验、提交与失败返回仍属于同一 ART 原子事务。holder 按实际批次核对数组长度、固定 `ClassRedefinition` 元素声明及三个标志 vector，并使用 ART 排序后的条目索引。它在 Native 状态复用标准入口的 `GetLoadedClasses` 快照，收集全部已准备的实现类、实现类子类及子接口，使用公开 `Proxy.isProxyClass` 拒绝 Proxy；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
+API 33–36 的接口引擎接受多个接口目标受支持的方法体与成员更新，可与无关类、实现类或实现类的子类同批。父子接口合并到最高批次父接口的一组；其余接口根的已加载子类型若相交，经并查集合并为一组，互不相交的各自一组，每个类型只被替换和迁移一次。ART 的 `CollectAndCreateNewInstances` 在 11–17 都只收集 `InstanceOf(拥有者条目的类)` 的实例，因此 Native 快照为每个候选拥有者按“该拥有者在前”生成拓扑顺序（私有数组只取决于长度，各顺序共用），并记下每个类型最先可赋值的根；覆盖全部具体（非接口、非 abstract）成员的拥有者排在前面。没有覆盖拥有者时，引擎在 `CollectAndCreateNewInstances` 原函数之后，把 holder 的原类槽位依次换成其余各根并再调用原函数，由 ART 收集实例并分配替换实例；每轮只保留类的首个根正是该轮的实例，经公开 JNI 在本 Runnable 线程分配合并数组并写回 holder，再恢复槽位。实例的分配与迁移仍由 ART 完成。接口的替换类由自有分配路径准备，无关类使用 ART 原分配路径，校验、提交与失败返回仍属于同一 ART 原子事务。holder 按实际批次核对数组长度、固定 `ClassRedefinition` 元素声明及三个标志 vector，并使用 ART 排序后的条目索引。它在 Native 状态复用标准入口的 `GetLoadedClasses` 快照，收集全部已准备的实现类、实现类子类及子接口，使用公开 `Proxy.isProxyClass` 把 Proxy 类从重建组中分出，交给 [Proxy 实现类](#proxy-实现类)；这些类可能仍挂在原来的父类下。ART 在事务失败后释放新 DEX，下一次父类重定义的堆扫描便可能碰到这些废弃类。
 
 同批实现类与子类按它们自己的新 DEX 和 holder 的新 DexCache 分配；未提交 DEX 的受影响类型仍用原 DEX 的私有链接缓存。`FinishNewClassAllocations` 的第一个受影响条目先完成接口整组分配，与 ART 按父类深度生成的条目顺序无关。固定 holder 声明经全批探测后，只在事务私有的 `initialized_`、`actually_structural_`、`initial_structural_` 中标记整组：接口为唯一初始结构条目，同批实现类条目已分配且不是初始结构条目，后续分配跳过。与 ART 的 `setup_single_redefinition` 一样，各条目保留自己的新类槽位用于 DEX 校验，但只有接口条目携带整组新旧类及实例数组，原 `CollectAndCreateNewInstances`、公共映射计划和 `UpdateClassStructurally` 因而仅处理整组一次。“类加 abstract”对整组收集的实例检查各目标，避免从属条目的空实例数组漏检。实现类的新增、退役与修饰符仍由现有策略评估。实现类的外部父类（批次中不属于任何接口根类型关系、却是组内类型父类的类）作为组的候选祖先：Native 阶段另外选出其已加载子树，生成含祖先子树的扩展成员与候选拥有者。`CheckAllRedefinitionAreValid` 与 `MarkStructuralChanges` 在分配之前完成，组内第一个受影响条目据此选择：任一祖先条目确需结构路径时使用扩展成员，否则使用接口成员，祖先仍由 ART 原地更新；随后取第一个为 ART 初始结构条目的候选作为拥有者，覆盖全部具体成员者优先，其余根的实例按上述轮次收集。扩展成员中只改方法体的祖先随之走结构路径。祖先改变父类仍以 66 拒绝，因为整组按未变的父类链链接。结构祖先自身的 pointer-id 子类型检查由 ART 对该目标的准入完成。校验重定向也覆盖本事务整组的新类，按命名 `LookupClass` 和类加载器身份匹配原类，仅本线程的 `CheckVerification` 返回替换类；旧类表和旧 DexCache 不写入替换类。
 
@@ -313,6 +313,18 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 - **已有引用**：字段、数组与局部变量中以 L 类型保存的 T 实例保持不变，经它们调用 L 的方法抛 `IncompatibleClassChangeError`。JBR 还会把被重定义类中声明为被移除接口类型、值已不兼容的字段置 null，本引擎尚未实现这一步。
 - **边界**：非 CheckJNI 的 JNI 调用与 `MethodHandle` 以不实现 L 的接收者调用 L 的方法时，ART 找不到实现即进入未定义行为，与 JVM 上对应的误用相同。
 
+## Proxy 实现类
+
+`java.lang.reflect.Proxy` 生成的类没有 DEX，ART 无法为它重新 `LinkClass`；它的实例也只持有 `InvocationHandler`，无需迁移。因此接口目标的 Proxy 实现类保留原 Class，只在提交时把它 IfTable 中该接口的方法数组换成为新接口建立的数组（`proxy_relink.{h,cc}`）：
+
+- **Native**：组快照把 Proxy 类单独列出；对每个 Proxy 类及其实现的每个接口目标，按提交的 DEX 中新接口的虚方法数用 JNI 预分配 `long[]`（即 arm64 的 PointerArray），保留全局根。新定义改变父接口时以 66 拒绝，因为 Proxy 的 IfTable 无法增加接口项。
+- **提交前**（`CollectAndCreateNewInstances`，该接口自己的重定义）：核对 Proxy 的 IfTable 恰好有一项指向旧接口；按名称与完整描述符，把新接口的第 j 个虚方法对应到 Proxy 方法（其 `data_` 是生成时的接口方法），没有对应的则放新接口方法本身。新增 abstract 方法因此经解释器入口抛 `AbstractMethodError`，新增 default 执行其方法体，与 JVM 上重新链接的 Proxy 类一致；Proxy 类按 `Proxy` 缓存被新代理复用，同样如此。同时为该 Proxy 类建立封闭的 IMT（见[移除接口](#移除接口)），因为新方法可能落在其他槽位。
+- **提交时**（`UpdateClassStructurally` 之后，所有线程已挂起，不调用 JNI）：ART 的引用替换已把 IfTable 的接口项换成新接口；经命名 `JavaVMExt::DecodeGlobal` 取得数组，原始写入 IfTable 的方法数组项并按固定源码执行写屏障：在当前线程 `tlsPtr_.card_table`（偏置起点）的 `地址 >> 10` 处写入 `0x70`（`CardTable::MarkCard`，11–17 一致）。随后把对应的 Proxy 方法的 `data_` 与 `dex_method_index` 改为新接口方法，使 `InvocationHandler` 收到新接口的 `Method`，再发布封闭的 IMT。
+
+- **实例收集**：ART 的 `CollectAndCreateNewInstances` 收集所有 `InstanceOf(接口)` 的对象，会把 Proxy 实例也收进来，却找不到它的替换类（release 构建中查找越过类数组末尾）。因此有 Proxy 时，组的每个候选拥有者改用类根：重建组中父类不在组内的每个类；接口没有类根。包括第一轮在内的每一轮都把条目的类暂时设为该类根后调用 ART 的收集，再按类根合并，Proxy 实例从不进入收集。
+
+被删除的接口方法不再出现在 IfTable 中，旧字节码重新解析时抛 `NoSuchMethodError`；Proxy 自己的方法仍保留旧原型。Proxy 的调用处理入口与 `Proxy` 缓存都不需要改动。
+
 ## 收窄不支持
 
 新父类链不再包含原有的某个父类时以 66 拒绝。原因不在现存引用，而在已校验的代码：ART 校验器依据旧的类型关系证明了“T 的值可以当作 A 使用”，这类代码不带运行时转换。已解析为父类 A 字段的访问，在解释器中同样不检查接收者类型，会按 A 的偏移读写 T 的实例；与接口调用不同，字段访问没有可以改为查找的分派表。
@@ -351,6 +363,7 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 | 事务上下文、嵌套事务作用域与每个目标的策略要求 | `platform/common/transaction_context.{h,cc}` |
 | 普通类与接口共用的 Native 线程探测、命名 GC 读屏障 | `platform/common/runtime_thread.{h,cc}` |
 | Class 布局探测与事务内布局选择 | `platform/common/class_layout.{h,cc}` |
+| 接口目标的 Proxy 实现类：方法数组、原型与 IMT 的提交 | `platform/common/proxy_relink.{h,cc}` |
 | 移除接口后的接口分派封闭（替换类的私有 IMT 与冲突方法） | `platform/common/imt_sealing.{h,cc}`、`platform/symbols/imt_sealing_symbols.h` |
 | 探测与映射共用的布局读取助手及字段数组探测 | `platform/common/class_layout_table.h`、`platform/common/field_array_probe.h` |
 | 成员映射计划、提交与新出现的 default 冲突检查 | `platform/common/member_mapping.{h,cc}` |

@@ -105,12 +105,18 @@ struct Target { jclass klass; bool boot; jint status; evolution::ClassSchema liv
 // each type's first root is the earliest one it is assignable to. A root in
 // `rounds` is the first root of a concrete member: its instances are
 // collected again by ART with that root as the entry's class.
+//
+// With Proxy implementations, an interface root would also collect the proxy
+// instances, for which ART finds no replacement class: `roots` are then the
+// rebuild's topmost classes, every round including the first is collected
+// with its root as the entry's class, and interfaces have no first root (-1).
 struct Ordering {
   jclass owner;
   TypeSnapshot snapshot;
   std::vector<jclass> roots;
   std::vector<int32_t> first_root;
   std::vector<int32_t> rounds;
+  bool class_roots = false;
 };
 // One rebuild's types (leader first) and their Native-created private arrays.
 struct Members {

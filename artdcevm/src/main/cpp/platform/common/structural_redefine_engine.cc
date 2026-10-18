@@ -5,6 +5,7 @@
 #include <android/log.h>
 #include "shadowhook.h"
 #include "platform/common/imt_sealing.h"
+#include "platform/common/proxy_relink.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/runtime_thread.h"
@@ -162,6 +163,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     // Optional: without it an ordinary class cannot drop an interface.
     if (!imt_sealing::Prepare(process->layout_services, &failure))
       sealing_note = "interface removal unavailable: " + failure;
+    else if (!proxy_relink::Install(process->layout_services, &failure))
+      sealing_note = "Proxy implementations unavailable: " + failure;
     replacements = std::move(retirement_hooks);
     class_layout::Report("unverified");
   } else {

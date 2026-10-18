@@ -50,8 +50,9 @@ struct Backend {
   // Current-thread verification only: lookup by loader without cache writes.
   virtual void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept = 0;
   virtual jvmtiError VerificationError() noexcept = 0;
-  // After ART's instance collection for an entry: a rebuild whose owner does
-  // not cover every member collects the other roots' instances too.
+  // ART's instance collection for an entry, through `collect`: a rebuild whose
+  // owner does not cover every member collects the other roots' instances too,
+  // and one with Proxy implementations collects through its class roots only.
   virtual bool CompleteInstances(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*,
                                  bool (*collect)(abi::arm64::ClassRedefinitionPrefix*,
                                                  abi::arm64::RedefinitionDataIter*)) noexcept = 0;

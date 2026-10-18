@@ -19,6 +19,7 @@
 #include "platform/common/class_layout.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/member_retirement.h"
+#include "platform/common/proxy_relink.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -421,6 +422,8 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   reinterpret_cast<Function>(original_update)(self, data);
   RestoreFieldArrays();
+  // ART has replaced the interface's references, proxy IfTables included.
+  proxy_relink::Apply(self, data);
   // ART's ClearFields skipped the retired statics; drop their references so
   // the retained obsolete class does not keep those objects alive.
   for (const auto& retired : plan ? plan->retired_fields : std::vector<RetiredField>{}) {

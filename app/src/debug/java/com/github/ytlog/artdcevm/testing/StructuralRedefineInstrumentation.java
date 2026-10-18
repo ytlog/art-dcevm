@@ -56,6 +56,7 @@ import com.github.ytlog.artdcevm.fixture.SuperMiddle;
 import com.github.ytlog.artdcevm.fixture.SuperSubject;
 import com.github.ytlog.artdcevm.fixture.ThreadSubclassFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture;
+import com.github.ytlog.artdcevm.fixture.ProxyFixture;
 import com.github.ytlog.artdcevm.fixture.ToolHost;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
@@ -157,6 +158,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
             else if ("thread-subclass".equals(isolated)) runThreadSubclassScenario();
             else if ("interface-removal".equals(isolated)) runInterfaceRemovalScenarios();
+            else if ("proxy-interface".equals(isolated)) runProxyScenarios();
             else if (isolated.startsWith("interface-abstract-reject-"))
                 runAbstractRejectionScenario(isolated.substring("interface-abstract-reject-".length()));
             else throw new IllegalArgumentException("Unsupported isolated scenario");
@@ -329,6 +331,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             runAbstractInterfaceScenarios();
             runInterfaceStressAdditionScenario();
             runInterfaceRemovalBatchScenario();
+            runProxyScenarios();
         }
         runInterfaceScenarios();
         runSuperclassScenarios();
@@ -339,6 +342,47 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runRetypeScenarios();
         runThreadSubclassScenario();
         runInterfaceRemovalScenarios();
+    }
+
+    // A Proxy implementation of a redefined interface stays: kept methods still
+    // reach the handler, now as methods of the new interface; a new abstract
+    // method throws AbstractMethodError and a new default runs its body.
+    private void runProxyScenarios() throws Exception {
+        final int times = 200_000;
+        ProxyFixture.Api api = ProxyFixture.create();
+        Class<?>[] batch = {ProxyFixture.Api.class};
+        runScenario("proxy-interface", 0, scenario -> {
+            scenario.check("getBefore", 5, ProxyFixture.get(api));
+            scenario.check("twiceBefore", 77, api.twice());
+            scenario.check("sumBefore", 5 * times, ProxyFixture.sum(api, times));
+            scenario.redefine(batch, "proxy-api-add");
+            // Young objects, then a collection, before the first proxy call.
+            byte[][] garbage = new byte[4096][];
+            for (int i = 0; i < 64 * garbage.length; i++) garbage[i % garbage.length] = new byte[64];
+            Runtime.getRuntime().gc();
+            scenario.check("interfaceIsNew", true, api.getClass().getInterfaces()[0] == ProxyFixture.Api.class);
+            scenario.check("get", 5, ProxyFixture.get(api));
+            scenario.check("handlerSeesNewMethod", true, ProxyFixture.currentInterface);
+            scenario.check("twice", 77, api.twice());
+            scenario.check("sum", 5 * times, ProxyFixture.sum(api, times));
+            scenario.expectError("removed", NoSuchMethodError.class, () -> ProxyFixture.removed(api));
+            scenario.expectError("added", AbstractMethodError.class,
+                    () -> ProxyFixture.Api.class.getMethod("added").invoke(api));
+            scenario.check("extra", 40, ProxyFixture.Api.class.getMethod("extra").invoke(api));
+            ProxyFixture.Api fresh = ProxyFixture.create();
+            scenario.check("freshSameClass", true, fresh.getClass() == api.getClass());
+            scenario.check("freshGet", 5, ProxyFixture.get(fresh));
+            Runtime.getRuntime().gc();
+            scenario.check("afterGc", 5, ProxyFixture.get(api));
+        });
+        runScenario("proxy-interface-restore", 0, scenario -> {
+            scenario.redefine(batch, "proxy-api-original");
+            scenario.check("get", 5, ProxyFixture.get(api));
+            scenario.check("handlerSeesNewMethod", true, ProxyFixture.currentInterface);
+            scenario.check("removed", 6, ProxyFixture.removed(api));
+            scenario.check("twice", 77, api.twice());
+            scenario.check("sum", 5 * times, ProxyFixture.sum(api, times));
+        });
     }
 
     // An interface group of the batch re-links its implementations itself, so

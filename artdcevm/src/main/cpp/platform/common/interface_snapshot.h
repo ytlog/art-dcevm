@@ -17,9 +17,11 @@ struct TypeSnapshot {
 };
 // Native state only. Positions in `loaded`, ascending, of every prepared
 // non-erroneous loaded type assignable to `root`, including `root` itself.
-// An interface root rejects loaded Proxy implementations.
+// An interface root lists loaded Proxy implementations in `proxies` instead,
+// or rejects them when `proxies` is null.
 jvmtiError SelectTypes(JNIEnv* jni, jvmtiEnv* env, jclass root, jint count, const jclass* loaded,
-                       std::vector<jint>* selected, std::string* error);
+                       std::vector<jint>* selected, std::string* error,
+                       std::vector<jint>* proxies = nullptr);
 // Native state only. Orders the selected loaded types so that each affected
 // superclass and interface precedes its descendants, with `first` leading.
 // O(selected types + direct hierarchy edges) expected work, using Java's

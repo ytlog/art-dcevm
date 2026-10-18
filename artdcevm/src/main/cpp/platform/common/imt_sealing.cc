@@ -62,7 +62,8 @@ void* LoaderAllocator(const VerifiedThread& thread, uint32_t loader_reference, s
 }
 
 struct SealOps {
-  bool (*seal)(const VerifiedThread&, abi::ClassRedefinitionPrefix*, const abi::RedefinitionDataIter&, std::string*);
+  bool (*build)(const VerifiedThread&, abi::ClassRedefinitionPrefix*, void*, void***, std::string*);
+  void (*publish)(void*, void**);
 };
 
 template <typename Class, typename Method> struct Sealer {
@@ -74,9 +75,6 @@ template <typename Class, typename Method> struct Sealer {
   static constexpr size_t kVTableOffset = kImtOffset + sizeof(void*);
 
   static uint8_t* Bytes(Class* klass) { return reinterpret_cast<uint8_t*>(klass); }
-  static bool Instantiable(const Class& klass) {
-    return !(klass.access_flags & (evolution::kAccInterface | evolution::kAccAbstract));
-  }
   // Checks the embedded-table offsets against what ART linked: the vtable
   // fits the class size, and each declared or copied virtual method sits at
   // its own method index.
@@ -101,33 +99,31 @@ template <typename Class, typename Method> struct Sealer {
     return true;
   }
 
-  static bool Seal(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
-                   const abi::RedefinitionDataIter& data, std::string* why) {
-    auto* classes = data.Classes(false);
-    if (!classes) return Fail(why, "no replacement classes");
-    void* runtime = self->driver->runtime;
-    void* art_thread = self->driver->self;
-    for (int32_t i = 0; i < classes->length; ++i) {
-      auto* klass = class_layout::Element<Class>(thread, classes, i);
-      if (!klass) return Fail(why, "missing replacement class");
-      if (!Instantiable(*klass)) continue;  // Abstract classes have no IMT.
-      if (!Probe(klass, why)) return false;
-      void* linear_alloc = LoaderAllocator(thread, klass->class_loader, why);
-      if (!linear_alloc) return false;
-      auto** table = static_cast<void**>(AllocTable(linear_alloc, art_thread));
-      if (!table) return Fail(why, "cannot allocate an IMT");
-      // One conflict method per slot: ART fills a non-shared conflict method's
-      // table in place, and a subclass may copy each slot separately.
-      for (size_t slot = 0; slot < kImtSize; ++slot) {
-        table[slot] = services.create_conflict_method(runtime, linear_alloc);
-        if (!table[slot]) return Fail(why, "cannot allocate an IMT conflict method");
-      }
-      // The replacement is not published: no other thread reads its IMT yet.
-      *reinterpret_cast<void***>(Bytes(klass) + kImtOffset) = table;
+  // A new IMT for `object` whose every slot is its own fresh conflict method:
+  // ART fills a non-shared conflict method's table in place, and a subclass
+  // may copy each slot separately. Null `table` for an abstract class.
+  static bool Build(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self, void* object,
+                    void*** table, std::string* why) {
+    auto* klass = static_cast<Class*>(object);
+    *table = nullptr;
+    if (klass->access_flags & (evolution::kAccInterface | evolution::kAccAbstract)) return true;
+    if (!Probe(klass, why)) return false;
+    void* linear_alloc = LoaderAllocator(thread, klass->class_loader, why);
+    if (!linear_alloc) return false;
+    auto** slots = static_cast<void**>(AllocTable(linear_alloc, self->driver->self));
+    if (!slots) return Fail(why, "cannot allocate an IMT");
+    for (size_t slot = 0; slot < kImtSize; ++slot) {
+      slots[slot] = services.create_conflict_method(self->driver->runtime, linear_alloc);
+      if (!slots[slot]) return Fail(why, "cannot allocate an IMT conflict method");
     }
+    *table = slots;
     return true;
   }
-  static constexpr SealOps Make(int) { return {Seal}; }
+  static void Publish(void* klass, void** table) {
+    __atomic_store_n(reinterpret_cast<void***>(Bytes(static_cast<Class*>(klass)) + kImtOffset), table,
+                     __ATOMIC_RELEASE);
+  }
+  static constexpr SealOps Make(int) { return {Build, Publish}; }
 };
 
 // Indexed like class_layout's probes.
@@ -165,10 +161,27 @@ std::string State() {
   return state;
 }
 
-bool Seal(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
-          const abi::RedefinitionDataIter& data, int selected, std::string* why) {
+bool Build(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self, void* klass, int selected,
+           void*** table, std::string* why) {
   if (!Available()) return Fail(why, State());
   if (selected < 0 || static_cast<size_t>(selected) >= kSealers.size()) return Fail(why, "no verified class layout");
-  return kSealers[selected].seal(thread, self, data, why);
+  return kSealers[selected].build(thread, self, klass, table, why);
+}
+
+void Publish(void* klass, int selected, void** table) { kSealers[selected].publish(klass, table); }
+
+bool Seal(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
+          const abi::RedefinitionDataIter& data, int selected, std::string* why) {
+  auto* classes = data.Classes(false);
+  if (!classes) return Fail(why, "no replacement classes");
+  for (int32_t i = 0; i < classes->length; ++i) {
+    void* klass = class_layout::Element<void>(thread, classes, i);
+    if (!klass) return Fail(why, "missing replacement class");
+    void** table = nullptr;
+    if (!Build(thread, self, klass, selected, &table, why)) return false;
+    // The replacement is not published: no other thread reads its IMT yet.
+    if (table) Publish(klass, selected, table);
+  }
+  return true;
 }
 }  // namespace artdcevm::imt_sealing

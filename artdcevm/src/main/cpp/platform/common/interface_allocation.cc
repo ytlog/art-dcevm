@@ -571,12 +571,15 @@ ARTDCEVM_TEST(
 bool CollectInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
                       bool (*collect)(ClassRedefinitionPrefix*, RedefinitionDataIter*)) {
   State* state = CurrentState();
-  if (!state || !state->attempt) return true;
   const Ordering* ordering = nullptr;
-  for (const auto& group : state->groups)
-    if (group.owner >= 0 && group.Current().orderings[group.owner].owner == self->klass)
-      ordering = &group.Current().orderings[group.owner];
-  if (!ordering || ordering->rounds.empty()) return true;
+  if (state && state->attempt)
+    for (const auto& group : state->groups)
+      if (group.owner >= 0 && group.Current().orderings[group.owner].owner == self->klass)
+        ordering = &group.Current().orderings[group.owner];
+  if (!ordering || !ordering->class_roots) {
+    if (!collect(self, data)) return false;  // ART recorded its error.
+    if (!ordering || ordering->rounds.empty()) return true;
+  }
   if (!state->object_class)
     return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface instance merge JNI services unavailable");
   using Slots = RedefinitionDataIter;
@@ -586,8 +589,9 @@ bool CollectInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
   for (jclass type : types) classes.push_back(roots.Add(Decode(type)));
   const Handle owner = roots.Add(Slot(*data, Slots::kSlotMirrorClass));
   std::vector<std::pair<int32_t, std::pair<Handle, Handle>>> results;
-  results.push_back({0, {roots.Add(Slot(*data, Slots::kSlotOldInstanceObjects)),
-                         roots.Add(Slot(*data, Slots::kSlotNewInstanceObjects))}});
+  if (!ordering->class_roots)
+    results.push_back({0, {roots.Add(Slot(*data, Slots::kSlotOldInstanceObjects)),
+                           roots.Add(Slot(*data, Slots::kSlotNewInstanceObjects))}});
   for (int32_t round : ordering->rounds) {
     // Roots are batch references; decode by identity, not by JNI reference.
     SetSlot(*data, Slots::kSlotMirrorClass, Decode(ordering->roots[round]));
@@ -645,7 +649,7 @@ bool CollectInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
 }  // namespace detail
 bool RuntimeBackend::CompleteInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
                                        bool (*collect)(ClassRedefinitionPrefix*, RedefinitionDataIter*)) noexcept try {
-  return !RuntimeAvailable() || detail::CollectInstances(self, data, collect);
+  return RuntimeAvailable() ? detail::CollectInstances(self, data, collect) : collect(self, data);
 } catch (const std::bad_alloc&) {
   return detail::FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface instance merge native allocation failed");
 } catch (...) {

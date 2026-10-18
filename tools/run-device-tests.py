@@ -170,6 +170,8 @@ SCENARIOS = (
     ('interface-abstract-exhausted-retry', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-stress-add', ['interface-stress-add'], 0),
     ("interface-removal-batched", ["interface-remove", "interface-remove"], 66),
+    ("proxy-interface", ["proxy-api-add"], 0),
+    ("proxy-interface-restore", ["proxy-api-original"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
     ("interface-missing", ["interface-missing"], 62),
@@ -231,7 +233,8 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
 MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
                         if name.startswith("interface-abstract-") and code == 0)
-MAPPED_SCENARIOS.update({"interface-remove", "interface-removal", "interface-removal-restore"})
+MAPPED_SCENARIOS.update({"interface-remove", "interface-removal", "interface-removal-restore",
+                         "proxy-interface", "proxy-interface-restore"})
 VAR_HANDLE_API = 33
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
@@ -664,6 +667,13 @@ class RunFailure(RuntimeError):
 
 
 REMOVAL_TIMES = 200_000
+PROXY_TIMES = 200_000
+REQUIRED_CHECKS["proxy-interface"] = {
+    "getBefore": 5, "twiceBefore": 77, "sumBefore": 5 * PROXY_TIMES, "interfaceIsNew": True, "get": 5,
+    "handlerSeesNewMethod": True, "twice": 77, "sum": 5 * PROXY_TIMES, "removed": "java.lang.NoSuchMethodError",
+    "added": "java.lang.AbstractMethodError", "extra": 40, "freshSameClass": True, "freshGet": 5, "afterGc": 5}
+REQUIRED_CHECKS["proxy-interface-restore"] = {
+    "get": 5, "handlerSeesNewMethod": True, "removed": 6, "twice": 77, "sum": 5 * PROXY_TIMES}
 REQUIRED_CHECKS["interface-removal-batched"] = {"stillRemoved": True, "viaRemoved": 11}
 REQUIRED_CHECKS["interface-removal"] = {
     "warmedUp": 0, "runBefore": 1, "lateLoadedBefore": False, "removed": False, "marker": 5, "kept": 22,
@@ -880,6 +890,8 @@ def scenario_sequence(scenario_group):
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
     if scenario_group == "thread-subclass":
         return tuple(item for item in SCENARIOS if item[0] == "thread-subclass")
+    if scenario_group == "proxy-interface":
+        return tuple(item for item in SCENARIOS if item[0].startswith("proxy-interface"))
     if scenario_group == "interface-removal":
         return tuple(item for item in SCENARIOS if item[0] in ("interface-removal", "interface-removal-restore"))
     if scenario_group == "ordinary":
@@ -1056,7 +1068,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "proxy-interface"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")

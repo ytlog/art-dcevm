@@ -624,12 +624,12 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             expect("restore after direct implementation retry", 0, redefine(CopiedDefault.class, patch));
             System.gc(); System.runFinalization(); System.gc();
             expect("direct implementation after GC", 93, directChild.copiedValue());
-            // Proxy rejection is decided by the public Native snapshot path.
+            // A Proxy implementation is kept and relinked to the new interface.
             Object proxy = java.lang.reflect.Proxy.newProxyInstance(CopiedDefault.class.getClassLoader(),
                     new Class<?>[]{CopiedDefault.class}, (object, method, values) -> 92);
-            expect("Proxy snapshot rejection", 79, redefine(CopiedDefault.class, patch));
+            expect("Proxy implementation relinked", 0, redefine(CopiedDefault.class, patch));
             expect("Proxy remains usable", 92, ((CopiedDefault) proxy).copiedValue());
-            expect("old child after Proxy rejection", 92, child.copiedValue());
+            expect("old child after Proxy relink", 92, child.copiedValue());
             result.putInt("checks", checks);
             result.putBoolean("completed", true);
             finish(Activity.RESULT_OK, result);

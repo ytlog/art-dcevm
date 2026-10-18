@@ -19,6 +19,12 @@ bool Prepare(const class_layout::Services& services, std::string* failure);
 bool Available();
 // "unavailable: <reason>" or "available".
 std::string State();
+// A sealed IMT for one class, not yet installed (null for an abstract class),
+// and its installation. Publish is a single release store of the class's IMT
+// pointer, so a live class may switch to it while other threads dispatch.
+bool Build(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
+           void* klass, int selected, void*** table, std::string* why);
+void Publish(void* klass, int selected, void** table);
 // Before ART's no-failure point: seals every concrete replacement class of this
 // redefinition (the target and its loaded subclasses) under the selected layout.
 bool Seal(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,

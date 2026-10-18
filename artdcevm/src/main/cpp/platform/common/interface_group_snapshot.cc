@@ -1,4 +1,5 @@
 #include "platform/common/interface_redefinition_internal.h"
+#include "platform/common/proxy_relink.h"
 
 #include <algorithm>
 #include <iterator>
@@ -101,7 +102,8 @@ struct Sets {
 // entry's class; every other root whose types have instances is a further
 // collection round. Owners that cover every concrete member come first.
 jvmtiError BuildOrderings(JNIEnv* jni, jvmtiEnv* env, const jclass* loaded, const std::vector<jint>& positions,
-                          const std::vector<jclass>& candidates, Members* members, std::string* error) {
+                          const std::vector<jclass>& candidates, bool class_roots, Members* members,
+                          std::string* error) {
   std::vector<bool> concrete;
   for (jclass type : members->snapshot.types) {
     jint access = 0;
@@ -111,7 +113,7 @@ jvmtiError BuildOrderings(JNIEnv* jni, jvmtiEnv* env, const jclass* loaded, cons
   }
   std::vector<Ordering> covering, partial;
   for (jclass candidate : candidates) {
-    Ordering ordering{candidate, {}, {candidate}, {}, {}};
+    Ordering ordering{candidate, {}, {candidate}, {}, {}, class_roots};
     for (jclass other : candidates)
       if (other != candidate) ordering.roots.push_back(other);
     if (candidate == candidates.front()) {
@@ -119,6 +121,33 @@ jvmtiError BuildOrderings(JNIEnv* jni, jvmtiEnv* env, const jclass* loaded, cons
     } else {
       const jvmtiError result = OrderTypes(jni, env, candidate, loaded, positions, &ordering.snapshot, error);
       if (result != JVMTI_ERROR_NONE) return result;
+    }
+    if (class_roots) {
+      // Every class whose superclass is outside the rebuild; ordered types
+      // put each superclass first, so a class's root is already listed.
+      ordering.roots.clear();
+      for (size_t i = 0; i < ordering.snapshot.types.size(); ++i) {
+        jint access = 0;
+        const jvmtiError result = env->GetClassModifiers(ordering.snapshot.types[i], &access);
+        if (result != JVMTI_ERROR_NONE) { *error = "interface snapshot member modifiers unavailable"; return result; }
+        int32_t first = -1;
+        if (!(access & evolution::kAccInterface)) {
+          const int32_t parent = ordering.snapshot.superclass[i];
+          if (parent < 0) {
+            first = static_cast<int32_t>(ordering.roots.size());
+            ordering.roots.push_back(ordering.snapshot.types[i]);
+          } else {
+            first = ordering.first_root[parent];
+          }
+        }
+        ordering.first_root.push_back(first);
+        for (size_t k = 0; k < members->snapshot.types.size(); ++k)
+          if (members->snapshot.types[k] == ordering.snapshot.types[i] && concrete[k] && first >= 0 &&
+              std::find(ordering.rounds.begin(), ordering.rounds.end(), first) == ordering.rounds.end())
+            ordering.rounds.push_back(first);
+      }
+      partial.push_back(std::move(ordering));
+      continue;
     }
     std::vector<bool> collected(ordering.roots.size());
     for (jclass type : ordering.snapshot.types) {
@@ -185,10 +214,11 @@ ARTDCEVM_TEST(
   std::vector<std::vector<jint>> selected(roots.size());
   Sets sets;
   std::unordered_map<jint, size_t> claimed;
+  std::vector<jint> proxies;
   for (size_t r = 0; r < roots.size(); ++r) {
     sets.parent.push_back(r);
     jvmtiError result = SelectTypes(jni, next->env, next->targets[roots[r]].klass, count, loaded,
-                                    &selected[r], error);
+                                    &selected[r], error, &proxies);
     if (result != JVMTI_ERROR_NONE) return result;
     for (jint position : selected[r]) {
       const auto [found, inserted] = claimed.emplace(position, r);
@@ -243,6 +273,17 @@ ARTDCEVM_TEST(
     next->groups[group].ancestors.push_back(ancestors[a]);
     extended[group] = Union(std::move(extended[group]), subtree);
   }
+  if (!proxies.empty()) {
+    std::vector<jclass> proxy_classes;
+    for (jint position : proxies) proxy_classes.push_back(loaded[position]);
+    std::vector<proxy_relink::Interface> interfaces;
+    for (const Target& target : next->targets)
+      for (jint i = 0; i < next->batch_size; ++i)
+        if (jni->IsSameObject(next->definitions[i].klass, target.klass))
+          interfaces.push_back({target.klass, &target.live, &next->definitions[i]});
+    jvmtiError result = proxy_relink::Prepare(jni, proxy_classes, interfaces, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+  }
   bool indexed_jni_ids = false;
   for (size_t g = 0; g < next->groups.size(); ++g) {
     Group& group = next->groups[g];
@@ -252,12 +293,13 @@ ARTDCEVM_TEST(
       if (next->targets[root].group == g) candidates.push_back(next->targets[root].klass);
     jvmtiError result = OrderTypes(jni, next->env, leader.klass, loaded, core[g], &group.core.snapshot, error);
     if (result == JVMTI_ERROR_NONE)
-      result = BuildOrderings(jni, next->env, loaded, core[g], candidates, &group.core, error);
+      result = BuildOrderings(jni, next->env, loaded, core[g], candidates, !proxies.empty(), &group.core, error);
     if (result == JVMTI_ERROR_NONE && !group.ancestors.empty()) {
       result = OrderTypes(jni, next->env, leader.klass, loaded, extended[g], &group.extended.snapshot, error);
       candidates.insert(candidates.end(), group.ancestors.begin(), group.ancestors.end());
       if (result == JVMTI_ERROR_NONE)
-        result = BuildOrderings(jni, next->env, loaded, extended[g], candidates, &group.extended, error);
+        result = BuildOrderings(jni, next->env, loaded, extended[g], candidates, !proxies.empty(), &group.extended,
+                                error);
     }
     if (result != JVMTI_ERROR_NONE) return result;
     if (!leader.boot) {

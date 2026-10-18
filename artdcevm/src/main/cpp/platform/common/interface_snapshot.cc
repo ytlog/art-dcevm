@@ -1,4 +1,5 @@
 #include "platform/common/interface_snapshot.h"
+#include <algorithm>
 #include <limits>
 #include "evolution/class_schema.h"
 
@@ -16,7 +17,7 @@ class LocalFrame {
 }
 
 jvmtiError SelectTypes(JNIEnv* jni, jvmtiEnv* env, jclass root, jint count, const jclass* loaded,
-                       std::vector<jint>* selected, std::string* error) {
+                       std::vector<jint>* selected, std::string* error, std::vector<jint>* proxies) {
   const auto fail = [&](jvmtiError code, const char* reason) {
     if (jni->ExceptionCheck()) jni->ExceptionClear();
     *error = reason;
@@ -49,7 +50,13 @@ jvmtiError SelectTypes(JNIEnv* jni, jvmtiEnv* env, jclass root, jint count, cons
     if (proxy) {
       const bool generated_proxy = jni->CallStaticBooleanMethod(proxy, is_proxy, candidate);
       if (jni->ExceptionCheck()) return fail(JVMTI_ERROR_INTERNAL, "interface snapshot Proxy check failed");
-      if (generated_proxy) return fail(JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface redefinition rejects Proxy implementations");
+      if (generated_proxy && !proxies)
+        return fail(JVMTI_ERROR_UNMODIFIABLE_CLASS, "interface redefinition rejects Proxy implementations");
+      if (generated_proxy) {
+        // ART cannot re-link a proxy class from DEX; proxy_relink keeps it.
+        if (std::find(proxies->begin(), proxies->end(), i) == proxies->end()) proxies->push_back(i);
+        continue;
+      }
     }
     selected->push_back(i);
   }
