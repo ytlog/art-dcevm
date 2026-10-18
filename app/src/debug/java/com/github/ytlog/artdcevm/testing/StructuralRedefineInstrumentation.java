@@ -75,6 +75,7 @@ import org.json.JSONObject;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.BufferedOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.lang.reflect.Field;
@@ -90,6 +91,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Iterator;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.IntSupplier;
@@ -103,6 +105,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private static final String REPORT_FILE = "structural-redefine.json";
     private final JSONObject report = new JSONObject();
     private final JSONArray scenarios = new JSONArray();
+    // runScenario never changes a result after marking it completed. Reusing
+    // its JSON avoids serializing the entire growing history at every checkpoint.
+    private final List<byte[]> completedScenarioJson = new ArrayList<>();
     private Context context;
     private int failures;
     private Bundle arguments;
@@ -4117,8 +4122,32 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private void writeReport(boolean completed) throws Exception {
         report.put("completed", completed).put("failures", failures);
         File temporary = new File(context.getFilesDir(), REPORT_FILE + ".tmp");
-        try (FileOutputStream output = new FileOutputStream(temporary)) {
-            output.write(report.toString(2).getBytes(StandardCharsets.UTF_8));
+        JSONObject metadata = new JSONObject();
+        for (Iterator<String> keys = report.keys(); keys.hasNext();) {
+            String key = keys.next();
+            if (!"scenarios".equals(key)) metadata.put(key, report.get(key));
+        }
+        String prefix = metadata.toString();
+        try (FileOutputStream output = new FileOutputStream(temporary);
+             BufferedOutputStream buffered = new BufferedOutputStream(output)) {
+            buffered.write(prefix.substring(0, prefix.length() - 1).getBytes(StandardCharsets.UTF_8));
+            buffered.write(",\"scenarios\":[".getBytes(StandardCharsets.UTF_8));
+            for (int index = 0; index < scenarios.length(); index++) {
+                if (index != 0) buffered.write(',');
+                byte[] json;
+                if (index < completedScenarioJson.size()) {
+                    json = completedScenarioJson.get(index);
+                } else {
+                    JSONObject scenario = scenarios.getJSONObject(index);
+                    json = scenario.toString().getBytes(StandardCharsets.UTF_8);
+                    if (index == completedScenarioJson.size() && scenario.optBoolean("completed"))
+                        completedScenarioJson.add(json);
+                }
+                buffered.write(json);
+            }
+            buffered.write(']');
+            buffered.write('}');
+            buffered.flush();
             output.getFD().sync();
         }
         if (!temporary.renameTo(new File(context.getFilesDir(), REPORT_FILE))) {
