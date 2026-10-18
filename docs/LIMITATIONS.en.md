@@ -149,6 +149,7 @@ The target semantics come from fixed JBR DCEVM sources and matching runtime comp
 
 | Change | JBR DCEVM | art-dcevm |
 | --- | --- | --- |
+| Retyping an instance field holding a dynamic proxy | Preserve the value for a directly declared interface or `Proxy` superclass; clear it for an interface implemented only indirectly | Matching behavior for target and inherited fields; see the [field-retyping comparison](TESTING.en.md#jbr-comparisons) |
 | A new abstract interface method for which a loaded implementation has only a non-public method of that signature | Accepted; calls throw `AbstractMethodError` for a private method and `IllegalAccessError` for a package-private/protected one | ART's selection: Android 15 and 16 accept, and calls throw `IllegalAccessError`; Android 13 and 14 cannot link a package-private/protected implementation and reject with 63 |
 | An instance method becomes static while loaded code outside the batch still calls the old kind | Accepted; calls re-resolve and throw `IncompatibleClassChangeError` | Rejected with 71: ART re-resolves without checking the invoke kind and cannot throw that error. Submitting the callers in the same batch is accepted |
 | Superclass narrowing (the new chain omits an old superclass) | Rejected | Rejected with 66 |

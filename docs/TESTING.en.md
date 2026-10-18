@@ -30,7 +30,10 @@ Host substitutes execute no ART objects, real hooks or collector and cannot repl
 
 ```sh
 python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
+python3 tools/compare-jbr-field-retype.py --java-home JBR_REFERENCE_HOME
 ```
+
+`tools/compare-jbr-field-retype.py` uses the same fixed runtime and shared field-retyping fixtures to check ordinary values, direct and indirect interfaces, dynamic proxies, inherited fields, restoration, repeated updates and GC.
 
 Replace the `JBR_REFERENCE_HOME` path placeholder. Raw output and fixture, harness and runtime hashes stay under ignored `build/evidence/`. These comparisons cover specific interface-narrowing and reference-field rules, not complete JBR parity. ART device tests must check matching values, errors, field clearing and behavior after failure.
 

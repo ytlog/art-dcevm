@@ -342,7 +342,12 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
   static bool DirectInterfaces(const runtime_thread::VerifiedThread& thread, Class* klass,
                                std::vector<std::string>* interfaces) {
     std::string why;
-    if (const DexFilePrefix* dex = DexOf(thread, klass->dex_cache); dex && klass->dex_class_def_index >= 0)
+    // Class::InitializeClassVisitor uses kDexNoIndex16, not -1. A proxy
+    // retains that index while sharing java.lang.reflect.Proxy's DexCache
+    // (ClassLinker::CreateProxyClass), so that cache does not describe it.
+    constexpr int32_t kDexNoIndex16 = 0xffff;
+    if (const DexFilePrefix* dex = DexOf(thread, klass->dex_cache);
+        dex && klass->dex_class_def_index >= 0 && klass->dex_class_def_index != kDexNoIndex16)
       return evolution::ReadClassInterfaces(DexViewOf(*dex), klass->dex_class_def_index, interfaces, &why);
     if (ArtField* field = find_static_field(klass, "interfaces", "[Ljava/lang/Class;")) {
       auto* array = class_layout::Heap<abi::ObjectArray>(

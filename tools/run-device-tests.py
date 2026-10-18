@@ -638,13 +638,16 @@ REQUIRED_CHECKS = {
     "field-retype": {
         "textType": "java.lang.CharSequence", "keep": 41, "childOwn": 17,
         **{name: True for name in ("textKept", "numberKept", "mismatchCleared", "interfaceKept", "subinterfaceCleared",
-                                   "inheritedKept", "staticCleared",
+                                   "inheritedKept", "proxyKept", "indirectProxyCleared", "proxyBaseKept",
+                                   "childProxyKept", "childIndirectProxyCleared", "childProxyBaseKept",
+                                   "proxyKeptAfterGc", "childProxyKeptAfterGc", "staticCleared",
                                    "staticMismatchCleared", "childTextKept", "childInterfaceKept",
                                    "textKeptAfterGc", "childInterfaceKeptAfterGc")}},
     "field-retype-restore": {
         "textType": "java.lang.String",
         **{name: True for name in ("builderCleared", "childTextKept", "numberKept", "interfaceKept",
-                                   "staticCleared", "mismatchNull", "staticMismatchNull")}},
+                                   "staticCleared", "mismatchNull", "staticMismatchNull", "proxyKept", "proxyBaseKept",
+                                   "indirectProxyNull", "childProxyKept", "childProxyBaseKept", "childIndirectProxyNull")}},
 }
 # Interface direct targets retain exact old reflection objects, handles and
 # JNI IDs, and old bytecode wrappers still name the removed declarations.

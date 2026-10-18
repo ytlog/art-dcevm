@@ -25,6 +25,9 @@ public final class RetypeFixture {
         public Runnable task;
         public Runnable deep;
         public Runnable inherited;
+        public Runnable proxy;
+        public Runnable indirectProxy;
+        public java.lang.reflect.Proxy proxyBase;
         public int keep = 41;
         public static CharSequence label;
         public static Runnable staticMismatch;

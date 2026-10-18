@@ -145,6 +145,7 @@
 
 | 变化 | JBR DCEVM | art-dcevm |
 | --- | --- | --- |
+| 持有动态代理的实例字段改类型 | 新类型是直接声明接口或 `Proxy` 父类时保留；仅间接实现接口时清空 | 目标与继承字段按同一规则处理，见[字段改型对照](TESTING.md#jbr-对照) |
 | 接口新增 abstract 方法，而已加载的实现类只有同签名的非 public 方法 | 接受；private 调用时抛 `AbstractMethodError`，package-private／protected 抛 `IllegalAccessError` | 按 ART 的选择：Android 15、16 接受，调用均抛 `IllegalAccessError`；Android 13、14 的 package-private／protected 实现无法链接，拒绝 63 |
 | 实例方法改为 static，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 拒绝 71：ART 重新解析时不检查调用方式，无法抛出该错误；同批提交调用方即可接受 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |

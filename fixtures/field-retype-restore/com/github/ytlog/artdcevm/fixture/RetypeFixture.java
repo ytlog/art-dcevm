@@ -25,6 +25,9 @@ public final class RetypeFixture {
         public Object task = new Task();
         public Object deep = new Deep();
         public Object inherited = new InheritedTask();
+        public Object proxy;
+        public Object indirectProxy;
+        public Object proxyBase;
         public int keep = 41;
         public static String label = "static";
         public static Object staticMismatch = new Object();

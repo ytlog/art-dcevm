@@ -908,13 +908,20 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     // A reference field whose declared type changes keeps an old value that
-    // the new type accepts (JBR's FieldCopier) and starts from null otherwise,
+    // the new type accepts (JBR's DcevmSharedGC) and starts from null otherwise,
     // in the target's instances, its loaded subclass's instances and statics.
     private void runRetypeScenarios() throws Exception {
         RetypeFixture.Subject subject = new RetypeFixture.Subject();
         RetypeFixture.Child child = new RetypeFixture.Child();
         String text = subject.text;
         Object number = subject.number, task = subject.task, childTask = child.task, inherited = subject.inherited;
+        Object proxy = java.lang.reflect.Proxy.newProxyInstance(RetypeFixture.class.getClassLoader(),
+                new Class<?>[]{Runnable.class}, (receiver, method, args) -> null);
+        Object indirectProxy = java.lang.reflect.Proxy.newProxyInstance(RetypeFixture.class.getClassLoader(),
+                new Class<?>[]{RetypeFixture.SubTask.class}, (receiver, method, args) -> null);
+        subject.proxy = child.proxy = proxy;
+        subject.indirectProxy = child.indirectProxy = indirectProxy;
+        subject.proxyBase = child.proxyBase = proxy;
         Class<?> type = RetypeFixture.Subject.class;
         runScenario("field-retype", 0, scenario -> {
             scenario.redefine(new Class<?>[]{type}, "field-retype");
@@ -927,6 +934,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             // directly declared interfaces; a superinterface does not count.
             scenario.check("subinterfaceCleared", true, type.getField("deep").get(subject) == null);
             scenario.check("inheritedKept", true, type.getField("inherited").get(subject) == inherited);
+            scenario.check("proxyKept", true, type.getField("proxy").get(subject) == proxy);
+            scenario.check("indirectProxyCleared", true, type.getField("indirectProxy").get(subject) == null);
+            scenario.check("proxyBaseKept", true, type.getField("proxyBase").get(subject) == proxy);
+            scenario.check("childProxyKept", true, type.getField("proxy").get(child) == proxy);
+            scenario.check("childIndirectProxyCleared", true, type.getField("indirectProxy").get(child) == null);
+            scenario.check("childProxyBaseKept", true, type.getField("proxyBase").get(child) == proxy);
             scenario.check("staticCleared", true, type.getField("label").get(null) == null);
             scenario.check("staticMismatchCleared", true, type.getField("staticMismatch").get(null) == null);
             scenario.check("childTextKept", true, type.getField("text").get(child) == text);
@@ -934,6 +947,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("keep", 41, subject.keep);
             scenario.check("childOwn", 17, child.own);
             Runtime.getRuntime().gc();
+            scenario.check("proxyKeptAfterGc", true, type.getField("proxy").get(subject) == proxy);
+            scenario.check("childProxyKeptAfterGc", true, type.getField("proxy").get(child) == proxy);
             scenario.check("textKeptAfterGc", true, type.getField("text").get(subject) == text);
             scenario.check("childInterfaceKeptAfterGc", true, type.getField("task").get(child) == childTask);
         });
@@ -943,6 +958,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.redefine(new Class<?>[]{type}, "field-retype-restore");
             scenario.check("textType", "java.lang.String", type.getField("text").getType().getName());
             scenario.check("builderCleared", true, subject.text == null);
+            scenario.check("proxyKept", true, subject.proxy == proxy);
+            scenario.check("proxyBaseKept", true, subject.proxyBase == proxy);
+            scenario.check("indirectProxyNull", true, subject.indirectProxy == null);
+            scenario.check("childProxyKept", true, child.proxy == proxy);
+            scenario.check("childProxyBaseKept", true, child.proxyBase == proxy);
+            scenario.check("childIndirectProxyNull", true, child.indirectProxy == null);
             scenario.check("childTextKept", true, child.text == text);
             scenario.check("numberKept", true, subject.number == number);
             scenario.check("interfaceKept", true, subject.task == task);

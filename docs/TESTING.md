@@ -30,7 +30,10 @@ done
 
 ```sh
 python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
+python3 tools/compare-jbr-field-retype.py --java-home JBR_REFERENCE_HOME
 ```
+
+`tools/compare-jbr-field-retype.py` 使用同一固定运行时与字段改型夹具，检查普通引用、直接与间接接口、动态代理、继承字段、恢复、重复更新和 GC。
 
 `JBR_REFERENCE_HOME` 是待替换的路径占位符。原始输出、输入夹具／执行器／运行时哈希保存在忽略的 `build/evidence/`。该对照覆盖特定接口收窄与引用字段规则，不能证明全部 JBR 功能已对齐。ART 设备测试应复核相同返回值、错误、引用清理及失败后行为。
 
