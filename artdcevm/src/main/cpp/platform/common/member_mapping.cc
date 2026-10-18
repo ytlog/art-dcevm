@@ -20,6 +20,7 @@
 #include "platform/common/class_layout_table.h"
 #include "platform/common/member_retirement.h"
 #include "platform/common/transaction_context.h"
+#include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
 namespace artdcevm::member_mapping {
@@ -74,6 +75,15 @@ struct FieldArraySwap {
   size_t slot;
   std::vector<uint32_t> kept;  // LengthPrefixedArray<ArtField>: length, then 4 words each.
 };
+// A retired reference field with a same-named new field of another reference
+// type: a compatible old value moves to the new field (JBR's FieldCopier).
+struct RetypedField {
+  int32_t class_index;
+  ArtField* old_field;
+  ArtField* new_field;
+  bool is_static;
+  jobject type;  // The new field type, a global reference owned by the batch.
+};
 struct MappingPlan {
   // The target's new class links under a new superclass that extends the old
   // one: while ART copies fields it pairs the old and new superclass chains
@@ -87,6 +97,7 @@ struct MappingPlan {
   std::vector<std::pair<ArtField*, ArtField*>> fields;
   std::vector<RetiredField> retired_fields;
   std::vector<FieldArraySwap> field_swaps;
+  std::vector<RetypedField> retyped;
   std::vector<MethodMapping> methods;
   // "class: method" that a re-linked class newly links as a default conflict.
   // Not a probe failure: the transaction must be rejected.
@@ -100,7 +111,13 @@ struct PlanOps {
   bool (*plan)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
   uint64_t* (*field_slot)(void* klass, size_t slot);
   uint32_t* (*superclass)(void* klass);
+  void (*copy_retyped)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, const MappingPlan& plan);
 };
+// Named JavaVMExt::DecodeGlobal and the runtime's JavaVM; without them a
+// retyped field starts from null like any retired field.
+using DecodeGlobal = void* (*)(JavaVM*, jobject);
+DecodeGlobal decode_global = nullptr;
+JavaVM* runtime_vm = nullptr;
 
 template <typename Class, typename Method> struct Planner : class_layout::View<Class, Method> {
   using class_layout::View<Class, Method>::FieldArrays;
@@ -142,6 +159,11 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
         plan->fields.emplace_back(field, field);
         plan->retired_fields.push_back(RetiredField::Of(field, identity.descriptor, is_static));
         retires = true;
+        if (const auto* retyped = FindRetyped(thread, *old_class, identity.name, is_static); retyped && decode_global) {
+          ArtField* next = (is_static ? find_static_field : find_declared_instance_field)(
+              new_class, identity.name, retyped->descriptor);
+          if (next) plan->retyped.push_back({class_index, field, next, is_static, retyped->type});
+        }
       }
       if (retires) plan->field_swaps.push_back(std::move(swap));
     }
@@ -240,8 +262,61 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     return true;
   }
 
+  // The submitted target's resolved new type for a retyped field, if any.
+  static const transaction::RetypedType* FindRetyped(const runtime_thread::VerifiedThread& thread, const Class& old_class,
+                                                     const std::string& name, bool is_static) {
+    const transaction::Context* context = transaction::Current();
+    if (!context) return nullptr;
+    const std::string descriptor = class_layout::ClassDescriptor(thread, old_class);
+    for (const auto& [target, requirements] : context->targets) {
+      if (requirements.descriptor != descriptor) continue;
+      for (const auto& retyped : requirements.retyped_fields)
+        if (retyped.name == name && retyped.is_static == is_static) return &retyped;
+    }
+    return nullptr;
+  }
+  // `klass` is `type`, extends it, or implements it; java.lang.Object accepts any.
+  static bool Assignable(const runtime_thread::VerifiedThread& thread, Class* klass, Class* type, bool object) {
+    if (object) return true;
+    for (Class* c = klass; c; c = class_layout::Heap<Class>(thread, c->super_class))
+      if (c == type) return true;
+    if (!(type->access_flags & evolution::kAccInterface)) return false;
+    auto* table = class_layout::Heap<abi::ObjectArray>(thread, klass->iftable);
+    for (int32_t i = 0; table && i + 1 < table->length; i += 2)
+      if (class_layout::Element<Class>(thread, table, i) == type) return true;
+    return false;
+  }
+  // Commit, every thread suspended and moving GC off, before ART copies the
+  // fields: ART's CopyAndClearFields then runs its write barrier for each
+  // target object, which covers these stores too.
+  static void CopyRetyped(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                          const MappingPlan& plan) {
+    auto* old_classes = data.Classes(true);
+    auto* new_classes = data.Classes(false);
+    auto* olds = data.OldInstances();
+    auto* news = data.Slot(RedefinitionDataIter::kSlotNewInstanceObjects);
+    for (const auto& retyped : plan.retyped) {
+      auto* type = static_cast<Class*>(decode_global(runtime_vm, retyped.type));
+      if (!type) continue;
+      const bool object = class_layout::ClassDescriptor(thread, *type) == "Ljava/lang/Object;";
+      auto* old_class = class_layout::Element<Class>(thread, old_classes, retyped.class_index);
+      auto* new_class = class_layout::Element<Class>(thread, new_classes, retyped.class_index);
+      const auto copy = [&](void* from, void* to) {
+        const uint32_t reference = *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(from) + retyped.old_field->offset);
+        auto* value = static_cast<abi::Object*>(runtime_thread::Read(thread, reference));
+        if (!value || !Assignable(thread, class_layout::Heap<Class>(thread, value->klass), type, object)) return;
+        *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(to) + retyped.new_field->offset) = class_layout::Reference(value);
+      };
+      if (retyped.is_static) { copy(old_class, new_class); continue; }
+      for (int32_t i = 0; olds && news && i < olds->length; ++i) {
+        auto* instance = class_layout::Element<abi::Object>(thread, olds, i);
+        for (Class* c = class_layout::Heap<Class>(thread, instance->klass); c; c = class_layout::Heap<Class>(thread, c->super_class))
+          if (c == old_class) { copy(instance, class_layout::Element<abi::Object>(thread, news, i)); break; }
+      }
+    }
+  }
   static constexpr PlanOps Make(int) {
-    return {Plan, Planner::FieldSlot, Planner::Superclass};
+    return {Plan, Planner::FieldSlot, Planner::Superclass, Planner::CopyRetyped};
   }
 };
 
@@ -340,6 +415,8 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
       swapped_superclasses.emplace_back(slot, *slot);
       *slot = *layout->superclass(data.Classes(true)->Get<void>(0));
     }
+    if (!plan->retyped.empty())
+      if (const auto thread = runtime_thread::Ready()) layout->copy_retyped(*thread, data, *plan);
   }
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   reinterpret_cast<Function>(original_update)(self, data);
@@ -372,6 +449,8 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
     return Fail(failure, "NDK pointer-map layout differs from libc++ ABI v1");
   find_static_field = services.find_static_field;
   find_declared_instance_field = services.find_declared_instance_field;
+  runtime_vm = services.vm;
+  decode_global = reinterpret_cast<DecodeGlobal>(symbols::Find(symbols::interface_redefinition::kDecodeGlobal));
   using namespace symbols::structural;
   struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
   const Required required[] = {

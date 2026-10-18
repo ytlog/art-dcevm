@@ -20,6 +20,7 @@ struct Services {
   void* (*mirror_class)(abi::arm64::ClassRedefinitionPrefix*);
   jclass class_type;  // java.lang.Class, a global reference.
   abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view);
+  JavaVM* vm = nullptr;  // The runtime's JavaVM, for decoding global references.
 };
 // Only the engine assembles services; until then no layout verifies.
 void Prepare(const Services& services);

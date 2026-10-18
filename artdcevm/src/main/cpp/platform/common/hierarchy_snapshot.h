@@ -18,6 +18,10 @@ struct Snapshot {
   // The submitted definition changes a method's invoke kind (static <->
   // instance, virtual -> private); ClassFileLoadHook output is checked again.
   bool changes_invoke_kind = false;
+  // Fields whose reference type changes; the new type is resolved through the
+  // target's loader (a global reference in the caller's roots).
+  struct RetypedField { std::string name; bool is_static; std::string descriptor; jclass type; };
+  std::vector<RetypedField> retyped_fields;
   // Ordinary targets: loaded subtypes, including the target, borrowed from the
   // standard entry's index for the transaction.
   const std::vector<struct LoadedType>* subtypes = nullptr;

@@ -9,6 +9,7 @@ import android.os.Process;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.InterfaceMethodFixture;
+import com.github.ytlog.artdcevm.fixture.RetypeFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceKindFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
@@ -328,6 +329,48 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runToolScenarios();
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
+        runRetypeScenarios();
+    }
+
+    // A reference field whose declared type changes keeps an old value that
+    // the new type accepts (JBR's FieldCopier) and starts from null otherwise,
+    // in the target's instances, its loaded subclass's instances and statics.
+    private void runRetypeScenarios() throws Exception {
+        RetypeFixture.Subject subject = new RetypeFixture.Subject();
+        RetypeFixture.Child child = new RetypeFixture.Child();
+        String text = subject.text, label = RetypeFixture.Subject.label;
+        Object number = subject.number, task = subject.task, childTask = child.task;
+        Class<?> type = RetypeFixture.Subject.class;
+        runScenario("field-retype", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{type}, "field-retype");
+            scenario.check("textType", "java.lang.CharSequence", type.getField("text").getType().getName());
+            scenario.check("textKept", true, type.getField("text").get(subject) == text);
+            scenario.check("numberKept", true, type.getField("number").get(subject) == number);
+            scenario.check("mismatchCleared", true, type.getField("mismatch").get(subject) == null);
+            scenario.check("interfaceKept", true, type.getField("task").get(subject) == task);
+            scenario.check("staticKept", true, type.getField("label").get(null) == label);
+            scenario.check("staticMismatchCleared", true, type.getField("staticMismatch").get(null) == null);
+            scenario.check("childTextKept", true, type.getField("text").get(child) == text);
+            scenario.check("childInterfaceKept", true, type.getField("task").get(child) == childTask);
+            scenario.check("keep", 41, subject.keep);
+            scenario.check("childOwn", 17, child.own);
+            Runtime.getRuntime().gc();
+            scenario.check("textKeptAfterGc", true, type.getField("text").get(subject) == text);
+            scenario.check("childInterfaceKeptAfterGc", true, type.getField("task").get(child) == childTask);
+        });
+        runScenario("field-retype-restore", 0, scenario -> {
+            StringBuilder builder = new StringBuilder("builder");
+            type.getField("text").set(subject, builder);
+            scenario.redefine(new Class<?>[]{type}, "field-retype-restore");
+            scenario.check("textType", "java.lang.String", type.getField("text").getType().getName());
+            scenario.check("builderCleared", true, subject.text == null);
+            scenario.check("childTextKept", true, child.text == text);
+            scenario.check("numberKept", true, subject.number == number);
+            scenario.check("interfaceKept", true, subject.task == task);
+            scenario.check("staticKept", true, RetypeFixture.Subject.label == label);
+            scenario.check("mismatchNull", true, subject.mismatch == null);
+            scenario.check("staticMismatchNull", true, RetypeFixture.Subject.staticMismatch == null);
+        });
     }
 
     // Field retirement: delete every field but keep/staticKeep, restore them,

@@ -117,6 +117,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   std::string rollback = "previous partial installation";
   if (!RollBack(&rollback)) { Diagnose(rollback); return JVMTI_ERROR_INTERNAL; }
   process->runtime_vm = vm;
+  process->layout_services.vm = vm;
   process->snapshot_env = env;
   process->structural_entry = reinterpret_cast<Entry>(addresses[1]);
   process->record_field = reinterpret_cast<Record>(addresses[5]);

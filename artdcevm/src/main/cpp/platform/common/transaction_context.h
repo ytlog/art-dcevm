@@ -18,6 +18,16 @@ struct Part {
   virtual ~Part() = default;
 };
 
+// A reference field whose declared type changes: the new field's name and
+// descriptor, and its resolved type (a global reference that outlives the
+// transaction). Compatible old values move to the new field.
+struct RetypedType {
+  std::string name;
+  bool is_static;
+  std::string descriptor;
+  jobject type;
+};
+
 // What a target's accepted policy decision needs from the hooks on ART's
 // transaction. The engine records it in CheckClass.
 struct Requirements {
@@ -35,6 +45,7 @@ struct Requirements {
   // Added interfaces (global references) that the batch may also rebuild: the
   // target links their replacements, so those rebuilds are allocated first.
   std::vector<jclass> linked_interfaces;
+  std::vector<RetypedType> retyped_fields;
 };
 
 struct Context {

@@ -193,6 +193,8 @@ SCENARIOS = (
     ("field-retire", ["field-delete"], 0),
     ("field-restore", ["field-original"], 0),
     ("field-types", ["field-types"], 0),
+    ("field-retype", ["field-retype"], 0),
+    ("field-retype-restore", ["field-retype-restore"], 0),
 )
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
@@ -214,7 +216,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "kind-instance-batch", "kind-private",
                     "interface-batch-unrelated", "interface-batch-after-rejection", "interface-batch-unrelated-reverse",
                     "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child",
-                    "field-retire", "field-restore", "field-types"}
+                    "field-retire", "field-restore", "field-types", "field-retype", "field-retype-restore"}
 # VarHandle field access exists from API 33; older devices report no such checks.
 MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
@@ -540,6 +542,15 @@ REQUIRED_CHECKS = {
         "storageChangedDefault": True, "keptInstance": 43, "oldCompute": 45,
         "bytecodeOldTypeI": "java.lang.NoSuchFieldError", "bytecodeOldTypeSi": "java.lang.NoSuchFieldError",
         **field_retired_checks("Restored")},
+    "field-retype": {
+        "textType": "java.lang.CharSequence", "keep": 41, "childOwn": 17,
+        **{name: True for name in ("textKept", "numberKept", "mismatchCleared", "interfaceKept", "staticKept",
+                                   "staticMismatchCleared", "childTextKept", "childInterfaceKept",
+                                   "textKeptAfterGc", "childInterfaceKeptAfterGc")}},
+    "field-retype-restore": {
+        "textType": "java.lang.String",
+        **{name: True for name in ("builderCleared", "childTextKept", "numberKept", "interfaceKept",
+                                   "staticKept", "mismatchNull", "staticMismatchNull")}},
 }
 # Interface direct targets retain exact old reflection objects, handles and
 # JNI IDs, and old bytecode wrappers still name the removed declarations.

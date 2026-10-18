@@ -417,6 +417,20 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
       if (((old.access ^ now) & evolution::kAccStatic) || (!(old.access & kDirect) && (now & evolution::kAccPrivate)))
         snapshot->changes_invoke_kind = true;
     }
+  // A reference field whose type changes keeps a compatible old value: the
+  // commit needs the new type's class, resolved here without initializing it.
+  for (const auto& old : snapshot->live.fields) {
+    if (old.descriptor.front() != 'L') continue;
+    for (const auto& next : incoming.fields) {
+      if (next.name != old.name || next.IsStatic() != old.IsStatic() || next.descriptor == old.descriptor ||
+          next.descriptor.front() != 'L') continue;
+      jclass type = nullptr;
+      bool same_package = false;
+      jvmtiError result = resolver->Resolve(next.descriptor, snapshot->live.descriptor, roots, &type, &same_package, error);
+      if (result != JVMTI_ERROR_NONE) return result;
+      if (type) snapshot->retyped_fields.push_back({next.name, next.IsStatic(), next.descriptor, type});
+    }
+  }
   const auto& before = snapshot->live.interfaces;
   std::vector<std::string> added;
   for (const auto& descriptor : incoming.interfaces)

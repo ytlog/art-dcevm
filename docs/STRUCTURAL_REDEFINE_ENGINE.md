@@ -264,6 +264,8 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 旧字段的名称、类型或存储不再出现在新类中时，该旧字段退役：保留真实旧 ArtField，不制造墓碑；新类中同名的新字段从默认值开始。
 
+例外是只改声明类型的引用字段（同名、同存储，新旧描述符均为 `L` 类型）：旧值可赋给新类型（新类型在值的类链上、是其实现的接口，或为 `Object`）时移到新字段，否则从 null 开始，与 JBR 的 FieldCopier 一致。快照阶段经目标类加载器以 `Class.forName(..., false, loader)` 解析新类型，无法加载时按普通退役处理；数组类型不检查，同样从 null 开始。提交时在 Update 调用 ART 原函数之前，对目标及其已加载子类的每个旧实例和静态值读取旧槽位、检查类型后写入替换对象的新字段；退役字段不在 ART 的复制数组中，不会被覆盖，ART 随后为每个对象执行的写屏障覆盖这些写入。
+
 - **提交复制**：ART 的 `CopyFields`/`ClearFields` 按旧类字段数组逐个在新类中查找同名同类型字段，找不到即 `CHECK`。`CollectAndCreateNewInstances` 之后为每个含退役字段的旧类准备一份去掉退役项的数组副本；Update 开始时把旧类的字段数组槽位换成副本，ART 的 visitor 调用到达时换回原数组（11–17 均在复制之后、visitor 之前），Update 结束时再确认已换回。提交后把旧类中退役的静态引用置空，避免永久保留的旧类继续持有对象。
 - **字节码**：visitor 清除 DexCache 中的退役字段解析项，`iget/sget` 重新解析时抛 `NoSuchFieldError`；旧活动帧访问退役字段同样报错。
 - **JNI**：JNI 函数表包装 `Get/Set<Type>Field`、`GetStatic/SetStatic<Type>Field` 与 `ToReflectedField`。visitor 记录 JNI 表中的退役 ID；`JniIdManager::EncodeFieldId`（新旧两种签名各两个重载，任一对齐全即可）记录之后编码的退役或占位字段 ID；指针 ID 按地址比对。命中时抛 `NoSuchFieldError`，不解码 ID。

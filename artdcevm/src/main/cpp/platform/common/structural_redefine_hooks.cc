@@ -163,6 +163,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   requirements.linked_interfaces.clear();
   if (snapshot.hierarchy.added_interface_in_batch)
     for (const auto& [descriptor, type] : snapshot.interface_classes) requirements.linked_interfaces.push_back(type);
+  requirements.retyped_fields.clear();
+  for (const auto& field : snapshot.retyped_fields)
+    requirements.retyped_fields.push_back({field.name, field.is_static, field.descriptor, field.type});
   requirements.redirect_verification = decision.superclass_changed || snapshot.moved_ancestor ||
       !requirements.linked_interfaces.empty() || (interfaces && interfaces->IsAffected(self));
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
