@@ -64,6 +64,8 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 2. `transaction::Scope` 为每次事务建立一个上下文，统一持有引擎批次、映射计划、接口状态、Native 阶段探测的线程服务、已探测布局和每个目标的 `Requirements`；嵌套事务整体压入并恢复该上下文。批次快照按 `jclass` 索引（ART 的 `ClassRedefinition::klass_` 就是同一个值），并为受影响类和已加载子类提前创建 JNI 全局根。外层递归事务锁把快照与 ART 事务串行化；ClassFileLoadHook 引发的嵌套事务成功后使外层快照失效。
 3. 原样调用 `StructurallyRedefineClasses`；成功退役时保留全局根，否则释放；返回后清理上下文并返回 ART 的结果。
 
+标准 Route 与 Retransform 包装器均持有 `process->transaction_mutex` 调用 ART，ART 在该调用中同步执行各 Agent 的 `ClassFileLoadHook`。锁可重入，因此允许回调在同一线程发起嵌套事务；回调不得阻塞等待另一条正在调用或需要进入 `RedefineClasses`／`RetransformClasses` 的线程，否则会形成事务锁与线程等待的死锁环。
+
 `Check*` 等 ART 内部阶段不调用 JNI/JVMTI 进行类加载、遍历、可赋值比较或策略计算。例外包括类种类转换的 Collect 前置检查：ART 已暂停类加载与分配，公开 JVMTI 精确实例堆枚举在原实例分配之前拒绝不安全转换，回调不分配、不改 tag、不调用 JNI；详见[类种类演进](CLASS_KIND_EVOLUTION.md)。另一例外是分配 Hook 在当前线程上对本事务私有数组和 holder 使用 JNI `SetObjectArrayElement`（含命名局部引用桥接和异常检查）：ART 13/14/15/16 的 `ScopedThreadStateChange` 在新旧状态同为 Runnable 时不切换状态；该元素写入执行 ART 自己的写屏障，不分配托管对象且没有挂起点。局部引用容量在 Native 状态预留。这一例外禁止用于任何 ART 回调或持有 ART 锁的区域，也不适用于已发布数组。
 
 ### RetransformClasses

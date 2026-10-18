@@ -10,6 +10,8 @@
 
 `capabilities()` 只用于诊断，不作为提交前的准入判断；不要用其中的布尔值或状态字符串拦截提交。准入与支持的变化由实际事务检查决定。诊断字段参考见[测试指南](TESTING.md#诊断报告参考)。
 
+标准 `RedefineClasses` 与增强 `RetransformClasses` 在持有进程级可重入事务锁时调用 ART，期间同步执行各 Agent 的 `ClassFileLoadHook`。回调允许在同一线程发起嵌套事务；不得阻塞等待另一个正在调用或需要进入 `RedefineClasses`／`RetransformClasses` 的线程，否则该线程等待事务锁、回调等待该线程，会造成死锁。
+
 ## 前提限制
 
 - 应用必须从进程启动时就是 Java 可调试的；release 进程中 ART 不开放 `can_redefine_classes`，本库无法工作。

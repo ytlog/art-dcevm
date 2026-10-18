@@ -10,6 +10,8 @@ After successful initialization, submit the complete batch directly through the 
 
 `capabilities()` is diagnostic only, never a pre-submission admission check. Do not block submission using its booleans or status strings. Actual transaction checks decide admission and supported changes. See [testing](TESTING.en.md#diagnostic-report-reference) for the diagnostic fields.
 
+Both standard `RedefineClasses` and enhanced `RetransformClasses` call ART while holding the process-wide recursive transaction lock. ART synchronously invokes agents' `ClassFileLoadHook` callbacks within that call. A callback may start a nested transaction on the same thread. It must not block waiting for another thread that is calling or needs to enter `RedefineClasses` or `RetransformClasses`: that thread waits for the transaction lock while the callback waits for the thread, causing deadlock.
+
 ## Prerequisites
 
 - The app must be Java-debuggable from process start. ART does not expose `can_redefine_classes` in a release process, so the library cannot operate there.
