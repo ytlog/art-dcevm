@@ -17,6 +17,9 @@ public final class InterfaceRemovalFixture {
 
     public static class Subject implements Removed, Kept {
         public int marker = 5;
+        // The subject itself, typed with an interface it may stop implementing.
+        public static Removed self;
+        public static Kept keptSelf;
         public int removedValue() { return 11; }
         public int kept31() { return 22; }
     }

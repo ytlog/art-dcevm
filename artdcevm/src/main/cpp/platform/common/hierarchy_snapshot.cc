@@ -431,6 +431,17 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
       if (type) snapshot->retyped_fields.push_back({next.name, next.IsStatic(), next.descriptor, type});
     }
   }
+  for (const auto& removed : snapshot->live.interfaces) {
+    if (std::find(incoming.interfaces.begin(), incoming.interfaces.end(), removed) != incoming.interfaces.end()) continue;
+    for (const auto& field : incoming.fields) {
+      if (!field.IsStatic() || field.descriptor != removed) continue;
+      jclass type = nullptr;
+      bool same_package = false;
+      jvmtiError result = resolver->Resolve(removed, snapshot->live.descriptor, roots, &type, &same_package, error);
+      if (result != JVMTI_ERROR_NONE) return result;
+      if (type) snapshot->narrowed_statics.push_back({field.name, true, field.descriptor, type});
+    }
+  }
   const auto& before = snapshot->live.interfaces;
   std::vector<std::string> added;
   for (const auto& descriptor : incoming.interfaces)

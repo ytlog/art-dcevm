@@ -49,6 +49,8 @@ struct Requirements {
   // target links their replacements, so those rebuilds are allocated first.
   std::vector<jclass> linked_interfaces;
   std::vector<RetypedType> retyped_fields;
+  // Statics typed with an interface the target stops implementing (imt_sealing.h).
+  std::vector<RetypedType> narrowed_statics;
 };
 
 struct Context {

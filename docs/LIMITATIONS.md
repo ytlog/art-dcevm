@@ -96,7 +96,7 @@
 ## 移除接口的语义
 
 - 普通类可以不再实现某个接口。已有实例与已加载子类的实例随即不再是该接口的实例（`instanceof`、`isInstance` 与强制转换按新层级判断）。
-- 仍把这些对象当作被移除接口调用的已校验代码，以及字段、数组中以该接口类型保存的旧引用，调用其方法时抛 `IncompatibleClassChangeError`，与 JVM 相同；解释执行、JIT 编译后的代码与 boot 代码（例如 `Thread.run` 调用 `Runnable.run`）都如此。旧引用不会被置空。
+- 仍把这些对象当作被移除接口调用的已校验代码，以及字段、数组中以该接口类型保存的旧引用，调用其方法时抛 `IncompatibleClassChangeError`，与 JVM 相同；解释执行、JIT 编译后的代码与 boot 代码（例如 `Thread.run` 调用 `Runnable.run`）都如此。该类自己以被移除接口声明的静态字段若值已不实现该接口则置为 `null`（与 JBR 相同）；其他旧引用不会被置空。
 - 类从被移除接口继承的 default 方法随之消失：以类本身调用它的旧字节码抛 `NoSuchMethodError`。
 - 这些类的接口调用经分派槽位查找执行，会稍慢。之后加载的具体子类继承这一行为；失去接口的抽象类之后才加载的具体子类除外，见引擎文档[移除接口](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。
 - 接口目标也可以移除父接口：其子接口、实现类及其子类随之失去该父接口，语义同上；有 Proxy 实现类时以 66 拒绝。
@@ -150,7 +150,6 @@
 | 接口新增 abstract 方法，而已加载的实现类没有实现 | 接受，调用时抛 `AbstractMethodError` | 拒绝 63，提交前指出缺实现的类；Proxy 实现类除外，与 JBR 相同 |
 | 方法在 static 与实例之间变化，或改为 private，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 拒绝 71：ART 重新解析时不检查调用方式，无法抛出该错误；同批提交调用方即可接受 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
-| 移除接口后，以该接口类型保存不再兼容的值的字段 | 被重定义类的静态字段置为 `null`；实例字段与其他类的字段保留，经它调用抛 `IncompatibleClassChangeError` | 全部保留，经它调用抛 `IncompatibleClassChangeError` |
 | 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 可能分派到同一 IMT 槽位的其他方法，见[引擎风险](STRUCTURAL_REDEFINE_ENGINE.md#风险) |
 | 类在普通类与接口等种类之间变化 | 接受，旧调用点抛 `IncompatibleClassChangeError` | 拒绝 70 |
 | boot 类、`Thread` 及其父类型、数组、代理类自身 | 部分可重定义 | 按 ART 的规则拒绝 |

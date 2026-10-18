@@ -689,7 +689,8 @@ REQUIRED_CHECKS["interface-drop-parent-restore"] = {
     "isBase": True, "viaChild": 11, "compiledFailures": 0, "copiedDefault": 7, "side": 22}
 REQUIRED_CHECKS["interface-removal-batched"] = {"stillRemoved": True, "viaRemoved": 11}
 REQUIRED_CHECKS["interface-removal"] = {
-    "warmedUp": 0, "runBefore": 1, "lateLoadedBefore": False, "removed": False, "marker": 5, "kept": 22,
+    "warmedUp": 0, "runBefore": 1, "lateLoadedBefore": False, "staticCleared": True, "staticKept": True,
+    "removed": False, "marker": 5, "kept": 22,
     "viaRemoved": "java.lang.IncompatibleClassChangeError", "compiledFailures": REMOVAL_TIMES,
     "held": "java.lang.IncompatibleClassChangeError", "copiedDefault": "java.lang.NoSuchMethodError",
     "childRemoved": False, "childKept": 22, "childFailures": REMOVAL_TIMES,

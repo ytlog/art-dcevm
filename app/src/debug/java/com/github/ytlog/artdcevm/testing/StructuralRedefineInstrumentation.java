@@ -454,7 +454,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             thread.run();
             scenario.check("runBefore", 1, task.runs);
             scenario.check("lateLoadedBefore", false, StandardJvmtiClient.isLoaded(late));
+            InterfaceRemovalFixture.Subject.self = subject;
+            InterfaceRemovalFixture.Subject.keptSelf = subject;
             scenario.redefine(batch, "interface-remove", "interface-remove");
+            // As on JBR: the target's own static typed with the removed
+            // interface is cleared; one typed with a kept interface is not.
+            scenario.check("staticCleared", true,
+                    InterfaceRemovalFixture.Subject.class.getField("self").get(null) == null);
+            scenario.check("staticKept", true, InterfaceRemovalFixture.Subject.keptSelf == subject);
             scenario.check("removed", false, InterfaceRemovalFixture.Removed.class.isInstance(subject));
             scenario.check("interfaces", "[" + InterfaceRemovalFixture.Kept.class + "]",
                     java.util.Arrays.toString(InterfaceRemovalFixture.Subject.class.getInterfaces()));

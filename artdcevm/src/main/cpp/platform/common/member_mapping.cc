@@ -113,6 +113,7 @@ struct PlanOps {
   uint64_t* (*field_slot)(void* klass, size_t slot);
   uint32_t* (*superclass)(void* klass);
   void (*copy_retyped)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, const MappingPlan& plan);
+  void (*clear_narrowed)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data);
 };
 // Named JavaVMExt::DecodeGlobal and the runtime's JavaVM; without them a
 // retyped field starts from null like any retired field.
@@ -316,8 +317,30 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
       }
     }
   }
+  // Commit, after ART's UpdateClassStructurally replaced old objects with
+  // their replacements: a static of the target declared with an interface it
+  // stopped implementing keeps only a value that still implements it (JBR
+  // clears the rest). The value's class is already the replacement class.
+  static void ClearNarrowed(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data) {
+    const transaction::Context* context = transaction::Current();
+    auto* new_classes = data.Classes(false);
+    if (!context || !new_classes || !decode_global) return;
+    auto* target = class_layout::Element<Class>(thread, new_classes, 0);
+    const std::string descriptor = class_layout::ClassDescriptor(thread, *target);
+    for (const auto& [self, requirements] : context->targets) {
+      if (requirements.descriptor != descriptor) continue;
+      for (const auto& field : requirements.narrowed_statics) {
+        auto* type = static_cast<Class*>(decode_global(runtime_vm, field.type));
+        ArtField* storage = find_static_field(target, field.name, field.descriptor);
+        if (!type || !storage) continue;
+        auto* slot = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(target) + storage->offset);
+        auto* value = static_cast<abi::Object*>(runtime_thread::Read(thread, *slot));
+        if (value && !Assignable(thread, class_layout::Heap<Class>(thread, value->klass), type, false)) *slot = 0;
+      }
+    }
+  }
   static constexpr PlanOps Make(int) {
-    return {Plan, Planner::FieldSlot, Planner::Superclass, Planner::CopyRetyped};
+    return {Plan, Planner::FieldSlot, Planner::Superclass, Planner::CopyRetyped, Planner::ClearNarrowed};
   }
 };
 
@@ -422,6 +445,8 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   reinterpret_cast<Function>(original_update)(self, data);
   RestoreFieldArrays();
+  if (plan && class_layout::Selected() >= 0)
+    if (const auto thread = runtime_thread::Ready()) kPlanners[class_layout::Selected()].clear_narrowed(*thread, data);
   // ART has replaced the interface's references, proxy IfTables included.
   proxy_relink::Apply(self, data);
   // ART's ClearFields skipped the retired statics; drop their references so
