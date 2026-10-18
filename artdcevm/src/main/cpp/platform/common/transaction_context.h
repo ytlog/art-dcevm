@@ -42,9 +42,6 @@ struct Requirements {
   // During ART verification, resolve the descriptor to the target's
   // replacement. Superclass changes and interface groups need it.
   bool redirect_verification = false;
-  // The target stops implementing an interface: seal the interface dispatch of
-  // its replacement classes before ART's no-failure point (imt_sealing.h).
-  bool seal_dispatch = false;
   // Added interfaces (global references) that the batch may also rebuild: the
   // target links their replacements, so those rebuilds are allocated first.
   std::vector<jclass> linked_interfaces;

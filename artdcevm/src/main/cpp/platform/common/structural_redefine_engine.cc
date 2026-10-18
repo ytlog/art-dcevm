@@ -57,6 +57,7 @@ void PublishInterfaceBackend(interface_redefinition::Backend* backend) {
 }
 
 bool RollBack(std::string* failure, size_t count = SIZE_MAX) {
+  imt_sealing::Installed(false);
   bool removed_all = true;
   for (size_t i = std::min(count, process->hook_tokens.size()); i-- > 0;) {
     if (!process->hook_tokens[i]) continue;
@@ -130,6 +131,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   prepared.runtime_thread = runtime_thread::Available();
   class_layout::Prepare({});
   std::string retirement_note, interface_note, sealing_note, failure;
+  bool sealing_prepared = false;
   JNIEnv* jni = nullptr;
   vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
   std::vector<Hook> retirement_hooks;
@@ -161,7 +163,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     prepared.instance_check = true;
     prepared.superclass_change = verification_redirect::ResolvesClasses();
     // Optional: without it an ordinary class cannot drop an interface.
-    if (!imt_sealing::Prepare(process->layout_services, &failure))
+    sealing_prepared = imt_sealing::Prepare(process->layout_services, &retirement_hooks, &failure);
+    if (!sealing_prepared)
       sealing_note = "interface removal unavailable: " + failure;
     else if (!proxy_relink::Install(process->layout_services, &failure))
       sealing_note = "Proxy implementations unavailable: " + failure;
@@ -216,6 +219,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
         process->layout_services.mirror_class, process->layout_services.find_instance_field},
         &replacements, &interface_note, &process->interface_runtime));
   }
+  imt_sealing::Installed(prepared.retirement && sealing_prepared);
   // The engine's own environment carries no other events.
   jvmtiEventCallbacks callbacks{};
   callbacks.ClassPrepare = ClassPrepared;

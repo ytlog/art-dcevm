@@ -27,6 +27,8 @@ SOURCE = r'''
 #include "platform/common/verification_redirect.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/transaction_context.h"
+#include "platform/common/imt_sealing.h"
+#include "platform/symbols/imt_sealing_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/runtime_thread_symbols.h"
 #include <iostream>
@@ -39,6 +41,8 @@ SOURCE = r'''
 using namespace artdcevm;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 bool route_hooked = false;
+int sealing_hooks = 0;
+bool failed_sealing_hook = false;
 interface_redefinition::Backend* prepared_interface = nullptr;
 using Route = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Route routed = nullptr;
@@ -84,6 +88,10 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (key == symbols::runtime_thread::kReadBarrierMark.name) return reinterpret_cast<void*>(Mark);
   if (key == symbols::runtime_thread::kUseReadBarrier.name) return nullptr;
   if (mode == 3 && key == symbols::structural::kCollectNewFieldAndMethodMappings.name) return nullptr;
+  if (mode >= 6 && key == symbols::imt_sealing::kLinearAllocAllocKind.name) return nullptr;
+  if (mode == 6 && key == symbols::imt_sealing::kGetImtConflictMethod.name) return nullptr;
+  if (mode == 7 && (key == symbols::imt_sealing::kLinkMethods.name ||
+                    key == symbols::imt_sealing::kLinkMethods64.name)) return nullptr;
   // No field placeholders are needed to exercise method-guard installation.
   if (key.find("EncodeFieldId") != std::string::npos) return nullptr;
   return &addresses[key];
@@ -103,6 +111,10 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
       if (&address == target) { std::cout << "HOOK " << name << '\n'; found = true; break; }
     }
     Require(found, "Hook target was not resolved by name");
+  }
+  if (target == &addresses[symbols::imt_sealing::kLinkMethods64.name]) {
+    ++sealing_hooks;
+    if (mode == 8 && !failed_sealing_hook) { failed_sealing_hook = true; return nullptr; }
   }
   if (mode == 1 && hook_calls == 2) return nullptr;
   *original = target;
@@ -139,7 +151,7 @@ jvmtiError JNICALL SetJni(jvmtiEnv*, const jniNativeInterface*) {
   prepared_interface = interface_redefinition::detail::process->backend.get();
   Require(route_hooked, "JNI table changed before the final inline hook");
   hooks_at_set = hook_calls;
-  return mode == 2 ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE;
+  return (mode == 2 || mode == 9) ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Callbacks(jvmtiEnv*, const jvmtiEventCallbacks*, jint) {
   return JVMTI_ERROR_NONE;
@@ -247,6 +259,25 @@ int main(int argc, char** argv) {
               "Failed inline install changed JNI table or retained hooks");
       Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE && set_calls == 1,
               "Retry after rollback did not reuse process state");
+    } else if (mode >= 6) {
+      if (mode == 8) {
+        Require(result == JVMTI_ERROR_INTERNAL && !imt_sealing::Available() && active.empty(),
+                "Failed sealing hook installation retained hooks or enabled removal");
+        Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE &&
+                sealing_hooks == 2 && imt_sealing::Available(),
+                "Retry skipped the prepared pre-publication linking hook");
+      } else {
+        Require(result == JVMTI_ERROR_NONE, "Missing optional sealing service broke initialization");
+        Require(!imt_sealing::Available(), "Unavailable or rolled-back sealing hook enabled removal");
+        const auto caps = structural_redefine::Capabilities();
+        Require(caps.find("\"interfaceRemoval\":false") != std::string::npos,
+                "Missing linking service still advertised interface removal");
+        Require(caps.find(mode == 9 ? "\"methodDeletion\":false" : "\"methodDeletion\":true") != std::string::npos,
+                "Sealing failure changed unrelated member capabilities");
+        if (mode == 9) Require(sealing_hooks == 1 && active.size() == 4,
+                "JNI fallback retained the optional pre-publication linking hook");
+        else Require(sealing_hooks == 0, "Incomplete sealing services installed a linking hook");
+      }
     } else {
       Require(result == JVMTI_ERROR_NONE, "Optional retirement failure changed initialization error");
       const auto caps = structural_redefine::Capabilities();
@@ -342,7 +373,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(6):
+        for case in range(10):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:
@@ -353,7 +384,7 @@ def main():
                 'capabilities': json.loads(next(line[13:] for line in lines if line.startswith('CAPABILITIES '))),
                 'hooksSha256': hashlib.sha256('\n'.join(line[5:] for line in lines if line.startswith('HOOK ')).encode()).hexdigest(),
                 'unhooks': [int(line[7:]) for line in lines if line.startswith('UNHOOK ')]}
-            if contract != contracts[str(case)]:
+            if case < 6 and contract != contracts[str(case)]:
                 raise RuntimeError(f'Installer case {case} changed capabilities, hook order or rollback order')
             print(next(line for line in lines if line.startswith('Installer case ')))
         print('Evidence: ' + str(evidence.relative_to(ROOT)))

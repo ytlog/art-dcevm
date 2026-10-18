@@ -208,7 +208,14 @@ SCENARIOS = (
     ("field-retype-restore", ["field-retype-restore"], 0),
     ("thread-subclass", ["thread-subclass-add"], 0),
     ("interface-removal", ["interface-remove", "interface-remove"], 0),
+    ("interface-removal-repeat", ["interface-remove-again"], 0),
+    ("interface-removal-group", ["interface-remove"], 0),
     ("interface-removal-restore", ["interface-remove-original", "interface-remove-original"], 0),
+    ("abstract-removal-abort", ["abstract-remove", "abstract-remove"], 110),
+    ("abstract-removal", ["abstract-remove", "abstract-remove"], 0),
+    ("abstract-removal-repeat", ["abstract-remove-again"], 0),
+    ("abstract-removal-group", ["abstract-remove"], 0),
+    ("abstract-removal-restore", ["abstract-remove-original"], 0),
 )
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
@@ -236,7 +243,8 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
 MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
                         if name.startswith("interface-abstract-") and code == 0)
-MAPPED_SCENARIOS.update({"interface-remove", "interface-removal", "interface-removal-restore",
+MAPPED_SCENARIOS.update({"interface-removal-repeat", "interface-removal-group", "abstract-removal",
+                         "abstract-removal-repeat", "abstract-removal-group", "abstract-removal-restore", "interface-remove", "interface-removal", "interface-removal-restore",
                          "proxy-interface", "proxy-interface-restore",
                          "interface-drop-parent", "interface-drop-parent-restore"})
 VAR_HANDLE_API = 33
@@ -696,7 +704,22 @@ REQUIRED_CHECKS["interface-removal"] = {
     "held": "java.lang.IncompatibleClassChangeError", "copiedDefault": "java.lang.NoSuchMethodError",
     "childRemoved": False, "childKept": 22, "childFailures": REMOVAL_TIMES,
     "bootDispatch": "java.lang.IncompatibleClassChangeError", "runAfter": 1, "spins": 1,
-    "lateKept": 22, "lateOwn": 33, "lateFailures": REMOVAL_TIMES, "afterGc": 5}
+    "lateKept": 22, "lateOwn": 33, "lateFailures": REMOVAL_TIMES,
+    "overrideKept": 44, "parentCacheKept": 22, "overrideFailures": REMOVAL_TIMES, "afterGc": 5}
+REQUIRED_CHECKS["interface-removal-repeat"] = {"added": 0, "kept": 22,
+    "failures": REMOVAL_TIMES, "childFailures": REMOVAL_TIMES}
+REQUIRED_CHECKS["interface-removal-group"] = {"kept": 22,
+    "failures": REMOVAL_TIMES, "lateFailures": REMOVAL_TIMES}
+REQUIRED_CHECKS["abstract-removal-abort"] = {"armed": 0, "stillImplements": True, "failures": 0}
+REQUIRED_CHECKS["abstract-removal"] = {"lateLoadedBefore": False, "removed": False,
+    "existingFailures": REMOVAL_TIMES, "lateKept": 22, "lateOwn": 33, "lateFailures": REMOVAL_TIMES,
+    "directKept": 55, "directFailures": REMOVAL_TIMES, "existingKept": 22,
+    "lateBootFailures": REMOVAL_TIMES, "lateSpins": 0,
+    "existingBootDispatch": "java.lang.IncompatibleClassChangeError", "existingRuns": 1}
+REQUIRED_CHECKS["abstract-removal-repeat"] = {"added": 0, "existingFailures": REMOVAL_TIMES,
+    "lateFailures": REMOVAL_TIMES, "marker": 5}
+REQUIRED_CHECKS["abstract-removal-group"] = {"kept": 22, "lateFailures": REMOVAL_TIMES}
+REQUIRED_CHECKS["abstract-removal-restore"] = {"existingFailures": 0, "lateFailures": 0}
 REQUIRED_CHECKS["interface-removal-restore"] = {
     "restored": True, "viaRemoved": 11, "compiledFailures": 0, "held": 11, "copiedDefault": 7,
     "lateFailures": 0, "lateOwn": 33, "runRestored": 2}
@@ -910,7 +933,7 @@ def scenario_sequence(scenario_group):
     if scenario_group == "interface-drop-parent":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-drop-parent"))
     if scenario_group == "interface-removal":
-        return tuple(item for item in SCENARIOS if item[0] in ("interface-removal", "interface-removal-restore"))
+        return tuple(item for item in SCENARIOS if item[0].startswith(("interface-removal", "abstract-removal")) and item[0] != "interface-removal-batched")
     if scenario_group == "ordinary":
         # Match the contiguous interface-target block in runScenarios. Ordinary
         # classes adding interfaces remain part of the ordinary suite.

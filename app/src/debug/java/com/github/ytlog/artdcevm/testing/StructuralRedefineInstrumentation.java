@@ -56,6 +56,7 @@ import com.github.ytlog.artdcevm.fixture.SuperMiddle;
 import com.github.ytlog.artdcevm.fixture.SuperSubject;
 import com.github.ytlog.artdcevm.fixture.ThreadSubclassFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture;
+import com.github.ytlog.artdcevm.fixture.AbstractRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.ProxyFixture;
 import com.github.ytlog.artdcevm.fixture.ParentRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.ToolHost;
@@ -487,8 +488,28 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("lateKept", 22, InterfaceRemovalFixture.kept(lateSubject));
             scenario.check("lateOwn", 33, ((InterfaceRemovalFixture.Late) lateChild[0]).late22());
             scenario.check("lateFailures", times, InterfaceRemovalFixture.failures(lateSubject, times));
+            InterfaceRemovalFixture.Subject override = (InterfaceRemovalFixture.Subject) Class.forName(
+                    "com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture$LateOverride")
+                    .getConstructor().newInstance();
+            scenario.check("overrideKept", 44, InterfaceRemovalFixture.kept(override));
+            scenario.check("parentCacheKept", 22, InterfaceRemovalFixture.kept(lateSubject));
+            scenario.check("overrideFailures", times, InterfaceRemovalFixture.failures(override, times));
             Runtime.getRuntime().gc();
             scenario.check("afterGc", 5, subject.marker);
+        });
+        runScenario("interface-removal-repeat", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceRemovalFixture.Subject.class}, "interface-remove-again");
+            scenario.check("added", 0L, InterfaceRemovalFixture.Subject.class.getField("added").getLong(subject));
+            scenario.check("kept", 22, InterfaceRemovalFixture.kept(subject));
+            scenario.check("failures", times, InterfaceRemovalFixture.failures(subject, times));
+            scenario.check("childFailures", times, InterfaceRemovalFixture.failures(child, times));
+        });
+        runScenario("interface-removal-group", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceRemovalFixture.Kept.class}, "interface-remove");
+            scenario.check("kept", 22, InterfaceRemovalFixture.kept(subject));
+            scenario.check("failures", times, InterfaceRemovalFixture.failures(subject, times));
+            scenario.check("lateFailures", times, InterfaceRemovalFixture.failures(
+                    (InterfaceRemovalFixture.Subject) lateChild[0], times));
         });
         runScenario("interface-removal-restore", 0, scenario -> {
             scenario.redefine(batch, "interface-remove-original", "interface-remove-original");
@@ -502,6 +523,74 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("lateOwn", 33, ((InterfaceRemovalFixture.Late) lateChild[0]).late22());
             thread.run();
             scenario.check("runRestored", 2, task.runs);
+        });
+        runAbstractRemovalScenarios();
+    }
+
+    private void runAbstractRemovalScenarios() throws Exception {
+        final int times = 200_000;
+        AbstractRemovalFixture.Existing existing = new AbstractRemovalFixture.Existing();
+        AbstractRemovalFixture.Task existingTask = new AbstractRemovalFixture.ExistingTask();
+        Thread before = new Thread(existingTask);
+        before.run();
+        Class<?>[] batch = {AbstractRemovalFixture.Subject.class, AbstractRemovalFixture.Task.class};
+        AbstractRemovalFixture.Subject[] late = new AbstractRemovalFixture.Subject[1];
+        runScenario("abstract-removal-abort", 110, scenario -> {
+            scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+            scenario.expectRejectionBy(AbstractRemovalFixture.Subject.class);
+            scenario.redefine(batch, "abstract-remove", "abstract-remove");
+            scenario.check("stillImplements", true, AbstractRemovalFixture.Removed.class.isInstance(existing));
+            scenario.check("failures", 0, AbstractRemovalFixture.failures(existing, times));
+        });
+        runScenario("abstract-removal", 0, scenario -> {
+            scenario.check("lateLoadedBefore", false, StandardJvmtiClient.isLoaded(
+                    "Lcom/github/ytlog/artdcevm/fixture/AbstractRemovalFixture$LateChild;"));
+            scenario.redefine(batch, "abstract-remove", "abstract-remove");
+            scenario.check("removed", false, AbstractRemovalFixture.Removed.class.isInstance(existing));
+            scenario.check("existingFailures", times, AbstractRemovalFixture.failures(existing, times));
+            late[0] = (AbstractRemovalFixture.Subject) Class.forName(
+                    "com.github.ytlog.artdcevm.fixture.AbstractRemovalFixture$LateChild")
+                    .getConstructor().newInstance();
+            scenario.check("lateKept", 22, late[0].kept31());
+            scenario.check("lateOwn", 33, ((AbstractRemovalFixture.Late) late[0]).late22());
+            scenario.check("lateFailures", times, AbstractRemovalFixture.failures(late[0], times));
+            AbstractRemovalFixture.Subject direct = (AbstractRemovalFixture.Subject) Class.forName(
+                    "com.github.ytlog.artdcevm.fixture.AbstractRemovalFixture$LateDirect")
+                    .getConstructor().newInstance();
+            scenario.check("directKept", 55, AbstractRemovalFixture.kept(direct));
+            scenario.check("directFailures", times, AbstractRemovalFixture.failures(direct, times));
+            scenario.check("existingKept", 22, AbstractRemovalFixture.kept(existing));
+            AbstractRemovalFixture.Task lateTask = (AbstractRemovalFixture.Task) Class.forName(
+                    "com.github.ytlog.artdcevm.fixture.AbstractRemovalFixture$LateTask")
+                    .getConstructor().newInstance();
+            Thread after = AbstractRemovalFixture.thread(lateTask);
+            int bootFailures = 0;
+            for (int i = 0; i < times; ++i) {
+                try { after.run(); }
+                catch (IncompatibleClassChangeError expected) { bootFailures++; }
+            }
+            scenario.check("lateBootFailures", times, bootFailures);
+            scenario.check("lateSpins", 0, lateTask.spins);
+            scenario.expectError("existingBootDispatch", IncompatibleClassChangeError.class, before::run);
+            scenario.check("existingRuns", 1, existingTask.runs);
+        });
+        runScenario("abstract-removal-repeat", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{AbstractRemovalFixture.Subject.class}, "abstract-remove-again");
+            scenario.check("added", 0L, AbstractRemovalFixture.Subject.class.getField("added").getLong(existing));
+            scenario.check("existingFailures", times, AbstractRemovalFixture.failures(existing, times));
+            scenario.check("lateFailures", times, AbstractRemovalFixture.failures(late[0], times));
+            Runtime.getRuntime().gc();
+            scenario.check("marker", 5, late[0].marker);
+        });
+        runScenario("abstract-removal-group", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{AbstractRemovalFixture.Kept.class}, "abstract-remove");
+            scenario.check("kept", 22, late[0].kept31());
+            scenario.check("lateFailures", times, AbstractRemovalFixture.failures(late[0], times));
+        });
+        runScenario("abstract-removal-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{AbstractRemovalFixture.Subject.class}, "abstract-remove-original");
+            scenario.check("existingFailures", 0, AbstractRemovalFixture.failures(existing, times));
+            scenario.check("lateFailures", 0, AbstractRemovalFixture.failures(late[0], times));
         });
     }
 

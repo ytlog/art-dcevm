@@ -1,5 +1,6 @@
 #include "platform/common/imt_sealing.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -25,19 +26,38 @@ constexpr int32_t kObjectVTableLength = 11;
 // holds native ArtMethod pointers only.
 constexpr uint32_t kNoGCRoots = 0;
 
-using CreateConflictMethod = void* (*)(void* runtime, void* linear_alloc);
+using GetConflictMethod = void* (*)(void* runtime);
 using Alloc = void* (*)(void* linear_alloc, void* thread, size_t size);
 using AllocKind = void* (*)(void* linear_alloc, void* thread, size_t size, uint32_t kind);
 
 struct Services {
-  CreateConflictMethod create_conflict_method = nullptr;
+  GetConflictMethod conflict_method = nullptr;
   Alloc alloc = nullptr;
   AllocKind alloc_kind = nullptr;
   abi::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
 };
 std::mutex state_mutex;
 Services services;
-std::atomic<bool> ready{false};
+std::atomic<bool> ready{false}, installed{false};
+std::atomic<void*> protected_conflict{nullptr};
+using Link = bool (*)(void*, void*, abi::Handle, abi::Handle, bool*, void**);
+void* original_link_methods = nullptr;
+
+// Both ClassLinker::LinkMethods (11--17) and the 13--17 k64 helper have
+// these explicit arguments. No ART object or thread field is read here.
+// The output remains on LinkClass's stack until ART allocates its own IMT,
+// installs it, then publishes kResolved. Setting new_conflict prevents ART
+// from sharing an ancestor's IMT/cache even when every slot initially matches.
+bool LinkMethods(void* self, void* thread, abi::Handle klass, abi::Handle interfaces,
+                 bool* new_conflict, void** imt) noexcept {
+  if (!reinterpret_cast<Link>(original_link_methods)(self, thread, klass, interfaces, new_conflict, imt))
+    return false;
+  if (void* conflict = protected_conflict.load(std::memory_order_acquire)) {
+    std::fill_n(imt, kImtSize, conflict);
+    *new_conflict = true;
+  }
+  return true;
+}
 std::string state = "unavailable: not prepared";
 
 void* AllocTable(void* linear_alloc, void* thread) {
@@ -99,9 +119,10 @@ template <typename Class, typename Method> struct Sealer {
     return true;
   }
 
-  // A new IMT for `object` whose every slot is its own fresh conflict method:
-  // ART fills a non-shared conflict method's table in place, and a subclass
-  // may copy each slot separately. Null `table` for an abstract class.
+  // A private IMT of canonical conflict slots. ART recognizes the canonical
+  // method and lazily creates a private method/cache for each actually used
+  // slot, instead of allocating 43 empty conflict methods in every transaction.
+  // Abstract classes have no IMT; LinkMethods protects their later descendants.
   static bool Build(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self, void* object,
                     void*** table, std::string* why) {
     auto* klass = static_cast<Class*>(object);
@@ -112,10 +133,9 @@ template <typename Class, typename Method> struct Sealer {
     if (!linear_alloc) return false;
     auto** slots = static_cast<void**>(AllocTable(linear_alloc, self->driver->self));
     if (!slots) return Fail(why, "cannot allocate an IMT");
-    for (size_t slot = 0; slot < kImtSize; ++slot) {
-      slots[slot] = services.create_conflict_method(self->driver->runtime, linear_alloc);
-      if (!slots[slot]) return Fail(why, "cannot allocate an IMT conflict method");
-    }
+    void* conflict = services.conflict_method(self->driver->runtime);
+    if (!conflict) return Fail(why, "ART has no canonical IMT conflict method");
+    std::fill_n(slots, kImtSize, conflict);
     *table = slots;
     return true;
   }
@@ -130,34 +150,54 @@ template <typename Class, typename Method> struct Sealer {
 const auto kSealers = class_layout::Table<Sealer, SealOps>();
 }  // namespace
 
-bool Prepare(const class_layout::Services& layout, std::string* failure) {
+bool Prepare(const class_layout::Services& layout, std::vector<Hook>* hooks, std::string* failure) {
   std::lock_guard<std::mutex> lock(state_mutex);
-  if (ready.load()) return true;
+  ready.store(false);
   Services found;
-  found.create_conflict_method =
-      reinterpret_cast<CreateConflictMethod>(symbols::Find(symbols::imt_sealing::kCreateImtConflictMethod));
+  found.conflict_method =
+      reinterpret_cast<GetConflictMethod>(symbols::Find(symbols::imt_sealing::kGetImtConflictMethod));
   found.alloc = reinterpret_cast<Alloc>(symbols::Find(symbols::imt_sealing::kLinearAllocAlloc));
   found.alloc_kind = reinterpret_cast<AllocKind>(symbols::Find(symbols::imt_sealing::kLinearAllocAllocKind));
   found.find_instance_field = layout.find_instance_field;
   std::string reason;
-  if (!found.create_conflict_method) reason = std::string("missing ") + symbols::imt_sealing::kCreateImtConflictMethod.name;
-  else if (!found.alloc == !found.alloc_kind) reason = "expected exactly one LinearAlloc::Alloc";
+  if (!found.alloc == !found.alloc_kind) reason = "expected exactly one LinearAlloc::Alloc";
   else if (!found.find_instance_field) reason = "no instance field lookup";
+  else if (!found.conflict_method) reason = std::string("missing ") + symbols::imt_sealing::kGetImtConflictMethod.name;
+  const auto* link_symbol = &symbols::imt_sealing::kLinkMethods64;
+  void* link = symbols::Find(*link_symbol);
+  if (!link) {
+    link_symbol = &symbols::imt_sealing::kLinkMethods;
+    link = symbols::Find(*link_symbol);
+  }
+  if (reason.empty() && !link) reason = "missing pre-publication ClassLinker::LinkMethods service";
   if (!reason.empty()) {
     state = "unavailable: " + reason;
     *failure = reason;
     return false;
   }
+  // Always append the hook, including a retry after the engine rolled back
+  // an earlier installation. Resolved services alone never enable removal.
+  hooks->push_back({link, HookAddress(LinkMethods), &original_link_methods, link_symbol->name});
   services = found;
   state = "available";
   ready.store(true);
   return true;
 }
 
-bool Available() { return ready.load(); }
+void Installed(bool value) { installed.store(value, std::memory_order_release); }
+bool Available() { return ready.load() && installed.load(std::memory_order_acquire); }
+bool Enable(abi::ClassRedefinitionPrefix* self, std::string* why) {
+  if (!Available()) return Fail(why, State());
+  void* conflict = services.conflict_method(self->driver->runtime);
+  if (!conflict) return Fail(why, "ART has no canonical IMT conflict method");
+  protected_conflict.store(conflict, std::memory_order_release);
+  return true;
+}
+bool Protecting() { return protected_conflict.load(std::memory_order_acquire) != nullptr; }
 
 std::string State() {
   std::lock_guard<std::mutex> lock(state_mutex);
+  if (ready.load() && !installed.load()) return "unavailable: pre-publication linking protection is not installed";
   return state;
 }
 

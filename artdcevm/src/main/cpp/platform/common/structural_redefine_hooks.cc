@@ -177,6 +177,15 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
+  // Activate before ART links any replacements. This is intentionally
+  // monotonic: a rejected transaction can retain dispatch protection without
+  // changing the old classes or their behavior. A later structural rebuild,
+  // including an interface group with no new removal, must preserve it.
+  if (decision.interfaces_removed && !imt_sealing::Enable(self, &error)) {
+    self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+    Diagnose(incoming.descriptor + ": " + error, true);
+    return false;
+  }
   // Hand the accepted decision to the hooks on ART's transaction. When ART's
   // own mapping cannot commit the change, a later probe failure in this
   // transaction must reject it before ART's no-failure point.
@@ -192,7 +201,6 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
-  requirements.seal_dispatch = decision.interfaces_removed;
   requirements.linked_interfaces.clear();
   if (snapshot.hierarchy.added_interface_in_batch)
     for (const auto& [descriptor, type] : snapshot.interface_classes) requirements.linked_interfaces.push_back(type);
@@ -278,11 +286,6 @@ bool CheckInstances(const runtime_thread::VerifiedThread& thread,
   }
   return true;
 }
-bool SealsDispatch(const transaction::Context& context) {
-  for (const auto& [target, requirements] : context.targets)
-    if (requirements.seal_dispatch) return true;
-  return false;
-}
 bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) noexcept try {
   interface_redefinition::Backend* interfaces = InterfaceBackend();
   auto* context = transaction::Current();
@@ -326,10 +329,10 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
                              named(("Proxy implementation cannot be relinked: " + why).c_str()));
     // Last: every check above may still reject, and only the unpublished
     // replacements change here.
-    // An interface group's replacements sit in its owner entry's arrays, which
-    // need not be the entry of the interface that dropped a parent: once any
-    // target of the transaction narrows, every entry's replacements are sealed.
-    if (SealsDispatch(*context) && !imt_sealing::Seal(*thread, self, *data, selected, &why))
+    // Replacements sit in an interface group's owner arrays, regardless of
+    // which entry narrows. Once narrowing has ever been accepted, every later
+    // rebuild must keep protection, including batches with no new removal.
+    if (imt_sealing::Protecting() && !imt_sealing::Seal(*thread, self, *data, selected, &why))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                              named(("interface dispatch cannot be sealed: " + why).c_str()));
     class_layout::Select(selected);

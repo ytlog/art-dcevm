@@ -28,6 +28,9 @@ public final class InterfaceRemovalFixture {
     public static class LateChild extends Subject implements Late {
         public int late22() { return 33; }
     }
+    public static class LateOverride extends LateChild {
+        public int kept31() { return 44; }
+    }
     public static class Task implements Runnable, Spinner {
         public int runs, spins;
         public void run() { runs++; }

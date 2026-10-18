@@ -4,10 +4,14 @@
 // Runtime services that give a class its own interface method table. Hidden
 // in newer runtimes, so they resolve from any named table.
 namespace artdcevm::symbols::imt_sealing {
-// Runtime::CreateImtConflictMethod(LinearAlloc*): a runtime method whose entry
-// is the IMT conflict trampoline, with its own empty conflict table.
-inline constexpr NamedSymbol kCreateImtConflictMethod{
-    Library::kArt, "_ZN3art7Runtime23CreateImtConflictMethodEPNS_11LinearAllocE", SymbolTable::kAnyNamed};
+// runtime.h/runtime-inl.h: the process-wide conflict method. ART creates a
+// private slot cache when AddMethodToConflictTable sees this canonical method.
+inline constexpr NamedSymbol kGetImtConflictMethod{Library::kArt, "_ZN3art7Runtime20GetImtConflictMethodEv", SymbolTable::kAnyNamed};
+// class_linker.cc, ART 11--17: before LinkClass installs the IMT and publishes
+// kResolved. ART 13+ may inline this wrapper; its out-of-line k64 helper has
+// the same explicit arguments and is preferred when present.
+inline constexpr NamedSymbol kLinkMethods{Library::kArt, "_ZN3art11ClassLinker11LinkMethodsEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEENS3_INS4_11ObjectArrayIS5_EEEEPbPPNS_9ArtMethodE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kLinkMethods64{Library::kArt, "_ZN3art11ClassLinker17LinkMethodsHelperILNS_11PointerSizeE8EE11LinkMethodsEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEENS6_INS7_11ObjectArrayIS8_EEEEPbPPNS_9ArtMethodE", SymbolTable::kAnyNamed};
 // LinearAlloc::Alloc. Runtimes from ART 14 take a LinearAllocKind; a runtime
 // has exactly one of the two.
 inline constexpr NamedSymbol kLinearAllocAlloc{
