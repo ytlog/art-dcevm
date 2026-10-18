@@ -200,18 +200,25 @@ SCENARIOS = (
     ("proxy-interface-group-shared", ["proxy-group-add", "proxy-group-add", "proxy-group-add"], 0),
     ("proxy-interface-group-final", ["proxy-group-original", "proxy-group-original", "proxy-group-original"], 0),
     ('proxy-interface-parents-cycle', ['proxy-parents-cycle-a', 'proxy-parents-cycle-b'], 61),
+    ('proxy-interface-parents-cycle-reverse', ['proxy-parents-cycle-b', 'proxy-parents-cycle-a'], 61),
     ('proxy-interface-parents-shared', ['proxy-parents-a-drop'], 0),
+    ('proxy-interface-parents-drop-abort', ['proxy-parents-drop'], 110),
     ('proxy-interface-parents-drop', ['proxy-parents-drop'], 0),
     ('proxy-interface-parents-restore', ['proxy-parents-original', 'proxy-parents-original'], 0),
-    ('proxy-interface-parents-batch', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 0),
+    ('proxy-interface-parents-batch-abort', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 110),
+    ('proxy-interface-parents-batch', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 0),
+    ('proxy-interface-parents-remove-abort', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 110),
     ('proxy-interface-parents-batch-shared', ['proxy-parents-added-b'], 0),
-    ('proxy-interface-parents-batch-restore', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 0),
+    ('proxy-interface-parents-batch-restore', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 0),
     ('proxy-interface-parents-shared-again', ['proxy-parents-a-drop'], 0),
+    ('proxy-interface-parents-drop-abort-again', ['proxy-parents-drop'], 110),
     ('proxy-interface-parents-drop-again', ['proxy-parents-drop'], 0),
     ('proxy-interface-parents-restore-again', ['proxy-parents-original', 'proxy-parents-original'], 0),
-    ('proxy-interface-parents-batch-again', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 0),
+    ('proxy-interface-parents-batch-abort-again', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 110),
+    ('proxy-interface-parents-batch-again', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 0),
+    ('proxy-interface-parents-remove-abort-again', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 110),
     ('proxy-interface-parents-batch-shared-again', ['proxy-parents-added-b'], 0),
-    ('proxy-interface-parents-batch-restore-again', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 0),
+    ('proxy-interface-parents-batch-restore-again', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 0),
     ("proxy-interface", ["proxy-api-add"], 0),
     ("proxy-interface-restore", ["proxy-api-original"], 0),
     ("proxy-interface-parent", ["proxy-parent-add"], 0),
@@ -896,20 +903,44 @@ REQUIRED_CHECKS["proxy-interface-parent"] = {
     "parentBefore": False, "isParent": True, "directInterfaces": 1, "get": 5, "handlerSeesNewMethod": True,
     "twice": 77, "parentDefault": 41, "parentReflection": 41, "parentAbstract": "java.lang.AbstractMethodError",
     "parentSum": 41 * PROXY_TIMES, "freshSameClass": True, "freshIsParent": True, "afterGc": 41}
-REQUIRED_CHECKS["proxy-interface-parents-cycle"] = {"shared": 71, "a": 11, "b": 12, "afterGc": 71}
 REQUIRED_CHECKS["proxy-interface-parent-drop"] = {"isParent": False, "get": 5,
     "parentCast": "java.lang.ClassCastException", "parentReflection": "java.lang.IllegalArgumentException", "freshIsParent": False}
+_PROXY_IDENTITY_CHECKS = {"Identity": True, "Class": True, "Handler": True, "CachedA": 11,
+    "JniA": 11, "Method": True, "CachedConstructor": True, "FreshA": 11, "FreshMethod": True}
+_PROXY_ADDED_CHECKS = {"isAdded": True, "isRoot": True, "added": 43, "extra": 44, "root": 47,
+    "missing": "java.lang.AbstractMethodError", "addedSum": 43 * PROXY_TIMES, "rootSum": 47 * PROXY_TIMES,
+    "defaultsBypassHandler": True}
+for _cycle in ("cycle", "cycle-reverse"):
+    REQUIRED_CHECKS["proxy-interface-parents-" + _cycle] = {"shared": 71, "a": 11, "b": 12, "afterGc": 71,
+        "fieldsKept": True, **{"proxy" + key: value for key, value in _PROXY_IDENTITY_CHECKS.items()}}
+PROXY_PARENT_PAIRS = ("shared", "drop-abort", "drop", "restore", "batch-abort", "batch",
+                      "remove-abort", "batch-shared", "batch-restore")
 for _suffix in ("", "-again"):
+    _order = "A,Added,Root,B" if not _suffix else "B,Root,Added,A"
+    _restore_order = "B,Root,Added,A" if not _suffix else "A,Added,Root,B"
     for _name, _checks in {
-        "shared": {"shared": 71, "isShared": True, "sameClass": True},
+        "shared": {"shared": 71, "isShared": True, "sameClass": True, "holderCleared": True,
+            "staticKept": True, "onlyIsShared": False, "onlyHolderCleared": True,
+            "onlyRetainedCall": "java.lang.IncompatibleClassChangeError", "hotFailures": 0},
+        "drop-abort": {"armed": 0, "failureHits": 1, "isShared": True, "holderKept": True, "shared": 71},
         "drop": {"isShared": False, "holderCleared": True, "retainedCall": "java.lang.IncompatibleClassChangeError",
-                 "reflection": "java.lang.IllegalArgumentException", "a": 11, "b": 12, "freshIsShared": False},
-        "restore": {"shared": 71, "holderStaysCleared": True, "directInterfaces": 2, "serializable": True},
-        "batch": {"isAdded": True, "added": 43, "extra": 44, "missing": "java.lang.AbstractMethodError", "shared": 71,
-                  "sameClass": True, "freshAdded": 43},
-        "batch-shared": {"added": 43, "shared": 71},
-        "batch-restore": {"isAdded": False, "shared": 71, "freshIsAdded": False},
+            "staticRetainedCall": "java.lang.IncompatibleClassChangeError", "reflection": "java.lang.IllegalArgumentException",
+            "ownProxyMethod": 71, "ownProxyMethodOwner": True, "a": 11, "b": 12, "objectKept": True,
+            "staticKept": True, "hotFailures": PROXY_TIMES, "freshIsShared": False},
+        "restore": {"shared": 71, "holderStaysCleared": True, "directInterfaces": 2, "serializable": True, "hotFailures": 0},
+        "batch-abort": {"armed": 0, "failureHits": 1, "batchOrder": _order, "isAdded": False, "isRoot": False,
+            "fieldsKept": True, "unpublishedExtra": "java.lang.NoSuchMethodException"},
+        "batch": {"batchOrder": _order, "shared": 71, "sameClass": True, "freshAdded": 43, "afterGcRoot": 47,
+            **_PROXY_ADDED_CHECKS, **{"only" + key: value for key, value in _PROXY_ADDED_CHECKS.items()}},
+        "remove-abort": {"armed": 0, "failureHits": 1, "batchOrder": _restore_order, "fieldsKept": True, **_PROXY_ADDED_CHECKS},
+        "batch-shared": {"shared": 71, "sharedFieldKept": True, "addedFieldCleared": True, "onlyIsAdded": False,
+            **_PROXY_ADDED_CHECKS},
+        "batch-restore": {"batchOrder": _restore_order, "isAdded": False, "shared": 71, "freshIsAdded": False,
+            "addedFieldStaysCleared": True},
     }.items():
+        _checks.update({"proxy" + key: value for key, value in _PROXY_IDENTITY_CHECKS.items()})
+        if _name in ("shared", "batch", "batch-shared"):
+            _checks.update({"only" + key: value for key, value in _PROXY_IDENTITY_CHECKS.items()})
         REQUIRED_CHECKS["proxy-interface-parents-" + _name + _suffix] = _checks
 PARENT_TIMES = 30_000  # DISPATCH_CALLS in StructuralRedefineInstrumentation
 REQUIRED_CHECKS["interface-drop-parent"] = {
@@ -1359,6 +1390,16 @@ def validate_report(report, scenario_group="full"):
             check = observed.get(check_name)
             if check is None or not isinstance(check["expected"], str) or not check["expected"]:
                 raise RunFailure("Scenario " + name + " is missing an unchanged-definition observation")
+    if scenario_group in ("full", "proxy-interface"):
+        by_name = {item["name"]: item for item in report["scenarios"]}
+        def proxy_outcome(name):
+            return {check["name"]: check["actual"] for check in by_name[name]["checks"]
+                    if check["name"] not in ("batchOrder", "rejectedByPolicy")}
+        pairs = [("cycle", "cycle-reverse")] + [(name, name + "-again") for name in PROXY_PARENT_PAIRS]
+        for before, after in pairs:
+            prefix = "proxy-interface-parents-"
+            if proxy_outcome(prefix + before) != proxy_outcome(prefix + after):
+                raise RunFailure("Proxy parent outcomes differ between batch orders: " + before)
     return report
 
 

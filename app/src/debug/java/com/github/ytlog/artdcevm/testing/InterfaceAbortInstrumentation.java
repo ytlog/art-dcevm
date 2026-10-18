@@ -29,7 +29,7 @@ import java.util.zip.Adler32;
 public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native int armFailure(int stage);
     private static native int discardedClasses();
-    private static native int failureHits();
+    static native int failureHits();
     static native int allocationOrder();
     static native int allocatedTypes();
     private static native int primePointerId(Class<?> klass, int kind);

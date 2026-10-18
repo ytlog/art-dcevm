@@ -155,12 +155,38 @@ class ApkVerificationTests(unittest.TestCase):
                             ("proxy-interface-parents-drop", "holderCleared"),
                             ("proxy-interface-parents-drop-again", "retainedCall"),
                             ("proxy-interface-parents-batch", "extra"),
-                            ("proxy-interface-parents-batch-shared-again", "added")):
+                            ("proxy-interface-parents-batch-shared-again", "added"),
+                            ("proxy-interface-parents-shared", "holderCleared"),
+                            ("proxy-interface-parents-batch-again", "batchOrder"),
+                            ("proxy-interface-parents-batch", "root"),
+                            ("proxy-interface-parents-batch", "proxyCachedConstructor"),
+                            ("proxy-interface-parents-batch", "proxyMethod"),
+                            ("proxy-interface-parents-batch", "onlyisRoot"),
+                            ("proxy-interface-parents-drop-abort", "failureHits"),
+                            ("proxy-interface-parents-batch-abort-again", "fieldsKept"),
+                            ("proxy-interface-parents-remove-abort", "rootSum")):
             broken = copy.deepcopy(report)
             scenario = next(s for s in broken["scenarios"] if s["name"] == name)
             scenario["checks"] = [c for c in scenario["checks"] if c["name"] != check]
             with self.subTest(scenario=name, missing=check), self.assertRaises(runner.RunFailure):
                 runner.validate_report(broken, scenario_group="proxy-interface")
+
+    def test_proxy_parent_batch_orders_require_equal_behavior(self):
+        report = complete_report(36)
+        report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("proxy-interface")]
+        for scenario in report["scenarios"]:
+            if scenario["name"] in ("proxy-interface-parents-shared", "proxy-interface-parents-shared-again"):
+                value = not scenario["name"].endswith("-again")
+                scenario["checks"].append({"name": "orderWitness", "expected": value, "actual": value, "passed": True})
+        with self.assertRaisesRegex(runner.RunFailure, "outcomes differ"):
+            runner.validate_report(report, scenario_group="proxy-interface")
+        report = complete_report(36)
+        report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("proxy-interface")]
+        changed = next(s for s in report["scenarios"] if s["name"] == "proxy-interface-parents-batch-again")
+        check = next(c for c in changed["checks"] if c["name"] == "batchOrder")
+        check["expected"] = check["actual"] = "A,Added,Root,B"
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group="proxy-interface")
 
     def test_interface_shadow_requires_jbr_dispatch_on_every_release(self):
         for api in (30, 33, 34, 35, 36, 37):

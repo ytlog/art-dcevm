@@ -711,78 +711,209 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void runProxyParentGraphScenarios() throws Exception {
-        Object proxy = ProxyParentsFixture.create();
+        ProxyParentsFixture.RecordingHandler handler = new ProxyParentsFixture.RecordingHandler();
+        Object proxy = ProxyParentsFixture.create(handler), alias = proxy;
+        Class<?> proxyClass = proxy.getClass();
+        int identity = System.identityHashCode(proxy);
+        java.lang.reflect.Constructor<?> constructor = proxyClass.getConstructor(java.lang.reflect.InvocationHandler.class);
+        ProxyParentsFixture.RecordingHandler onlyHandler = new ProxyParentsFixture.RecordingHandler();
+        Object only = ProxyParentsFixture.createA(onlyHandler), onlyAlias = only;
+        Class<?> onlyClass = only.getClass();
+        int onlyIdentity = System.identityHashCode(only);
+        java.lang.reflect.Constructor<?> onlyConstructor = onlyClass.getConstructor(java.lang.reflect.InvocationHandler.class);
+        Method cachedA = ProxyParentsFixture.A.class.getMethod("a");
+        Method cachedShared = ProxyParentsFixture.Shared.class.getMethod("shared");
+        Method proxyShared = proxyClass.getMethod("shared");
+        Method cachedRoot = ProxyParentsFixture.Root.class.getMethod("root");
+        StandardJvmtiClient.cacheInterfaceDispatch(0, cachedA);
         ProxyParentsFixture.Shared held = (ProxyParentsFixture.Shared) proxy;
+        ProxyParentsFixture.Shared onlyHeld = (ProxyParentsFixture.Shared) only;
         ProxyParentsFixture.Holder holder = new ProxyParentsFixture.Holder();
-        holder.value = held;
+        ProxyParentsFixture.Holder onlyHolder = new ProxyParentsFixture.Holder();
+        holder.value = held; holder.object = proxy;
+        onlyHolder.value = onlyHeld; onlyHolder.object = only;
         ProxyParentsFixture.Holder.staticValue = held;
-        Class<?>[] pair = {ProxyParentsFixture.A.class, ProxyParentsFixture.B.class};
-        runScenario("proxy-interface-parents-cycle", 61, scenario -> {
-            scenario.redefine(pair, "proxy-parents-cycle-a", "proxy-parents-cycle-b");
-            scenario.check("shared", 71, ProxyParentsFixture.shared(held));
-            scenario.check("a", 11, ((ProxyParentsFixture.A) proxy).a());
-            scenario.check("b", 12, ((ProxyParentsFixture.B) proxy).b());
-            Runtime.getRuntime().gc();
-            scenario.check("afterGc", 71, ProxyParentsFixture.shared(held));
-        });
-        for (int round = 0; round < 2; ++round) {
-            final String suffix = round == 0 ? "" : "-again";
-            runScenario("proxy-interface-parents-shared" + suffix, 0, scenario -> {
-                scenario.redefine(new Class<?>[]{pair[0]}, "proxy-parents-a-drop");
+        Class<?> a = ProxyParentsFixture.A.class, b = ProxyParentsFixture.B.class;
+        Class<?> added = ProxyParentsFixture.Added.class, root = ProxyParentsFixture.Root.class;
+        for (int order = 0; order < 2; order++) {
+            final boolean reverse = order != 0;
+            runScenario("proxy-interface-parents-cycle" + (reverse ? "-reverse" : ""), 61, scenario -> {
+                scenario.expectRejectionBy(a);
+                scenario.redefine(reverse ? new Class<?>[]{b, a} : new Class<?>[]{a, b},
+                        reverse ? "proxy-parents-cycle-b" : "proxy-parents-cycle-a",
+                        reverse ? "proxy-parents-cycle-a" : "proxy-parents-cycle-b");
                 scenario.check("shared", 71, ProxyParentsFixture.shared(held));
-                scenario.check("isShared", true, proxy instanceof ProxyParentsFixture.Shared);
-                scenario.check("sameClass", true, ProxyParentsFixture.create().getClass() == proxy.getClass());
-            });
-            runScenario("proxy-interface-parents-drop" + suffix, 0, scenario -> {
-                scenario.redefine(new Class<?>[]{pair[1]}, "proxy-parents-drop");
-                scenario.check("isShared", false, proxy instanceof ProxyParentsFixture.Shared);
-                scenario.check("holderCleared", true, holder.value == null);
-                scenario.expectError("retainedCall", IncompatibleClassChangeError.class,
-                        () -> ProxyParentsFixture.shared(held));
-                scenario.expectError("reflection", IllegalArgumentException.class,
-                        () -> ProxyParentsFixture.Shared.class.getMethod("shared").invoke(proxy));
                 scenario.check("a", 11, ((ProxyParentsFixture.A) proxy).a());
                 scenario.check("b", 12, ((ProxyParentsFixture.B) proxy).b());
+                scenario.check("fieldsKept", true, holder.value == proxy && onlyHolder.value == only);
                 Runtime.getRuntime().gc();
-                scenario.check("freshIsShared", false, ProxyParentsFixture.create() instanceof ProxyParentsFixture.Shared);
+                scenario.check("afterGc", 71, ProxyParentsFixture.shared(held));
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
+            });
+        }
+        for (int round = 0; round < 2; round++) {
+            final String suffix = round == 0 ? "" : "-again";
+            Class<?>[] batch = round == 0 ? new Class<?>[]{a, added, root, b} : new Class<?>[]{b, root, added, a};
+            Class<?>[] restore = round == 0 ? new Class<?>[]{b, root, added, a} : new Class<?>[]{a, added, root, b};
+            Class<?>[] pair = round == 0 ? new Class<?>[]{a, b} : new Class<?>[]{b, a};
+            String batchOrder = round == 0 ? "A,Added,Root,B" : "B,Root,Added,A";
+            String restoreOrder = round == 0 ? "B,Root,Added,A" : "A,Added,Root,B";
+            runScenario("proxy-interface-parents-shared" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{a}, "proxy-parents-a-drop");
+                scenario.check("shared", 71, ProxyParentsFixture.shared(held));
+                scenario.check("isShared", true, proxy instanceof ProxyParentsFixture.Shared);
+                // JBR clears indirect typed fields even though B retains Shared.
+                scenario.check("holderCleared", true, holder.value == null);
+                scenario.check("staticKept", true, ProxyParentsFixture.Holder.staticValue == proxy);
+                scenario.check("onlyIsShared", false, only instanceof ProxyParentsFixture.Shared);
+                scenario.check("onlyHolderCleared", true, onlyHolder.value == null);
+                scenario.expectError("onlyRetainedCall", IncompatibleClassChangeError.class,
+                        () -> ProxyParentsFixture.shared(onlyHeld));
+                scenario.check("hotFailures", 0, ProxyParentsFixture.sharedFailures(held, DISPATCH_CALLS));
+                scenario.check("sameClass", true, ProxyParentsFixture.create().getClass() == proxyClass);
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
+                checkProxyParentIdentity(scenario, "only", only, onlyAlias, onlyClass, onlyIdentity, onlyHandler, onlyConstructor, cachedA);
+            });
+            holder.value = held;
+            runScenario("proxy-interface-parents-drop-abort" + suffix, 110, scenario -> {
+                scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(new Class<?>[]{b}, "proxy-parents-drop");
+                scenario.check("failureHits", 1, InterfaceAbortInstrumentation.failureHits());
+                scenario.check("isShared", true, proxy instanceof ProxyParentsFixture.Shared);
+                scenario.check("holderKept", true, holder.value == proxy);
+                scenario.check("shared", 71, ProxyParentsFixture.shared(held));
+                Runtime.getRuntime().gc();
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
+            });
+            runScenario("proxy-interface-parents-drop" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{b}, "proxy-parents-drop");
+                scenario.check("isShared", false, proxy instanceof ProxyParentsFixture.Shared);
+                scenario.check("holderCleared", true, holder.value == null);
+                scenario.expectError("retainedCall", IncompatibleClassChangeError.class, () -> ProxyParentsFixture.shared(held));
+                scenario.expectError("staticRetainedCall", IncompatibleClassChangeError.class,
+                        () -> ProxyParentsFixture.shared(ProxyParentsFixture.Holder.staticValue));
+                scenario.expectError("reflection", IllegalArgumentException.class, () -> cachedShared.invoke(proxy));
+                scenario.check("ownProxyMethod", 71, proxyShared.invoke(proxy));
+                scenario.check("ownProxyMethodOwner", true, handler.last.equals(ProxyParentsFixture.Shared.class.getMethod("shared")));
+                scenario.check("a", 11, ((ProxyParentsFixture.A) proxy).a());
+                scenario.check("b", 12, ((ProxyParentsFixture.B) proxy).b());
+                scenario.check("objectKept", true, holder.object == proxy && onlyHolder.object == only);
+                scenario.check("staticKept", true, ProxyParentsFixture.Holder.staticValue == proxy);
+                scenario.check("hotFailures", DISPATCH_CALLS, ProxyParentsFixture.sharedFailures(held, DISPATCH_CALLS));
+                Runtime.getRuntime().gc();
+                Object fresh = constructor.newInstance(new ProxyParentsFixture.RecordingHandler());
+                scenario.check("freshIsShared", false, fresh instanceof ProxyParentsFixture.Shared);
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
             });
             runScenario("proxy-interface-parents-restore" + suffix, 0, scenario -> {
                 scenario.redefine(pair, "proxy-parents-original", "proxy-parents-original");
                 scenario.check("shared", 71, ProxyParentsFixture.shared(held));
-                scenario.check("holderStaysCleared", true, holder.value == null);
-                scenario.check("directInterfaces", 2, proxy.getClass().getInterfaces().length);
+                scenario.check("holderStaysCleared", true, holder.value == null && onlyHolder.value == null);
+                scenario.check("directInterfaces", 2, proxyClass.getInterfaces().length);
                 scenario.check("serializable", true, proxy instanceof java.io.Serializable);
+                scenario.check("hotFailures", 0, ProxyParentsFixture.sharedFailures(held, DISPATCH_CALLS));
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
+            });
+            holder.value = held; onlyHolder.value = onlyHeld;
+            runScenario("proxy-interface-parents-batch-abort" + suffix, 110, scenario -> {
+                scenario.check("batchOrder", batchOrder, proxyParentOrder(batch));
+                scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(batch, "proxy-parents-add", "proxy-parents-add", "proxy-parents-add", "proxy-parents-add");
+                scenario.check("failureHits", 1, InterfaceAbortInstrumentation.failureHits());
+                scenario.check("isAdded", false, proxy instanceof ProxyParentsFixture.Added);
+                scenario.check("isRoot", false, proxy instanceof ProxyParentsFixture.Root);
+                scenario.check("fieldsKept", true, holder.value == proxy && onlyHolder.value == only);
+                scenario.expectError("unpublishedExtra", NoSuchMethodException.class, () -> added.getMethod("extra"));
+                Runtime.getRuntime().gc();
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
             });
             runScenario("proxy-interface-parents-batch" + suffix, 0, scenario -> {
-                // Reverse sibling order; the newly gained parent is also replaced.
-                scenario.redefine(new Class<?>[]{pair[1], ProxyParentsFixture.Added.class, pair[0]},
-                        "proxy-parents-add", "proxy-parents-add", "proxy-parents-add");
-                scenario.check("isAdded", true, proxy instanceof ProxyParentsFixture.Added);
-                scenario.check("added", 43, ProxyParentsFixture.added((ProxyParentsFixture.Added) proxy));
-                scenario.check("extra", 44, ProxyParentsFixture.Added.class.getMethod("extra").invoke(proxy));
-                scenario.expectError("missing", AbstractMethodError.class,
-                        () -> ((ProxyParentsFixture.Added) proxy).missing());
+                scenario.check("batchOrder", batchOrder, proxyParentOrder(batch));
+                scenario.redefine(batch, "proxy-parents-add", "proxy-parents-add", "proxy-parents-add", "proxy-parents-add");
+                checkProxyParentAdded(scenario, "", proxy, handler, cachedRoot);
+                checkProxyParentAdded(scenario, "only", only, onlyHandler, cachedRoot);
                 scenario.check("shared", 71, ProxyParentsFixture.shared(held));
-                Object fresh = ProxyParentsFixture.create();
-                scenario.check("sameClass", true, fresh.getClass() == proxy.getClass());
-                Runtime.getRuntime().gc();
+                Object fresh = constructor.newInstance(new ProxyParentsFixture.RecordingHandler());
+                scenario.check("sameClass", true, fresh.getClass() == proxyClass && ProxyParentsFixture.create().getClass() == proxyClass);
                 scenario.check("freshAdded", 43, ProxyParentsFixture.added((ProxyParentsFixture.Added) fresh));
+                Runtime.getRuntime().gc();
+                scenario.check("afterGcRoot", 47, cachedRoot.invoke(proxy));
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
+                checkProxyParentIdentity(scenario, "only", only, onlyAlias, onlyClass, onlyIdentity, onlyHandler, onlyConstructor, cachedA);
+            });
+            holder.added = (ProxyParentsFixture.Added) proxy; holder.root = (ProxyParentsFixture.Root) proxy;
+            runScenario("proxy-interface-parents-remove-abort" + suffix, 110, scenario -> {
+                scenario.check("batchOrder", restoreOrder, proxyParentOrder(restore));
+                scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(restore, "proxy-parents-original", "proxy-parents-original", "proxy-parents-original", "proxy-parents-original");
+                scenario.check("failureHits", 1, InterfaceAbortInstrumentation.failureHits());
+                scenario.check("fieldsKept", true, holder.added == proxy && holder.root == proxy);
+                Runtime.getRuntime().gc();
+                checkProxyParentAdded(scenario, "", proxy, handler, cachedRoot);
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
             });
             runScenario("proxy-interface-parents-batch-shared" + suffix, 0, scenario -> {
-                scenario.redefine(new Class<?>[]{pair[0]}, "proxy-parents-added-b");
-                scenario.check("added", 43, ProxyParentsFixture.added((ProxyParentsFixture.Added) proxy));
+                scenario.redefine(new Class<?>[]{a}, "proxy-parents-added-b");
+                checkProxyParentAdded(scenario, "", proxy, handler, cachedRoot);
                 scenario.check("shared", 71, ProxyParentsFixture.shared(held));
+                scenario.check("sharedFieldKept", true, holder.value == proxy);
+                scenario.check("addedFieldCleared", true, holder.added == null && holder.root == null);
+                scenario.check("onlyIsAdded", false, only instanceof ProxyParentsFixture.Added || only instanceof ProxyParentsFixture.Root);
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
+                checkProxyParentIdentity(scenario, "only", only, onlyAlias, onlyClass, onlyIdentity, onlyHandler, onlyConstructor, cachedA);
             });
             runScenario("proxy-interface-parents-batch-restore" + suffix, 0, scenario -> {
-                scenario.redefine(new Class<?>[]{pair[0], pair[1], ProxyParentsFixture.Added.class},
-                        "proxy-parents-original", "proxy-parents-original", "proxy-parents-original");
-                scenario.check("isAdded", false, proxy instanceof ProxyParentsFixture.Added);
+                scenario.check("batchOrder", restoreOrder, proxyParentOrder(restore));
+                scenario.redefine(restore, "proxy-parents-original", "proxy-parents-original", "proxy-parents-original", "proxy-parents-original");
+                scenario.check("isAdded", false, proxy instanceof ProxyParentsFixture.Added || proxy instanceof ProxyParentsFixture.Root);
                 scenario.check("shared", 71, ProxyParentsFixture.shared(held));
+                scenario.check("addedFieldStaysCleared", true, holder.added == null && holder.root == null);
                 Runtime.getRuntime().gc();
-                scenario.check("freshIsAdded", false, ProxyParentsFixture.create() instanceof ProxyParentsFixture.Added);
+                scenario.check("freshIsAdded", false, constructor.newInstance(new ProxyParentsFixture.RecordingHandler()) instanceof ProxyParentsFixture.Added);
+                checkProxyParentIdentity(scenario, "proxy", proxy, alias, proxyClass, identity, handler, constructor, cachedA);
             });
-            holder.value = held;
+            holder.value = held; onlyHolder.value = onlyHeld;
         }
+    }
+
+    private static String proxyParentOrder(Class<?>[] types) {
+        StringBuilder result = new StringBuilder();
+        for (Class<?> type : types) {
+            if (result.length() != 0) result.append(',');
+            result.append(type.getSimpleName());
+        }
+        return result.toString();
+    }
+
+    private void checkProxyParentIdentity(Scenario scenario, String prefix, Object proxy, Object alias,
+            Class<?> type, int identity, ProxyParentsFixture.RecordingHandler handler,
+            java.lang.reflect.Constructor<?> constructor, Method cachedA) throws Exception {
+        scenario.check(prefix + "Identity", true, proxy == alias && System.identityHashCode(proxy) == identity);
+        scenario.check(prefix + "Class", true, proxy.getClass() == type);
+        scenario.check(prefix + "Handler", true, java.lang.reflect.Proxy.getInvocationHandler(proxy) == handler);
+        scenario.check(prefix + "CachedA", 11, cachedA.invoke(proxy));
+        scenario.check(prefix + "JniA", 11, StandardJvmtiClient.callInterfaceDispatchInt(proxy, 0));
+        scenario.check(prefix + "Method", true, handler.last.equals(ProxyParentsFixture.A.class.getMethod("a")));
+        ProxyParentsFixture.RecordingHandler freshHandler = new ProxyParentsFixture.RecordingHandler();
+        Object fresh = constructor.newInstance(freshHandler);
+        scenario.check(prefix + "CachedConstructor", true, fresh != proxy && fresh.getClass() == type
+                && java.lang.reflect.Proxy.getInvocationHandler(fresh) == freshHandler);
+        scenario.check(prefix + "FreshA", 11, cachedA.invoke(fresh));
+        scenario.check(prefix + "FreshMethod", true, freshHandler.last.equals(ProxyParentsFixture.A.class.getMethod("a")));
+    }
+
+    private void checkProxyParentAdded(Scenario scenario, String prefix, Object proxy,
+            ProxyParentsFixture.RecordingHandler handler, Method cachedRoot) throws Exception {
+        scenario.check(prefix + "isAdded", true, proxy instanceof ProxyParentsFixture.Added);
+        scenario.check(prefix + "isRoot", true, proxy instanceof ProxyParentsFixture.Root);
+        int calls = handler.calls;
+        scenario.check(prefix + "added", 43, ProxyParentsFixture.added((ProxyParentsFixture.Added) proxy));
+        scenario.check(prefix + "extra", 44, ProxyParentsFixture.Added.class.getMethod("extra").invoke(proxy));
+        scenario.check(prefix + "root", 47, cachedRoot.invoke(proxy));
+        scenario.expectError(prefix + "missing", AbstractMethodError.class, () -> ((ProxyParentsFixture.Added) proxy).missing());
+        scenario.check(prefix + "addedSum", 43 * DISPATCH_CALLS, ProxyParentsFixture.addedSum((ProxyParentsFixture.Added) proxy, DISPATCH_CALLS));
+        scenario.check(prefix + "rootSum", 47 * DISPATCH_CALLS, ProxyParentsFixture.rootSum((ProxyParentsFixture.Root) proxy, DISPATCH_CALLS));
+        scenario.check(prefix + "defaultsBypassHandler", true, calls == handler.calls);
     }
 
     private void runStaticNarrowingScenarios() throws Exception {

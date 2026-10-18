@@ -29,10 +29,11 @@ struct Interface {
 // Resolves the named services; failure leaves Proxy implementations rejected.
 bool Install(const class_layout::Services& services, std::string* failure);
 bool Available();
-// Native: for each loaded proxy class and each interface target it implements,
-// a long[] sized for the new interface's IfTable methods. A target that adds
-// parent interfaces rebuilds the complete IfTable from the final interface
-// graph of the batch. Shared parents are retained once, superinterfaces first.
+// Native: prepare one complete IfTable per affected Proxy from its unchanged
+// direct interfaces and the final declarations of every batch interface.
+// Additions and removals share this path, including parents also redefined in
+// the batch. Shared parents are retained once, superinterfaces first; batch
+// target order does not determine the graph or method-array sizes.
 jvmtiError Prepare(JNIEnv* jni, const std::vector<jclass>& proxies, const std::vector<Interface>& interfaces,
                    std::string* error);
 // Before ART's no-failure point, match each interface by Class identity in
