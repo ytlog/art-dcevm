@@ -161,6 +161,25 @@ class ApkVerificationTests(unittest.TestCase):
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(report, scenario_group="ordinary")
 
+    def test_invoke_kind_groups_require_both_directions(self):
+        for group, reverse in (("invoke-kind", "invoke-kind-instance"),
+                               ("invoke-interface-kind", "interface-kind-instance-legacy")):
+            with self.subTest(group=group):
+                names = {item[0] for item in runner.scenario_sequence(group)}
+                self.assertIn(reverse, names)
+                report = complete_report()
+                report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+                runner.validate_report(report, scenario_group=group)
+                changed = next(item for item in report["scenarios"] if item["name"] == reverse)
+                error = next(check for check in changed["checks"]
+                             if check["actual"] == "java.lang.IncompatibleClassChangeError")
+                error.update(expected="java.lang.NoSuchMethodError", actual="java.lang.NoSuchMethodError")
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report, scenario_group=group)
+                report["scenarios"].remove(changed)
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report, scenario_group=group)
+
     def test_abstract_group_requires_all_focused_scenarios(self):
         report = complete_report()
         report["scenarios"] = [item for item in report["scenarios"]

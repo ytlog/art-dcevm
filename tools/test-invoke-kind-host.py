@@ -101,6 +101,15 @@ int main(int argc, char** argv) {
           for (uint16_t opcode : {0x71,0x77}) {
             instructions[0] = opcode; Require(call(self,referrer,instructions) == 42, "valid static rejected");
           }
+          method.access_flags.store(0);
+          for (uint16_t opcode : {0x71,0x77}) {
+            instructions[0] = opcode; int before = original_calls;
+            Require(call(self,referrer,instructions) == 0 && original_calls == before,
+                    "instance method reached static nterp cache fill");
+          }
+          instructions[0] = 0x6e;
+          Require(call(self,referrer,instructions) == 42, "valid instance rejected");
+          method.access_flags.store(8);
           missing_method = true; instructions[0] = 0x6e; int before = exceptions;
           Require(call(self,referrer,instructions) == 0 && exceptions == before, "replaced existing resolver failure");
           missing_method = false;
@@ -110,11 +119,16 @@ int main(int argc, char** argv) {
           Require(call(linker,self,9,referrer,0) == &method, "valid static caller rejected");
           method.access_flags.store(0);
           Require(call(linker,self,9,referrer,2) == &method, "valid virtual caller rejected");
+          Require(call(linker,self,9,referrer,0) == nullptr, "cached static mismatch accepted");
           method.access_flags.store(8);
         } else {
           auto call = reinterpret_cast<decltype(&Cache)>(hook.replacement);
           Require(call(linker,9,{}, {},referrer,2) == nullptr, "cold virtual mismatch accepted");
           Require(call(linker,9,{}, {},referrer,0) == &method, "valid cold static rejected");
+          method.access_flags.store(0);
+          Require(call(linker,9,{}, {},referrer,0) == nullptr, "cold static mismatch accepted");
+          Require(call(linker,9,{}, {},referrer,2) == &method, "valid cold instance rejected");
+          method.access_flags.store(8);
         }
       }
       Require(exceptions > 0, "no invocation mismatch tested");

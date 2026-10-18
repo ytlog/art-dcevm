@@ -157,7 +157,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 4. 与 JBR 相同，新增 public abstract（含 default 改为 abstract、新父接口的 abstract 方法）不要求已加载的实现类提供实现，也不走 default 的 `subtype_shadows` 拒绝。ART 为缺实现的类链接 miranda，调用时抛 `AbstractMethodError`；已有实现、继承实现、同批实现与 ART 选中的更具体 default 照常分派；未提交 DEX、没有实例的实现类同样随接口组重新链接。实现类只有同签名的非 public 方法时，结果取决于 ART 的选择语义：ART 13、14 的 `LinkInterfaceMethods` 对 package-private 或 protected 实现在 IfTable 形成前调用固定源码的 `ThrowIllegalAccessErrorForImplementingMethod`，类无法链接，整批以 63 拒绝；ART 15、16 的 `AssignVTableIndexes` 只选择 public 类方法，链接成功，调用抛 `IllegalAccessError`（API 36 实测，只有 private 方法时同样如此；JBR 对 private 抛 `AbstractMethodError`、对 package-private/protected 抛 `IllegalAccessError`）。`interface_redefinition` 通过上述命名 NO_INLINE 服务观察 ART 实际选择的方法对，在链接锁内只记录原生元数据和已有 HandleScope 根，原服务照常执行；分配失败、离开锁后按固定 Class 布局读出实现类、方法与接口，写入拒绝原因。该服务不可定位时仍由 ART 的链接错误拒绝，原因只是不含方法。
 
-接口 direct 方法退役使用现有 `{old, old, kRetired}` 映射、DexCache 清理与访问守卫：字节码、JNI、MethodHandle 调用抛 `NoSuchMethodError`，缓存反射调用抛包装它的 `InvocationTargetException`；活动旧帧继续执行。标准入口的保活根已覆盖接口及整组子类型，发生退役时保留至进程结束；每个目标独立记录 retired kinds，因此之后以另一种调用方式恢复同名同描述符仍拒绝 71。接口不需要新的访问守卫。
+接口 direct 方法退役使用现有 `{old, old, kRetired}` 映射、DexCache 清理与访问守卫：字节码、JNI、MethodHandle 调用抛 `NoSuchMethodError`，缓存反射调用抛包装它的 `InvocationTargetException`；活动旧帧继续执行。标准入口的保活根已覆盖接口及整组子类型，发生退役时保留至进程结束；每个目标独立记录 retired kinds，因此之后以另一种调用方式恢复同名同描述符时，仍按原调用方式检查，采用与直接切换相同的调用保护或 71 限制。接口不需要新的访问守卫。
 
 ### 接口 default 中的 lambda
 
@@ -183,7 +183,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 方法新增 final，且已加载的子类覆写它 | 拒绝 `METHOD_MODIFIERS_CHANGED`（71） |
 | 新增或改变访问级别的实例方法，可能顶替已加载子类的 copied default/miranda | 可退役时接受，由自有映射处理；否则新增拒绝 `METHOD_ADDED`（63），访问级别变化拒绝 71 |
 | native → Java | 可退役时接受（引擎处理 JNI 入口复制）；否则拒绝 71 |
-| 方法在 static 与实例之间变化，实例方法改为 private；已退役的方法以另一种调用方式重新加入 | 批次之外的已加载类代码不再按旧调用方式引用它、且批次类没有活动帧时接受：旧声明退役，新调用方式的声明是新成员；否则拒绝 71（见[调用方式变化](#调用方式变化)） |
+| 方法在 static 与实例之间变化，实例方法改为 private；已退役的方法以另一种调用方式重新加入 | static／实例互换在命名调用方式保护可用时接受，旧字节码调用抛 ICCE；virtual 改为 private 仍须同批更新旧调用方且无活动帧，否则拒绝 71；旧声明退役，新调用方式的声明是新成员（见[调用方式变化](#调用方式变化)） |
 | 方法的 bridge、varargs、strict、synthetic 标志变化 | 接受并走结构路径，新方法带新标志（这些标志只供反射与链接描述方法） |
 | 删除方法、改签名（含 native、abstract、构造器、类初始化器） | 可退役时接受；否则拒绝 `METHOD_DELETED`（67） |
 | 删除字段，字段类型或 static 属性变化 | 可退役且字段守卫可用时接受；否则拒绝 `SCHEMA_CHANGED`（64） |
@@ -332,13 +332,15 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 
 已校验代码会跳过方法调用方式检查。Android 16 起，不受检的 `ClassLinker::ResolveMethodId` 甚至不接收调用类型；直接用重新解析出的 static 方法的索引执行旧 `invoke-virtual`，会分派到错误目标。
 
-实例方法改为 static 时，`invoke_kind` 在命名解析入口补查 static 标志与实际指令的调用类型：较早版本 Hook `ClassLinker::ResolveMethod<kNoChecks>` 的两种重载；`NterpGetMethod` 覆盖 nterp 和 Android 14 起共用该入口的 switch 解释器，按 35c／3rc 指令取调用类型及 method_idx。Android 16 起通过命名 `ResolveMethodId` 取得解析结果。类型不匹配时使用 ART `Thread::ThrowNewException` 抛 `IncompatibleClassChangeError`，在读取 vtable／IMT 槽位和填充调用点缓存之前返回；解析本身的失败保持不变。检查不改变原有的访问检查策略。ClassLinker 身份复用已有 `FindClass` Hook 的观察结果，不读取 Runtime 私有字段。接口 default 改为 static 时，旧 `invoke-interface` 直接命名接口，抛 ICCE；旧 `invoke-virtual` 若命名实现类，该类已不再继承此 default，按固定 JBR 对照抛 `NoSuchMethodError`。
+方法在 static 与实例之间切换时，`invoke_kind` 在命名解析入口补查 static 标志与实际指令的调用类型：较早版本 Hook `ClassLinker::ResolveMethod<kNoChecks>` 的两种重载；`NterpGetMethod` 覆盖 nterp 和 Android 14 起共用该入口的 switch 解释器，按 35c／3rc 指令取调用类型及 method_idx。Android 16 起通过命名 `ResolveMethodId` 取得解析结果。类型不匹配时使用 ART `Thread::ThrowNewException` 抛 `IncompatibleClassChangeError`，在读取 vtable／IMT 槽位和填充调用点缓存之前返回；解析本身的失败保持不变。检查不改变原有的访问检查策略。ClassLinker 身份复用已有 `FindClass` Hook 的观察结果，不读取 Runtime 私有字段。接口 default 改为 static 时，旧 `invoke-interface` 直接命名接口，抛 ICCE；旧 `invoke-virtual` 若命名实现类，该类已不再继承此 default，按固定 JBR 对照抛 `NoSuchMethodError`。
 
-仅检查解释器还不够：JIT 可以把重新解析的旧虚调用再次编译为错误分派。`CheckClass` 有界扫描批次外已加载非 boot 类的 DEX，找出仍通过目标及其已加载子类型引用旧方法身份的类；提交前不修改它们。提交时在 ART 原有的 JIT 暂停和 suspend-all 内，将这些类声明的字节码方法标为 `kAccCompileDontBother`，同时清除对应版本的 `kAccPreCompiled`；ART 的 `IsCompilable` 同时阻止 JIT 编译及内联。已有机器码的去优化、失效、对象迁移和缓存清理仍完全由 ART 结构事务执行。之后因父类或接口变化而隐式重建的调用方继承这项标记；显式提交已修正调用方式的新 DEX 则使用新声明的标志。这些旧调用方保持解释执行，直到其代码被更新；不全局关闭 JIT。
+接口 static 改回 default 时，旧 `invoke-static` 仍直接命名接口，抛 ICCE。
 
-调用方集合规划后若又有类完成加载，在实例分配前失败并重新快照。实例改 static 的事务可以保留旧活动帧，旧调用方和目标自身的 obsolete 帧在下一次旧调用处抛 ICCE。一次失败的事务不会应用调用方编译标记；已启用的类型检查可单调保留，原定义中的合法调用行为不变。缺少命名入口时保留 71 保护。
+仅检查解释器还不够：JIT 可以把重新解析的旧调用再次编译为错误分派。`CheckClass` 有界扫描批次外已加载非 boot 类的 DEX，找出仍通过目标及其已加载子类型引用旧方法身份的类；提交前不修改它们。提交时在 ART 原有的 JIT 暂停和 suspend-all 内，将这些类声明的字节码方法标为 `kAccCompileDontBother`，同时清除对应版本的 `kAccPreCompiled`；ART 的 `IsCompilable` 同时阻止 JIT 编译及内联。已有机器码的去优化、失效、对象迁移和缓存清理仍完全由 ART 结构事务执行。之后因父类或接口变化而隐式重建的调用方继承这项标记；显式提交已修正调用方式的新 DEX 则使用新声明的标志。这些旧调用方保持解释执行，直到其代码被更新；不全局关闭 JIT。
 
-反向 static 改实例，以及 virtual 改 private，仍要求批次外没有引用旧调用方式的已加载类，且批次类没有活动帧；否则以 71 拒绝。相同检查覆盖曾退役后重新加入的方法身份。同批更新调用方仍可接受。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
+调用方集合规划后若又有类完成加载，在实例分配前失败并重新快照。static／实例互换的事务可以保留旧活动帧，旧调用方和目标自身的 obsolete 帧在下一次旧调用处抛 ICCE。一次失败的事务不会应用调用方编译标记；已启用的类型检查可单调保留，原定义中的合法调用行为不变。缺少命名入口时保留 71 保护。
+
+virtual 改 private 仍要求批次外没有引用旧调用方式的已加载类，且批次类没有活动帧；否则以 71 拒绝。相同检查覆盖曾退役后重新加入的方法身份。同批更新调用方仍可接受。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
 
 ## 活动帧
 

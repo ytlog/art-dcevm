@@ -40,7 +40,7 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
     bool protected_change = false;
     for (const auto& next : incoming.methods)
       if (next.name == key.first && next.descriptor == key.second)
-        protected_change = !(access & evolution::kAccStatic) && next.IsStatic() && invoke_kind::Enable();
+        protected_change = bool(access & evolution::kAccStatic) != next.IsStatic() && invoke_kind::Enable();
     if (batch.active_frame && !protected_change)
       return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
     transaction::Current()->protect_invocations |= protected_change;

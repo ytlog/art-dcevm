@@ -38,7 +38,7 @@ python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 
 `JBR_REFERENCE_HOME` 是待替换的路径占位符。原始输出、输入夹具／执行器／运行时哈希保存在忽略的 `build/evidence/`。该对照覆盖特定接口收窄与引用字段规则，不能证明全部 JBR 功能已对齐。ART 设备测试应复核相同返回值、错误、引用清理及失败后行为。
 
-`compare-jbr-invoke-kind.py` 与设备组 `invoke-kind` 对照实例改 static 后的旧 virtual、super、继承与 range 调用，含热调用重编译、调用方与目标活动帧、GC、隐式重建、恢复和失败事务。`test-invoke-kind-host.py` 覆盖命名入口的两组 ABI、缺失入口与安装回滚，以及编译标志保留；宿主假服务不替代真实 ART 验证。
+`compare-jbr-invoke-kind.py` 与设备组 `invoke-kind` 对照 static／实例双向切换后的旧 static、virtual、super、继承与 range 调用，以及接口 static 改 default 后的旧静态调用，含热调用重编译、调用方与目标活动帧、GC、隐式重建、恢复和失败事务。`test-invoke-kind-host.py` 覆盖命名入口的两组 ABI、缺失入口与安装回滚，以及编译标志保留；宿主假服务不替代真实 ART 验证。
 
 ## 设备回归
 

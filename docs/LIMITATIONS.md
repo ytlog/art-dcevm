@@ -60,7 +60,7 @@
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 方法从 static 改为实例、虚方法改为 private，或已删除的方法以这些方式重新加入，而批次之外仍有已加载类的代码按旧调用方式引用它，或批次类有活动帧 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化)；把这些调用方同批提交即可 |
+| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而批次之外仍有已加载类的代码按旧调用方式引用它，或批次类有活动帧 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化)；把这些调用方同批提交即可 |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
 | 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 | 移除接口时成员映射或分派保护不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
@@ -109,7 +109,7 @@
 
 - 删除的方法和签名替换前的方法退役：字节码、JNI、MethodHandle 再调用时抛 `NoSuchMethodError`，缓存的反射 `Method.invoke` 抛包装它的 `InvocationTargetException`；已在执行的旧方法帧继续执行旧方法体。
 - 退役字段：字节码、JNI、MethodHandle 访问抛 `NoSuchFieldError`；缓存的反射 `Field` 访问实例字段抛 `IllegalArgumentException`，访问静态字段抛 `NoClassDefFoundError`；VarHandle 抛 `UnsupportedOperationException`。缓存的反射 `Field` 的名称与声明类会显示为库内占位类的字段。
-- 恢复同名成员会产生新成员，旧的缓存引用保持退役。恢复时改为 static 的旧实例调用按调用方式保护抛 ICCE；反向变化及改为 private 仍须同批更新旧调用方。
+- 恢复同名成员会产生新成员，旧的缓存引用保持退役。恢复时 static／实例方式互换的旧调用按调用方式保护抛 ICCE；原虚方法恢复为 private 仍须同批更新旧调用方。
 - 发生过退役的类及其 class loader 保留到进程结束。
 
 ## ART 自身的限制
@@ -147,7 +147,7 @@
 | --- | --- | --- |
 | 持有动态代理的实例字段改类型 | 新类型是直接声明接口或 `Proxy` 父类时保留；仅间接实现接口时清空 | 目标与继承字段按同一规则处理，见[字段改型对照](TESTING.md#jbr-对照) |
 | 接口新增 abstract 方法，而已加载的实现类只有同签名的非 public 方法 | 接受；private 调用时抛 `AbstractMethodError`，package-private／protected 抛 `IllegalAccessError` | 按 ART 的选择：Android 15、16 接受，调用均抛 `IllegalAccessError`；Android 13、14 的 package-private／protected 实现无法链接，拒绝 63 |
-| 普通类实例方法改为 static，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 命名调用方式保护可用时接受，旧调用抛 ICCE；旧调用方禁止 JIT 编译及内联，ART 仍执行原有去优化。Android 13、16 覆盖普通／CheckJNI、热调用、活动帧、GC 与隐式重建；入口不可用时保留 71 |
+| 普通类方法在 static 与实例之间切换，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 命名调用方式保护可用时接受，旧调用抛 ICCE；旧调用方禁止 JIT 编译及内联，ART 仍执行原有去优化。Android 13、16 覆盖普通／CheckJNI、热调用、活动帧、GC 与隐式重建；入口不可用时保留 71 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
 | 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 持久发布前保护与后续结构重建共同保留正确分派，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口) |
 | 类在普通类与接口等种类之间变化 | 接受 | 拒绝 70 |

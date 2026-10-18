@@ -38,7 +38,7 @@ python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 
 Replace the `JBR_REFERENCE_HOME` path placeholder. Raw output and fixture, harness and runtime hashes stay under ignored `build/evidence/`. These comparisons cover specific interface-narrowing and reference-field rules, not complete JBR parity. ART device tests must check matching values, errors, field clearing and behavior after failure.
 
-`compare-jbr-invoke-kind.py` and device group `invoke-kind` compare old virtual, super, inherited and range calls after instance-to-static changes, including hot recompilation, caller/target active frames, GC, implicit rebuilds, restoration and failed transactions. `test-invoke-kind-host.py` checks both named-service ABI families, missing services, installation rollback and compilation flags; host fakes do not replace ART device validation.
+`compare-jbr-invoke-kind.py` and device group `invoke-kind` compare old static, virtual, super, inherited and range calls after static/instance changes in both directions, plus old static calls after interface static-to-default changes, including hot recompilation, caller/target active frames, GC, implicit rebuilds, restoration and failed transactions. `test-invoke-kind-host.py` checks both named-service ABI families, missing services, installation rollback and compilation flags; host fakes do not replace ART device validation.
 
 ## Device regression
 

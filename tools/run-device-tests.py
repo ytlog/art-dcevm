@@ -48,9 +48,9 @@ SCENARIOS = (
     ("methods-retire-again", ["methods-delete"], 0),
     ("methods-restore-again", ["methods-original"], 0),
     ("method-private", ["method-private"], 71),
-    ("method-storage", ["method-storage"], 71),
+    ("method-storage", ["method-storage"], 0),
     ("method-storage-delete", ["method-storage-delete"], 0),
-    ("method-storage-readd", ["method-storage"], 71),
+    ("method-storage-readd", ["method-storage"], 0),
     ("method-storage-restore", ["method-storage-original"], 0),
     ("interface-method-bodies", ["interface-method-bodies"], 0),
     ("nested-interface-body", ["nested-interface-body"], 0),
@@ -79,6 +79,7 @@ SCENARIOS = (
     ("interface-access-restore", ["interface-access-restore"], 0),
     ("interface-kind-static-legacy", ["interface-kind-static"], 0),
     ("interface-kind-static", ["interface-kind-static", "interface-kind-static"], 0),
+    ("interface-kind-instance-legacy", ["interface-kind-static-restore"], 0),
     ("interface-kind-static-restore", ["interface-kind-static-restore", "interface-kind-static-restore"], 0),
     ("interface-batch-unrelated", ["interface-batch-body", "interface-batch-body"], 0),
     ("interface-batch-unrelated-invalid", ["interface-batch-invalid", "interface-batch-next"], 71),
@@ -197,7 +198,7 @@ SCENARIOS = (
     ("super-chain-body", ["super-chain-body", "super-chain-body", "super-chain-body"], 0),
     ("super-chain-rebuilt", ["super-chain-rebuilt", "super-chain-rebuilt", "super-chain-rebuilt"], 0),
     ("method-descriptive-flags", ["method-descriptive-flags"], 0),
-    ("kind-instance", ["kind-instance"], 71),
+    ("kind-instance", ["kind-instance"], 0),
     ("kind-instance-batch", ["kind-instance", "kind-instance"], 0),
     ("kind-private", ["kind-private"], 0),
     ("kind-static", ["kind-static"], 0),
@@ -213,9 +214,17 @@ SCENARIOS = (
     ("invoke-kind-abort", ["invoke-kind-static", "class-interface"], 70),
     ("invoke-kind-static", ["invoke-kind-static"], 0),
     ("invoke-kind-caller-rebuild", ["invoke-kind-caller-rebuild"], 0),
+    ("invoke-kind-static-callers", ["invoke-kind-static"] * 2, 0),
+    ("invoke-kind-instance-abort", ["invoke-kind-instance", "class-interface"], 70),
+    ("invoke-kind-instance", ["invoke-kind-instance"], 0),
+    ("invoke-kind-static-caller-rebuild", ["invoke-kind-original"], 0),
     ("invoke-kind-restore", ["invoke-kind-original"] * 4, 0),
     ("invoke-kind-static-again", ["invoke-kind-static"], 0),
     ("invoke-kind-caller-rebuild-again", ["invoke-kind-caller-rebuild"], 0),
+    ("invoke-kind-static-callers-again", ["invoke-kind-static"] * 2, 0),
+    ("invoke-kind-instance-abort-again", ["invoke-kind-instance", "class-interface"], 70),
+    ("invoke-kind-instance-again", ["invoke-kind-instance"], 0),
+    ("invoke-kind-static-caller-rebuild-again", ["invoke-kind-original"], 0),
     ("invoke-kind-restore-again", ["invoke-kind-original"] * 4, 0),
     ("thread-subclass", ["thread-subclass-add"], 0),
     ("interface-removal", ["interface-remove", "interface-remove"], 0),
@@ -261,16 +270,16 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "interface-implementation-child", "interface-implementation-child-only",
                     "interface-implementation-retire", "interface-implementation-recovery","hierarchy", "native-change", "constructor-delete", "abstract-method-delete",
                     "clinit-delete", "methods-retire", "methods-restore", "methods-retire-again",
-                    "methods-restore-again", "method-storage-delete", "method-storage-restore",
+                    "methods-restore-again", "method-storage", "method-storage-readd", "method-storage-delete", "method-storage-restore",
                     "nested-interface-body", "interface-after-nested",
                     "nested-interface-signature", "nested-interface-restore-signature", "nested-interface-delete",
                     "nested-interface-restore-delete", "nested-interface-field", "nested-interface-restore-field",
                     "nested-interface-initializer", "nested-interface-restore-initializer",
                     "interface-kind-default", "interface-kind-abstract", "interface-parent-add",
                     "interface-access", "interface-access-restore", "method-descriptive-flags",
-                    "interface-kind-static", "interface-kind-static-restore",
+                    "interface-kind-static", "interface-kind-instance-legacy", "interface-kind-static-restore",
                     "interface-parent-batch", "interface-parent-rebuilt", "interface-parent-remove", "interface-parent-readd",
-                    "kind-instance-batch", "kind-private",
+                    "kind-instance", "kind-instance-batch", "kind-private",
                     "interface-batch-unrelated", "interface-batch-after-rejection", "interface-batch-unrelated-reverse",
                     "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child", "super-chain-body", "super-chain-rebuilt",
                     "field-retire", "field-restore", "field-types", "field-retype", "field-retype-restore"}
@@ -524,15 +533,16 @@ REQUIRED_CHECKS = {
     "methods-retire-again": METHOD_RETIRE_CHECKS,
     "methods-restore-again": METHOD_RESTORE_CHECKS,
     "method-private": {"callerBefore": 7, "targetIsPublic": True, "callerAfter": 7},
-    "method-storage": {"callerStaticBefore": 32, "callerVirtualBefore": 8, "staticValueIsStatic": True,
-                       "callerStatic": 32, "callerVirtual": 8, "combined": 40},
+    "method-storage": {"callerStaticBefore": 32, "callerVirtualBefore": 8, "staticValueIsStatic": False,
+                       "callerStatic": "java.lang.IncompatibleClassChangeError",
+                       "callerVirtual": "java.lang.IncompatibleClassChangeError", "combined": 60},
     "method-storage-delete": {
         "combined": 35, "callerStatic": "java.lang.NoSuchMethodError",
         "callerVirtual": "java.lang.NoSuchMethodError",
         "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
     "method-storage-readd": {
-        "combined": 35, "callerStatic": "java.lang.NoSuchMethodError",
-        "callerVirtual": "java.lang.NoSuchMethodError"},
+        "combined": 60, "callerStatic": "java.lang.IncompatibleClassChangeError",
+        "callerVirtual": "java.lang.IncompatibleClassChangeError"},
     "method-storage-restore": {
         "combined": 40, "callerStatic": 32, "callerVirtual": 8,
         "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
@@ -601,7 +611,8 @@ REQUIRED_CHECKS = {
         "moverValue": 31, "existingMoverAfterGc": 181, "existingDeepMoverAfterGc": 137},
     "super-chain-body": {"middleIdentity": True, "existingIsMiddle": True, "existingChain": 87, "newChain": 74,
         "publishedMiddle": 61, "publishedBase": 6, "own": 17, "existingChainAfterGc": 87},
-    "kind-instance": {"rejectionReason": True, "callerUnchanged": 2, "staticUnchanged": 2},
+    "kind-instance": {"instanceKind": False, "instanceCall": 4, "oldStatic": "java.lang.IncompatibleClassChangeError",
+        "retiredStatic": "java.lang.NoSuchMethodError"},
     "kind-instance-batch": {"instanceKind": False, "caller": 3, "instanceCall": 4,
         "retiredStatic": "java.lang.NoSuchMethodError", "marker": 9, "callerAfterGc": 3},
     "kind-private": {"privateKind": True, "useHelper": 6, "marker": 9},
@@ -616,6 +627,9 @@ REQUIRED_CHECKS = {
     "interface-kind-static": {"valueStatic": True, "staticValue": 21, "caller": 22,
         "retiredDefault": "java.lang.NoSuchMethodError", "twiceDefault": True, "twice": 12, "helperPrivate": True,
         "useHelper": 7, "newImpl": 12, "marker": 9, "callerAfterGc": 22},
+    "interface-kind-instance-legacy": {"valueDefault": True, "newDefault": 13, "marker": 9,
+        **{kind + str(i): "java.lang.IncompatibleClassChangeError" for kind in ("oldStatic", "oldStaticDirect") for i in range(32)},
+        "oldStaticAfterGc": "java.lang.IncompatibleClassChangeError"},
     "interface-kind-static-restore": {"valueDefault": True, "caller": 13, "twiceStatic": 8, "useHelper": 7, "marker": 9},
     "super-batch-child": {"subjectSuperclass": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Middle",
         "childIsMiddle": True, "existingViaMiddle": 53, "newViaMiddle": 60, "existingMiddleValue": 0,
@@ -663,15 +677,19 @@ REQUIRED_CHECKS = {
 
 REQUIRED_CHECKS["invoke-kind-abort"] = {"before": 8, "after": 8, "range": 13, "instanceKind": False, "entered": 0}
 for suffix in ("", "-again"):
-    REQUIRED_CHECKS["invoke-kind-static" + suffix] = {
-        "activeCompleted": True, "activeError": "java.lang.IncompatibleClassChangeError",
-        "activeTargetError": "java.lang.IncompatibleClassChangeError", "hotFailures": 30000,
-        **{kind + str(i): "java.lang.IncompatibleClassChangeError" for kind in ("virtual", "inherited", "range", "super") for i in range(32)},
-        "oldCallsDidNotEnterStatic": 0, "newStatic": 101, "newStaticRange": 106,
-        "singleStepEnable": 0, "singleStepDisable": 0, "singleStepObserved": True,
-        **{key: "java.lang.IncompatibleClassChangeError" for key in ("interpreterVirtual", "interpreterRange", "virtualAfterGc", "rangeAfterGc")},
-        "entered": 2, "marker": 7}
-    REQUIRED_CHECKS["invoke-kind-caller-rebuild" + suffix] = {"hotFailures": 30000, "oldCaller": "java.lang.IncompatibleClassChangeError", "entered": 2}
+    for kind, new_call, new_range in (("static", 101, 106), ("instance", 8, 13)):
+        REQUIRED_CHECKS["invoke-kind-" + kind + suffix] = {
+            "activeCompleted": True, "activeError": "java.lang.IncompatibleClassChangeError",
+            "activeTargetError": "java.lang.IncompatibleClassChangeError", "hotFailures": 30000,
+            **{call + str(i): "java.lang.IncompatibleClassChangeError" for call in ("call", "inherited", "range", "childCall") for i in range(32)},
+            "oldCallsDidNotEnter": 0, "newCall": new_call, "newRange": new_range,
+            "singleStepEnable": 0, "singleStepDisable": 0, "singleStepObserved": True,
+            **{key: "java.lang.IncompatibleClassChangeError" for key in ("interpreterCall", "interpreterRange", "callAfterGc", "rangeAfterGc")},
+            "entered": 2, "marker": 7}
+    for caller in ("caller-rebuild", "static-caller-rebuild"):
+        REQUIRED_CHECKS["invoke-kind-" + caller + suffix] = {"hotFailures": 30000, "oldCaller": "java.lang.IncompatibleClassChangeError", "entered": 2}
+    REQUIRED_CHECKS["invoke-kind-static-callers" + suffix] = {"call": 101, "range": 106, "inherited": 101, "childCall": 101}
+    REQUIRED_CHECKS["invoke-kind-instance-abort" + suffix] = {"staticKind": True, "call": 101, "range": 106}
     REQUIRED_CHECKS["invoke-kind-restore" + suffix] = {"virtual": 8, "range": 13, "inherited": 8, "super": 8, "marker": 7}
 
 # Interface direct targets retain exact old reflection objects, handles and
@@ -733,7 +751,6 @@ REQUIRED_CHECKS.update({
 UNCHANGED_CHECKS = {
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
     "interface-overlap-superclass": ("unchangedParent",),
-    **{name: ("unchangedSubject",) for name in ("kind-instance",)},
     **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
@@ -969,7 +986,8 @@ def scenario_sequence(scenario_group):
     if scenario_group == "thread-subclass":
         return tuple(item for item in SCENARIOS if item[0] == "thread-subclass")
     if scenario_group == "invoke-interface-kind":
-        return tuple(item for item in SCENARIOS if item[0].startswith("interface-kind-static"))
+        return tuple(item for item in SCENARIOS
+                     if item[0].startswith("interface-kind-static") or item[0] == "interface-kind-instance-legacy")
     if scenario_group == "invoke-kind":
         return tuple(item for item in SCENARIOS if item[0].startswith("invoke-kind-"))
     if scenario_group == "field-retype":
