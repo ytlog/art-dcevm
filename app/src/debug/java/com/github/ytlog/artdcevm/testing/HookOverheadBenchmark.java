@@ -12,6 +12,7 @@ import android.os.Looper;
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.Evolving;
 import com.github.ytlog.artdcevm.fixture.HookBenchTypes;
+import com.github.ytlog.artdcevm.fixture.InterfaceEvolutionFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture;
 
 import org.json.JSONArray;
@@ -135,7 +136,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
         String baseState = state.replaceFirst("-(observe|restore|jvmti)$", "");
         String probe = state.equals(baseState) ? "none" : state.substring(baseState.length() + 1);
         String mode = argument("mode", "jit");
-        if (!Arrays.asList("none", "agent", "engine", "engine-client", "added", "removed",
+        if (!Arrays.asList("none", "agent", "engine", "engine-client", "added", "removed", "selected",
                 "art-body", "art-added", "engine-body").contains(baseState)
                 || (!probe.equals("none") && !Arrays.asList("art-added", "added").contains(baseState)))
             throw new IllegalArgumentException("Unsupported state " + state);
@@ -156,6 +157,8 @@ public final class HookOverheadBenchmark extends Instrumentation {
         HookBenchTypes.Shape[] earlyShapes = new HookBenchTypes.Shape[8];
         for (int i = 0; i < 8; i++) earlyShapes[i] = (HookBenchTypes.Shape) early[i];
         InterfaceRemovalFixture.Subject subject = new InterfaceRemovalFixture.Subject();
+        Object selectionReceiver = baseState.equals("selected")
+                ? new InterfaceEvolutionFixture.ProtectedImpl() : null;
         Evolving evolving = new Evolving(10);
 
         JSONObject setup = new JSONObject();
@@ -180,9 +183,11 @@ public final class HookOverheadBenchmark extends Instrumentation {
         }
         if (client && !baseState.equals("engine-client")) {
             boolean removal = baseState.equals("removed");
+            boolean selection = baseState.equals("selected");
             boolean body = baseState.endsWith("-body");
-            Class<?> type = removal ? InterfaceRemovalFixture.Subject.class : Evolving.class;
-            String path = (removal ? "interface-remove/" : body ? "body/" : "add/")
+            Class<?> type = selection ? InterfaceEvolutionFixture.ProtectedShadow.class
+                    : removal ? InterfaceRemovalFixture.Subject.class : Evolving.class;
+            String path = (selection ? "interface-shadow-protected/" : removal ? "interface-remove/" : body ? "body/" : "add/")
                     + type.getName().replace('.', '/') + ".dex";
             Class<?>[] classes = {type};
             byte[][] dexes = {readAsset(path)};
@@ -191,7 +196,15 @@ public final class HookOverheadBenchmark extends Instrumentation {
                     : StandardJvmtiClient.redefine(classes, dexes);
             setup.put("redefineNanos", System.nanoTime() - begin).put("redefineCode", code);
             if (code != 0) throw new AssertionError("Redefinition failed: " + code);
-            if (removal ? InterfaceRemovalFixture.Removed.class.isInstance(subject)
+            if (selection) {
+                try {
+                    type.getMethod("shadow").invoke(selectionReceiver);
+                    throw new AssertionError("Interface selection did not install its error target");
+                } catch (java.lang.reflect.InvocationTargetException expected) {
+                    if (expected.getCause().getClass() != IllegalAccessError.class) throw expected;
+                }
+                setup.put("interfaceSelectionActive", true);
+            } else if (removal ? InterfaceRemovalFixture.Removed.class.isInstance(subject)
                         : evolving.compute() != (body ? 12 : 13))
                 throw new AssertionError("Redefinition not visible");
         }

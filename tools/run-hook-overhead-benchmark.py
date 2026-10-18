@@ -26,6 +26,8 @@ REPORT_PATH = "files/hook-overhead.json"
 STATES = ("none", "agent", "engine", "engine-client", "added", "removed")
 # Opt-in controls: redefinitions without the engine's transaction (--states).
 CONTROLS = ("art-body", "art-added", "engine-body")
+# Activates non-public interface selection before loading the late classes.
+SELECTION = ("selected",)
 # Debug-only ART 13 observation and restoration experiments, opt-in.
 PROBES = tuple(state + "-" + probe for state in ("art-added", "added")
                for probe in ("observe", "restore", "jvmti"))
@@ -36,6 +38,7 @@ DELTAS = (("agent-none", "agent", "none"), ("engine-agent", "engine", "agent"),
           ("removed-added", "removed", "added"), ("removed-engineClient", "removed", "engine-client"),
           ("artBody-engineClient", "art-body", "engine-client"), ("artAdded-engineClient", "art-added", "engine-client"),
           ("engineBody-engineClient", "engine-body", "engine-client"))
+DELTAS += (("selected-added", "selected", "added"),)
 
 _runner = importlib.util.spec_from_file_location("run_device_tests", ROOT / "tools/run-device-tests.py")
 _tests = importlib.util.module_from_spec(_runner)
@@ -90,7 +93,7 @@ def summarize(reports):
 def markdown(summary):
     lines = []
     for mode, states in summary.items():
-        present = [state for state in STATES + CONTROLS + PROBES if state in states]
+        present = [state for state in STATES + CONTROLS + SELECTION + PROBES if state in states]
         names = sorted({name for state in present for name in states[state]}, key=lambda n: (n.startswith(("once.", "setup.")), n))
         labels = [label for label, _, _ in DELTAS if label in states["deltas"]]
         lines += ["", "mode=" + mode + " (median ns over processes; deltas are paired same-round medians)", "",
@@ -138,7 +141,7 @@ def main(argv=None):
     if not args.apk.is_file(): parser.error("The requested APK is missing; build :app:assembleDebug first")
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.device_id) or args.device_id == args.serial:
         parser.error("Use an anonymous --device-id such as android-device-1")
-    if not set(modes) <= set(MODES) or not set(states) <= set(STATES + CONTROLS + PROBES) or args.rounds <= 0:
+    if not set(modes) <= set(MODES) or not set(states) <= set(STATES + CONTROLS + SELECTION + PROBES) or args.rounds <= 0:
         parser.error("Unsupported modes, states or rounds")
     if not args.evidence_root.resolve().is_relative_to((ROOT / "build/evidence").resolve()):
         parser.error("Evidence must remain under ignored build/evidence")
@@ -178,6 +181,8 @@ def main(argv=None):
                 if report is not None:
                     (out / (label + ".json")).write_text(json.dumps(report, indent=2))
                     run["completed"] = report.get("completed") is True
+                    if state == "selected" and report.get("setup", {}).get("interfaceSelectionActive") is not True:
+                        run["completed"] = False
                     if run["completed"] and run["instrumentationOk"]: reports.append({**report, "round": round_index})
                     else: run["error"] = report.get("fatalError")
                     probe = report.get("instrumentationProbe", {})
