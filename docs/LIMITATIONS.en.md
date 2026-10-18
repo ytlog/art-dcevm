@@ -28,11 +28,11 @@ This capability is available on Android 11–17 (API 30–37) arm64 devices. API
 
 | Rejection for interface targets | JVMTI error code |
 | --- | --- |
-| Adding native methods; hiding an inherited interface/Object method with a direct method; a default shadowing static/non-public class-chain methods; on Android 13 and 14, a loaded class implementing a new abstract method with a package-private/protected method (ART fails to link it) | `METHOD_ADDED` (63) |
+| Adding native methods; hiding an inherited interface/Object method with a direct method; a default sharing its identity with a package-private class-chain method that an implementation in another runtime package does not inherit; on Android 13 and 14, a loaded class implementing a new abstract method or default with a package-private/protected method (ART fails to link it) | `METHOD_ADDED` (63) |
 | Deleting or changing method signatures without member mapping | `METHOD_DELETED` (67) |
 | Field modifier changes; field additions, deletions or type changes without member mapping | `SCHEMA_CHANGED` (64) |
-| Interface method modifier changes other than abstract/default switches and invoke-kind changes; switching to default where it would shadow static/non-public class-chain methods | `METHOD_MODIFIERS_CHANGED` (71) |
-| Removing a parent interface without member mapping or dispatch sealing; adding one without member mapping; a static/private method hiding a new parent's method, or a new parent default shadowing static/non-public class-chain methods | `HIERARCHY_CHANGED` (66) |
+| Interface method modifier changes other than abstract/default switches and invoke-kind changes; switching to default where it would share such an identity | `METHOD_MODIFIERS_CHANGED` (71) |
+| Removing a parent interface without member mapping or dispatch sealing; adding one without member mapping; a static/private method hiding a new parent's method, or a new parent default sharing such an identity | `HIERARCHY_CHANGED` (66) |
 | An added interface is rebuilt by the batch, and the new class and that rebuild depend on each other, or the new class precedes it within one rebuild | `HIERARCHY_CHANGED` (66) |
 | Changing the kind between interface, annotation and enum (an interface's access level, synthetic and similar modifiers may change as a class's) | `CLASS_MODIFIERS_CHANGED` (70) |
 | An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |

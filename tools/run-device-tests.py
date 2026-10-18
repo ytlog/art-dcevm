@@ -142,10 +142,11 @@ SCENARIOS = (
     ('interface-hide-parent-static', ['interface-hide-parent-static'], 63),
     ('interface-hide-parent-private', ['interface-hide-parent-private'], 63),
     ('interface-hide-object', ['interface-hide-object'], 63),
-    ('interface-shadow-static', ['interface-shadow-static'], 63),
-    ('interface-shadow-private', ['interface-shadow-private'], 63),
-    ('interface-shadow-protected', ['interface-shadow-protected'], 63),
-    ('interface-shadow-package', ['interface-shadow-package'], 63),
+    ('interface-shadow-static', ['interface-shadow-static'], 0),
+    ('interface-shadow-private', ['interface-shadow-private'], 0),
+    ('interface-shadow-protected', ['interface-shadow-protected'], 0),
+    ('interface-shadow-package', ['interface-shadow-package'], 0),
+    ('interface-shadow-other-package', ['interface-shadow-other-package'], 63),
     ('interface-bridge-add', ['interface-bridge-add', 'interface-bridge-add'], 0),
     ('interface-lambda-first', ['interface-lambda-first'], 0),
     ('interface-lambda-append', ['interface-lambda-append', 'interface-lambda-append'], 0),
@@ -320,6 +321,7 @@ MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "
                          "interface-kind-abstract-missing", "interface-parent-missing",
                          "multi-interface-unimplemented", "interface-default-conflict"})
 MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy"})
+MAPPED_SCENARIOS.update({"interface-shadow-static", "interface-shadow-private"})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
 VAR_HANDLE_API = 33
 # Up to this API, ART fails to link a package-private or protected
@@ -343,6 +345,12 @@ def release_expectation(name, code, required, api, self_selection):
     if name == "method-private-active-target" and self_selection:
         return 0, {"privateKind": True, "activeCompleted": True, "oldSelf": 25}
 
+    # A protected or package-private class-chain method a new default shares
+    # its identity with is that default's non-public implementation.
+    if name in ("interface-shadow-protected", "interface-shadow-package") and api <= NON_PUBLIC_LINK_ERROR_API:
+        i = 2 if name.endswith("protected") else 3
+        return 63, {"rejectionReason": True, "oldDispatch": 51 + 10 * i, "newDispatch": 51 + 10 * i,
+                    "oldShadow": 52 + 10 * i, "afterGc": 51 + 10 * i}
     kind = name.removeprefix("interface-abstract-unimplemented-")
     if kind in ("package", "protected") and api <= NON_PUBLIC_LINK_ERROR_API:
         return 63, LINK_ERROR_CHECKS
@@ -781,9 +789,13 @@ REQUIRED_CHECKS.update({
     **{"interface-hide-parent-" + kind: {"rejectionReason": True, "oldDispatch": 31,
         "newDispatch": 31, "afterGc": 31} for kind in ("static", "private")},
     "interface-hide-object": {"rejectionReason": True, "oldDispatch": 41, "newDispatch": 41, "afterGc": 41},
-    **{"interface-shadow-" + kind: {"rejectionReason": True, "oldDispatch": 51 + 10 * i,
-        "newDispatch": 51 + 10 * i, "oldShadow": 52 + 10 * i, "afterGc": 51 + 10 * i}
-        for i, kind in enumerate(("static", "private", "protected", "package"))},
+    **{"interface-shadow-" + kind: {"interfaceShadow": 1, "oldDispatch": 0, "newDispatch": 0,
+        "oldShadow": 52 + 10 * i, "afterGc": 0} for i, kind in enumerate(("static", "private"))},
+    **{"interface-shadow-" + kind: {"interfaceShadow": "java.lang.IllegalAccessError", "oldDispatch": 0,
+        "newDispatch": 0, "oldShadow": 52 + 10 * i, "afterGc": 0}
+        for i, kind in enumerate(("protected", "package"), 2)},
+    "interface-shadow-other-package": {"rejectionReason": True, "oldDispatch": 91, "newDispatch": 91,
+        "oldShadow": 92, "afterGc": 91},
     "interface-bridge-add": {"before": 90, "oldBridge": 90, "newBridge": 90,
         "oldAdded": 91, "newAdded": 91, "hasBridge": True, "addedBridge": True, "afterGc": 91},
     **{"interface-lambda-" + kind: {"appendCode": 0, "redefinedTypes": i + 1,
@@ -804,7 +816,7 @@ REQUIRED_CHECKS.update({
             for i in range(200) for kind in ("oldAdded", "newAdded", "oldDispatch", "oldMarker", "afterGc")}},
 })
 UNCHANGED_CHECKS = {
-    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
+    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-other-package']},
     "interface-overlap-superclass": ("unchangedParent",),
     **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")

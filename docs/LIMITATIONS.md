@@ -28,11 +28,11 @@
 
 | 接口目标的拒绝情况 | JVMTI 错误码 |
 | --- | --- |
-| 新增 native；direct 方法遮蔽继承的接口／Object 方法；default 遮蔽类链 static／非 public 方法；Android 13、14 上已加载类以 package-private／protected 方法实现新增的 abstract（ART 链接失败） | `METHOD_ADDED`（63） |
+| 新增 native；direct 方法遮蔽继承的接口／Object 方法；default 与实现类在另一运行时包中、因而不继承的类链 package-private 方法同签名；Android 13、14 上已加载类以 package-private／protected 方法实现新增的 abstract（ART 链接失败） | `METHOD_ADDED`（63） |
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
-| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
-| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法 | `HIERARCHY_CHANGED`（66） |
+| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
+| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 出现上述同签名 | `HIERARCHY_CHANGED`（66） |
 | 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |

@@ -70,6 +70,10 @@ public final class InterfaceEvolutionFixture {
         public int oldCall() { return shadow(); }
     }
     public static class PackageImpl extends PackageBase implements PackageShadow {}
+    // The package-private shadow() is declared in another runtime package.
+    public interface OtherPackageShadow { default int stable() { return 91; } }
+    public static class OtherPackageImpl extends com.github.ytlog.artdcevm.fixture.other.OtherPackageBase
+            implements OtherPackageShadow {}
     public interface BridgeParent<T> { T result(); }
     public interface BridgeContract extends BridgeParent<Integer> {
         default Integer result() { return 90; }

@@ -63,10 +63,11 @@ struct LoadedHierarchy {
   // superinterfaces and java.lang.Object. An added direct method with one of
   // these identities would be resolved by verified invoke-interface callers.
   std::set<MemberKey> inherited_interface;
-  // Interface targets: static or non-public instance methods declared by loaded
-  // subtypes or the superclasses of loaded implementations, each with the first
-  // declaring class. An added default with one of these identities can change
-  // what existing calls on those classes resolve to.
+  // Interface targets: package-private methods declared by loaded subtypes, or
+  // by superclasses of loaded implementations in another runtime package, each
+  // with the first declaring class. ART resolves a subtype's call that names
+  // such a method to an added default copied into the subtype, where JBR keeps
+  // the declaration; other static or non-public methods resolve as on JBR.
   std::map<MemberKey, std::string> subtype_shadows;
   // Interface targets: the virtual methods that added parent interfaces bring,
   // read from each parent and those of its superinterfaces the target does not

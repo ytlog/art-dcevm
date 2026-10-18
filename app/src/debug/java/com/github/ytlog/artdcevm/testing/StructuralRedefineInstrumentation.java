@@ -2634,31 +2634,49 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             System.gc(); System.runFinalization(); System.gc();
             scenario.check("afterGc", 41, object.stable());
         });
+        // As on JBR, a new default may share its identity with a class-chain
+        // method. Static and private ones keep resolving as before; a
+        // protected or package-private one inherited by the implementation is
+        // its non-public implementation (see NON_PUBLIC_LINK_ERROR_API). A
+        // package-private method of another runtime package would resolve
+        // differently on ART and still rejects.
         Object[] shadows = {new InterfaceEvolutionFixture.StaticImpl(), new InterfaceEvolutionFixture.PrivateImpl(),
-                new InterfaceEvolutionFixture.ProtectedImpl(), new InterfaceEvolutionFixture.PackageImpl()};
+                new InterfaceEvolutionFixture.ProtectedImpl(), new InterfaceEvolutionFixture.PackageImpl(),
+                new InterfaceEvolutionFixture.OtherPackageImpl()};
         Class<?>[] contracts = {InterfaceEvolutionFixture.StaticShadow.class, InterfaceEvolutionFixture.PrivateShadow.class,
-                InterfaceEvolutionFixture.ProtectedShadow.class, InterfaceEvolutionFixture.PackageShadow.class};
-        String[] kinds = {"static", "private", "protected", "package"};
-        String[] owners = {"StaticBase", "PrivateImpl", "ProtectedBase", "PackageBase"};
+                InterfaceEvolutionFixture.ProtectedShadow.class, InterfaceEvolutionFixture.PackageShadow.class,
+                InterfaceEvolutionFixture.OtherPackageShadow.class};
+        String[] kinds = {"static", "private", "protected", "package", "other-package"};
         for (int i = 0; i < kinds.length; ++i) {
             final int index = i;
             String name = "interface-shadow-" + kinds[i];
             Class<?> type = contracts[i]; Object receiver = shadows[i];
             Method stable = type.getMethod("stable");
             String schema = memberSchema(type);
-            runScenario(name, 63, scenario -> {
+            boolean nonPublic = index == 2 || index == 3;
+            int code = index == 4 ? 63 : abstractUnimplementedCode(nonPublic ? "package" : "static");
+            runScenario(name, code, scenario -> {
                 scenario.redefine(new Class<?>[]{type}, name);
-                scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
-                        .contains("InterfaceEvolutionFixture$" + owners[index] + ";: shadow()I"));
-                scenario.check("unchangedMembers", schema, memberSchema(type));
-                scenario.check("oldDispatch", 51 + 10 * index, stable.invoke(receiver));
+                int old = 51 + 10 * index;
+                if (code != 0) {
+                    String reason = DcevmRuntime.capabilities().getString("lastRejection");
+                    scenario.check("rejectionReason", true, index == 4
+                            ? reason.contains("OtherPackageBase;: shadow()I") : reason.contains("links non-public implementation"));
+                    scenario.check("unchangedMembers", schema, memberSchema(type));
+                } else {
+                    old = 0;
+                    if (nonPublic) scenario.expectError("interfaceShadow", IllegalAccessError.class,
+                            () -> type.getMethod("shadow").invoke(receiver));
+                    else scenario.check("interfaceShadow", 1, type.getMethod("shadow").invoke(receiver));
+                }
+                scenario.check("oldDispatch", old, stable.invoke(receiver));
                 Object fresh = receiver.getClass().getConstructor().newInstance();
-                scenario.check("newDispatch", 51 + 10 * index, stable.invoke(fresh));
+                scenario.check("newDispatch", old, stable.invoke(fresh));
                 scenario.check("oldShadow", 52 + 10 * index, index == 0
                         ? InterfaceEvolutionFixture.StaticBase.shadow()
                         : receiver.getClass().getMethod("oldCall").invoke(receiver));
                 System.gc(); System.runFinalization(); System.gc();
-                scenario.check("afterGc", 51 + 10 * index, stable.invoke(receiver));
+                scenario.check("afterGc", old, stable.invoke(receiver));
             });
         }
         InterfaceEvolutionFixture.BridgeImpl bridge = new InterfaceEvolutionFixture.BridgeImpl();
