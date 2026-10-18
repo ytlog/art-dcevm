@@ -311,9 +311,19 @@ class TypeResolver {
 // old superclass (widening) or the target, and the final methods that classes
 // between it and the old superclass declare, as far as the target may override them.
 jvmtiError DescribeSuperclass(jvmtiEnv* env, JNIEnv* jni, jclass target, jclass superclass,
-                              structural_policy::NewSuperclass* output, std::string* error) {
+                              bool interface_target, structural_policy::NewSuperclass* output, std::string* error) {
   LocalReference old_superclass(jni);
   old_superclass.value = jni->GetSuperclass(target);
+  // JNI exposes no superclass for an interface. DEX and ART's Class linker
+  // both use Object, including when the replacement is an ordinary class.
+  if (!old_superclass.value && interface_target) {
+    old_superclass.value = jni->FindClass("java/lang/Object");
+    if (!old_superclass.value) {
+      jni->ExceptionClear();
+      *error = "interface Object superclass unavailable";
+      return JVMTI_ERROR_INTERNAL;
+    }
+  }
   output->extends_target = jni->IsAssignableFrom(superclass, target);
   output->extends_old_superclass = old_superclass.value &&
       jni->IsAssignableFrom(superclass, static_cast<jclass>(old_superclass.value)) &&
@@ -427,6 +437,7 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
   std::string unreadable;
   if (!evolution::ReadClassDeclarations(SubmittedDex(definition), &incoming, &unreadable))
     return JVMTI_ERROR_NONE;
+  snapshot->changes_invoke_kind = (snapshot->live.access ^ incoming.access) & evolution::kAccInterface;
   for (const auto& old : snapshot->live.methods)
     for (const auto& next : incoming.methods) {
       if (old.name != next.name || old.descriptor != next.descriptor) continue;
@@ -479,7 +490,7 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
                             &snapshot->superclass_class, &superclass.same_runtime_package, error);
   if (result != JVMTI_ERROR_NONE || !snapshot->superclass_class) return result;
   result = DescribeSuperclass(env, jni, definition.klass, snapshot->superclass_class,
-                              &superclass, error);
+                              snapshot->live.access & evolution::kAccInterface, &superclass, error);
   if (result != JVMTI_ERROR_NONE) return result;
   snapshot->hierarchy.new_superclass = std::move(superclass);
   return JVMTI_ERROR_NONE;

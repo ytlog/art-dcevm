@@ -35,6 +35,7 @@ struct ProcessCapabilities {
   bool field_retirement = false;
   bool superclass_change = false;
   bool instance_check = false;
+  bool kind_instance_check = false;
   bool subclass_watch = false;
   bool retransform = false;
 };

@@ -680,7 +680,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         do { next = bytes[cursor[0]++] & 255; value |= (next & 127) << shift; shift += 7; } while ((next & 128) != 0);
         return value;
     }
-    private static byte[] invalidReturn(byte[] original) throws Exception {
+    static byte[] invalidReturn(byte[] original) throws Exception {
         byte[] bytes = original.clone();
         int[] cursor = {u32(bytes, u32(bytes, 100) + 24)};
         int[] counts = new int[4];

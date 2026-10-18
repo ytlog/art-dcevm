@@ -108,6 +108,10 @@ struct Abilities {
   bool interface_removal = false;
   // Pre-publication linking preserves JBR non-public class-method selection.
   bool interface_selection = false;
+  // Kind changes use a new ART Class, verified member mapping and protected
+  // old virtual/interface callers. Class -> interface additionally requires
+  // no exact instances; changing the interface bit requires no loaded subtypes.
+  bool class_kinds = false;
 };
 
 struct Decision {
@@ -130,6 +134,14 @@ struct Decision {
   bool superclass_changed = false;
   // The class stops implementing some interface: seal its replacements' dispatch.
   bool interfaces_removed = false;
+  // The interface bit changes the meaning of a symbolic invocation even if
+  // the method's own flags and signature stay identical.
+  bool interface_kind_changed = false;
+  // Must run before ART attempts to allocate any replacement instance.
+  bool requires_instance_precheck = false;
+  // Enum marker only, with identical hierarchy and member declarations: ART
+  // verifies all incoming code using the existing self/array identity graph.
+  bool published_verification = false;
   // Methods whose old invoke kind needs caller protection or batch checks,
   // with the old kind's modifiers. The old declarations retire.
   std::vector<std::pair<MemberKey, uint32_t>> kind_changes;

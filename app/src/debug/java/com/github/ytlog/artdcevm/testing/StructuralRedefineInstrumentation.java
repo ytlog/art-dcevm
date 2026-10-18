@@ -27,6 +27,9 @@ import com.github.ytlog.artdcevm.fixture.ConstructorSubject;
 import com.github.ytlog.artdcevm.fixture.NativeCaller;
 import com.github.ytlog.artdcevm.fixture.NativeSubject;
 import com.github.ytlog.artdcevm.fixture.ClassFinalSubject;
+import com.github.ytlog.artdcevm.fixture.ClassKindFixture;
+import com.github.ytlog.artdcevm.fixture.ClassKindCalls;
+import com.github.ytlog.artdcevm.fixture.ClassKindEnum;
 import com.github.ytlog.artdcevm.fixture.CopiedChild;
 import com.github.ytlog.artdcevm.fixture.CopiedDefault;
 import com.github.ytlog.artdcevm.fixture.CopiedParent;
@@ -193,6 +196,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("method-private".equals(isolated)) runPrivateCallScenarios();
             else if ("tool".equals(isolated)) runToolScenarios();
             else if ("interface-shadow".equals(isolated)) runInterfaceShadowScenarios();
+            else if ("class-kinds".equals(isolated)) runClassKindScenarios();
             else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
                 runAbstractUnimplementedScenario(isolated.substring("interface-abstract-unimplemented-".length()));
@@ -380,11 +384,257 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runThreadSubclassScenario();
         runInterfaceRemovalScenarios();
         if (!ordinaryOnly) runStaticNarrowingScenarios();
+        if (!ordinaryOnly) runClassKindScenarios();
     }
 
     // A Proxy implementation of a redefined interface stays: kept methods still
     // reach the handler, now as methods of the new interface; a new abstract
     // method throws AbstractMethodError and a new default runs its body.
+    private void runClassKindScenarios() throws Exception {
+        Class<?>[] types = {ClassKindFixture.ClassTarget.class, ClassKindFixture.InterfaceTarget.class,
+                ClassKindFixture.AnnotationTarget.class};
+        String[] kinds = {"c", "i", "a"};
+        String[][] destinations = {{"i", "a"}, {"c", "a"}, {"c", "i"}};
+        ClassKindEnum constant = ClassKindEnum.ONE;
+        java.lang.reflect.Constructor<?> cachedConstructor = types[0].getConstructor();
+        MethodHandle constructorHandle = MethodHandles.publicLookup().unreflectConstructor(cachedConstructor);
+        StandardJvmtiClient.cacheConstructor(types[0], "()V");
+        runScenario("class-kind-abort", 110, scenario -> {
+            scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+            scenario.redefine(new Class<?>[]{types[0], ClassKindEnum.class},
+                    "class-kind-c-i", "class-kind-enum-class");
+            scenario.check("classKept", false, types[0].isInterface());
+            scenario.check("enumKept", true, ClassKindEnum.class.isEnum());
+            scenario.check("constantKept", true, ClassKindEnum.ONE == constant);
+            scenario.expectError("oldNullCall", NullPointerException.class, () -> ClassKindCalls.classCall(null));
+        });
+        runScenario("class-kind-hook-reject", 70, scenario -> {
+            scenario.check("hookInstalled", 0, StandardJvmtiClient.setClassFileReplacement(
+                    types[0].getName().replace('.', '/'), readAsset(
+                            "class-kind-c-i/com/github/ytlog/artdcevm/fixture/ClassKindFixture$ClassTarget.dex")));
+            try {
+                scenario.redefine(new Class<?>[]{types[0]}, "class-kind-c-original");
+            } finally {
+                scenario.check("hookCleared", 0, StandardJvmtiClient.setClassFileReplacement(null, null));
+            }
+            scenario.check("classKept", false, types[0].isInterface());
+            scenario.expectError("oldNullCall", NullPointerException.class, () -> ClassKindCalls.classCall(null));
+        });
+        for (int index = 0; index < types.length; index++) {
+            final int slot = index;
+            Class<?> type = types[index];
+            Method cached = type.getMethod("value");
+            MethodHandle handle = MethodHandles.publicLookup().unreflect(cached);
+            for (String next : destinations[index]) {
+                for (int round = 0; round < 2; round++) {
+                    String name = "class-kind-" + kinds[index] + "-" + next + "-" + round;
+                    String variant = "class-kind-" + kinds[index] + "-" + next;
+                    boolean iface = !next.equals("c"), annotation = next.equals("a");
+                    boolean changedConvention = kinds[index].equals("c") != next.equals("c");
+                    runScenario(name, 0, scenario -> {
+                        scenario.redefine(new Class<?>[]{type}, variant);
+                        scenario.check("interface", iface, type.isInterface());
+                        scenario.check("annotation", annotation, type.isAnnotation());
+                        scenario.check("enum", false, type.isEnum());
+                        scenario.check("cachedOwner", true, cached.getDeclaringClass() == type);
+                        scenario.check("default", annotation ? 13 : null, type.getMethod("value").getDefaultValue());
+                        scenario.expectError("oldNullCall", changedConvention ? IncompatibleClassChangeError.class : NullPointerException.class,
+                                () -> classKindCall(slot, null));
+                        scenario.expectError("cachedNullReflection", NullPointerException.class, () -> cached.invoke(null));
+                        scenario.expectError("cachedNullHandle", NullPointerException.class, () -> handle.invoke((Object) null));
+                        scenario.expectError("castOther", ClassCastException.class, () -> classKindCast(slot, new Object()));
+                        scenario.check("castNull", null, classKindCast(slot, null));
+                        scenario.check("instanceOfNull", false, type.isInstance(null));
+                        scenario.check("selfAssignable", true, type.isAssignableFrom(type));
+                        if (slot == 0) {
+                            scenario.check("oldInstanceOfNull", false, ClassKindCalls.classIs(null));
+                            scenario.expectError("oldConstructor", iface ? InstantiationError.class : NullPointerException.class,
+                                    () -> { if (iface) ClassKindCalls.construct(); else ClassKindCalls.classCall(null); });
+                            scenario.expectError("cachedConstructor", InstantiationException.class,
+                                    () -> cachedConstructor.newInstance());
+                            scenario.expectError("cachedConstructorHandle", InstantiationException.class,
+                                    () -> constructorHandle.invoke());
+                            scenario.expectError("cachedConstructorJni", InstantiationException.class,
+                                    () -> StandardJvmtiClient.newObjectCached(0));
+                        }
+                        System.gc();
+                        scenario.expectError("afterGc", changedConvention ? IncompatibleClassChangeError.class : NullPointerException.class,
+                                () -> classKindCall(slot, null));
+                    });
+                    runScenario(name + "-restore", 0, scenario -> {
+                        scenario.redefine(new Class<?>[]{type}, "class-kind-" + kinds[slot] + "-original");
+                        scenario.check("interface", slot != 0, type.isInterface());
+                        scenario.check("annotation", slot == 2, type.isAnnotation());
+                        scenario.expectError("oldNullCall", NullPointerException.class, () -> classKindCall(slot, null));
+                        scenario.expectError("cachedNullHandle", NullPointerException.class, () -> handle.invoke((Object) null));
+                        if (slot == 0) {
+                            scenario.expectReflectionError("cachedConstructor", () -> cachedConstructor.newInstance());
+                            scenario.expectError("cachedConstructorHandle", NoSuchMethodError.class,
+                                    () -> constructorHandle.invoke());
+                            scenario.expectError("cachedConstructorJni", NoSuchMethodError.class,
+                                    () -> StandardJvmtiClient.newObjectCached(0));
+                        }
+                    });
+                }
+            }
+        }
+        runScenario("class-kind-self-array-reject", 66, scenario -> {
+            scenario.redefine(new Class<?>[]{ClassKindFixture.InterfaceTarget.class}, "class-kind-i-array-c");
+            scenario.check("interfaceKept", true, ClassKindFixture.InterfaceTarget.class.isInterface());
+            scenario.expectError("oldNullCall", NullPointerException.class, () -> ClassKindCalls.interfaceCall(null));
+            System.gc();
+            scenario.check("afterGc", true, ClassKindFixture.InterfaceTarget.class.isInterface());
+        });
+        ClassKindCalls.LiveImpl live = new ClassKindCalls.LiveImpl();
+        Method cached = ClassKindFixture.LiveTarget.class.getMethod("value");
+        MethodHandle handle = MethodHandles.publicLookup().unreflect(cached);
+        StandardJvmtiClient.cacheInterfaceDispatch(0, cached);
+        for (int round = 0; round < 2; round++) {
+            for (boolean annotation : new boolean[]{true, false}) {
+                runScenario("class-kind-live-" + (annotation ? "annotation" : "interface") + "-" + round, 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{ClassKindFixture.LiveTarget.class},
+                            annotation ? "kind-live-annotation" : "kind-live-original");
+                    scenario.check("annotation", annotation, ClassKindFixture.LiveTarget.class.isAnnotation());
+                    scenario.check("annotationInstance", annotation, java.lang.annotation.Annotation.class.isInstance(live));
+                    scenario.check("oldCall", 31, ClassKindCalls.liveCall(live));
+                    scenario.check("reflection", 31, cached.invoke(live));
+                    scenario.check("handle", 31, invokeCachedHandle(handle, live));
+                    scenario.check("jni", 31, StandardJvmtiClient.callInterfaceDispatchInt(live, 0));
+                    scenario.check("marker", 43, live.marker);
+                    System.gc();
+                    scenario.check("afterGc", 31, ClassKindCalls.liveCall(live));
+                });
+            }
+        }
+        for (String next : new String[]{"c", "e"}) {
+            runScenario("class-kind-live-reject-" + next, next.equals("e") ? 66 : 62, scenario -> {
+                scenario.redefine(new Class<?>[]{ClassKindFixture.LiveTarget.class}, "class-kind-live-" + next);
+                scenario.check("interfaceKept", true, ClassKindFixture.LiveTarget.class.isInterface());
+                scenario.check("oldCall", 31, ClassKindCalls.liveCall(live));
+                scenario.check("jni", 31, StandardJvmtiClient.callInterfaceDispatchInt(live, 0));
+                scenario.check("marker", 43, live.marker);
+            });
+        }
+        Object proxy = java.lang.reflect.Proxy.newProxyInstance(ClassKindFixture.InterfaceTarget.class.getClassLoader(),
+                new Class<?>[]{ClassKindFixture.InterfaceTarget.class}, (receiver, method, args) -> {
+                    if (method.getName().equals("equals")) return receiver == args[0];
+                    if (method.getName().equals("toString")) return "kind-proxy";
+                    return 37;
+                });
+        Method proxyMethod = ClassKindFixture.InterfaceTarget.class.getMethod("value");
+        StandardJvmtiClient.cacheInterfaceDispatch(0, proxyMethod);
+        runScenario("class-kind-proxy-reject", 62, scenario -> {
+            scenario.redefine(new Class<?>[]{ClassKindFixture.InterfaceTarget.class}, "class-kind-i-c");
+            scenario.check("interfaceKept", true, ClassKindFixture.InterfaceTarget.class.isInterface());
+            scenario.check("oldCall", 37, ClassKindCalls.interfaceCall(proxy));
+            scenario.check("reflection", 37, proxyMethod.invoke(proxy));
+            scenario.check("jni", 37, StandardJvmtiClient.callInterfaceDispatchInt(proxy, 0));
+            System.gc();
+            scenario.check("afterGc", 37, ClassKindCalls.interfaceCall(proxy));
+        });
+        ClassKindFixture.ClassTarget existing = new ClassKindFixture.ClassTarget();
+        Object retained = new Object();
+        existing.marker = 97; existing.reference = retained;
+        Field oldField = ClassKindFixture.ClassTarget.class.getField("marker");
+        Method oldMethod = ClassKindFixture.ClassTarget.class.getMethod("value");
+        MethodHandle oldHandle = MethodHandles.publicLookup().unreflect(oldMethod);
+        StandardJvmtiClient.cacheInterfaceDispatch(1, oldMethod);
+        runScenario("class-kind-instance-reject", 70, scenario -> {
+            scenario.redefine(new Class<?>[]{ClassKindFixture.ClassTarget.class}, "class-kind-c-i");
+            scenario.check("classKept", false, ClassKindFixture.ClassTarget.class.isInterface());
+            scenario.check("oldCall", 7, existing.value());
+            scenario.check("marker", 97, oldField.get(existing));
+            scenario.check("reference", true, existing.reference == retained);
+            scenario.check("reflection", 7, oldMethod.invoke(existing));
+            scenario.check("handle", 7, invokeCachedHandle(oldHandle, existing));
+            scenario.check("jni", 7, StandardJvmtiClient.callInterfaceDispatchInt(existing, 1));
+            System.gc();
+            scenario.check("afterGc", true, existing.marker == 97 && existing.reference == retained && existing.value() == 7);
+        });
+        ModifierPassive subtype = new ModifierPassive();
+        int inherited = subtype.throughPublic();
+        runScenario("class-kind-subtype-reject", 62, scenario -> {
+            scenario.redefine(new Class<?>[]{ModifierSubject.class}, "class-kind-subtype-interface");
+            scenario.check("classKept", false, ModifierSubject.class.isInterface());
+            scenario.check("subtypeKept", true, subtype instanceof ModifierSubject);
+            scenario.check("oldCallKept", true, inherited == subtype.throughPublic());
+        });
+        Field field = ClassKindEnum.class.getField("marker");
+        Method value = ClassKindEnum.class.getMethod("value");
+        MethodHandle enumHandle = MethodHandles.publicLookup().unreflect(value);
+        StandardJvmtiClient.cacheInterfaceDispatch(1, value);
+        constant.marker = 59;
+        runScenario("class-kind-enum-verify-abort", 62, scenario -> {
+            byte[] invalid = InterfaceAbortInstrumentation.invalidReturn(readAsset(
+                    "class-kind-enum-class/com/github/ytlog/artdcevm/fixture/ClassKindEnum.dex"));
+            scenario.check("hookInstalled", 0, StandardJvmtiClient.setClassFileReplacement(
+                    ClassKindEnum.class.getName().replace('.', '/'), invalid));
+            try {
+                scenario.redefine(new Class<?>[]{ClassKindEnum.class}, "class-kind-enum-class");
+            } finally {
+                scenario.check("hookCleared", 0, StandardJvmtiClient.setClassFileReplacement(null, null));
+            }
+            scenario.check("enumKept", true, ClassKindEnum.class.isEnum());
+            scenario.check("marker", 59, field.get(constant));
+            scenario.check("oldCall", 17, constant.value());
+            scenario.check("jni", 17, StandardJvmtiClient.callInterfaceDispatchInt(constant, 1));
+        });
+        for (int round = 0; round < 2; round++) {
+            for (boolean enumKind : new boolean[]{false, true}) {
+                runScenario("class-kind-enum-" + (enumKind ? "restore" : "class") + "-" + round, 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{ClassKindEnum.class},
+                            enumKind ? "class-kind-enum-original" : "class-kind-enum-class");
+                    scenario.check("enum", enumKind, ClassKindEnum.class.isEnum());
+                    scenario.check("superclass", Enum.class.getName(), ClassKindEnum.class.getSuperclass().getName());
+                    scenario.check("constant", true, ClassKindEnum.ONE == constant);
+                    scenario.check("name", "ONE", constant.name());
+                    scenario.check("ordinal", 0, constant.ordinal());
+                    scenario.check("marker", 59, field.get(constant));
+                    scenario.check("reference", "kept", constant.reference);
+                    scenario.check("reflection", 17, value.invoke(constant));
+                    scenario.check("handle", 17, invokeCachedHandle(enumHandle, constant));
+                    scenario.check("jni", 17, StandardJvmtiClient.callInterfaceDispatchInt(constant, 1));
+                    scenario.check("instanceof", true, constant instanceof Enum);
+                    scenario.check("constants", enumKind ? 1 : -1,
+                            ClassKindEnum.class.getEnumConstants() == null ? -1 : ClassKindEnum.class.getEnumConstants().length);
+                    System.gc();
+                    scenario.check("afterGc", 17, constant.value());
+                });
+            }
+        }
+        for (String next : new String[]{"c", "i", "a"}) {
+            runScenario("class-kind-enum-reject-" + next, 66, scenario -> {
+                scenario.redefine(new Class<?>[]{ClassKindEnum.class}, "class-kind-enum-" + next);
+                scenario.check("enumKept", true, ClassKindEnum.class.isEnum());
+                scenario.check("marker", 59, constant.marker);
+                scenario.check("oldCall", 17, constant.value());
+            });
+        }
+        // JBR's accepted new-Enum path depends on self arrays and reports null
+        // enum constants. ART/libcore cannot yet preserve those semantics.
+        for (int index = 0; index < types.length; index++) {
+            final int slot = index;
+            runScenario("class-kind-" + kinds[index] + "-enum", 66, scenario -> {
+                scenario.redefine(new Class<?>[]{types[slot]}, "class-kind-" + kinds[slot] + "-e");
+                scenario.check("enum", false, types[slot].isEnum());
+                scenario.check("interfaceKept", slot != 0, types[slot].isInterface());
+                scenario.expectError("oldNullCall", NullPointerException.class, () -> classKindCall(slot, null));
+                System.gc();
+                scenario.check("afterGc", false, types[slot].isEnum());
+            });
+        }
+    }
+
+    private static int classKindCall(int slot, Object receiver) {
+        return slot == 0 ? ClassKindCalls.classCall(receiver) : slot == 1
+                ? ClassKindCalls.interfaceCall(receiver) : ClassKindCalls.annotationCall(receiver);
+    }
+
+    private static Object classKindCast(int slot, Object receiver) {
+        return slot == 0 ? ClassKindCalls.classCast(receiver) : slot == 1
+                ? ClassKindCalls.interfaceCast(receiver) : ClassKindCalls.annotationCast(receiver);
+    }
+
     private void runProxyScenarios() throws Exception {
         runProxyGroupScenarios();
         runProxyParentGraphScenarios();

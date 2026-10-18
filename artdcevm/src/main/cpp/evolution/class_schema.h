@@ -45,6 +45,9 @@ struct ClassSchema {
   // DEX InnerClass.accessFlags, when present. JVMTI reports these rather than
   // ClassDef flags for nested classes; `access` still retains the raw flags.
   std::optional<uint32_t> reflection_access;
+  // The final DEX references an array whose base component is this class,
+  // including references appearing only inside method code.
+  bool self_array_reference = false;
 };
 
 // A standard DEX (035--040) in memory. For an ART DexFile, begin is the

@@ -34,7 +34,7 @@
 | 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；选择服务不可用时改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
 | 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或选择服务不可用且其 default 出现上述同签名 | `HIERARCHY_CHANGED`（66） |
 | 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
-| 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
+| class/interface 跨界时存在已加载子类型；需要实例前置检查却能力不可用或存在直接实例 | 分别为 62、70；允许的种类转换见[转换矩阵](CLASS_KIND_EVOLUTION.md) |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
 | boot 接口、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
@@ -62,7 +62,7 @@
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
 | 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到批次类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。导出命名 `FindMethodToCall<kVirtual/kInterface>` 选择入口的运行时在 Class/Thread/HandleScope 探测通过后支持此行为，以 `privateSelfSelection` 报告：API 36（已经真机验证）与多数 API 34–35 运行库（依固定源码，尚未上机）。API 30–33 以及部分 API 34、37 模块内联了选择逻辑，仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
-| 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
+| 种类变化不满足实例、子类型、分配或分派前提 | 62／66／70 | 见[类种类演进](CLASS_KIND_EVOLUTION.md) |
 | 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 | 移除接口时成员映射或分派保护不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
 
@@ -153,7 +153,7 @@
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
 | 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 持久发布前保护与后续结构重建共同保留正确分派，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口) |
 | 有 Proxy 实现类的接口移除父接口 | 接受，已有代理不再是该父接口的实例 | 接受；共享父接口保留到最后一条继承路径被移除，已有引用沿用接口收窄规则 |
-| 类在普通类与接口等种类之间变化 | 接受 | 拒绝 70 |
+| 类种类变化 | 按方向和已有对象／子类型判断；部分成功返回后的缓存／GC 行为不安全 | 按[转换矩阵](CLASS_KIND_EVOLUTION.md)放行可验证的转换，保留必要的 62／66／70 边界 |
 | 类有自身实例时改为 abstract | 接受，实例保留，新增 abstract 方法调用时抛 `AbstractMethodError` | 拒绝 70：ART 的抽象类没有嵌入 vtable/IMT，编译代码按接收者类的嵌入表分派，抽象类的实例会读到类对象之外；ART 的 DEX 校验也不允许先按具体类链接再改标志 |
 | boot 类、`Thread` 及其父类型、数组、代理类自身 | 部分可重定义 | 按 ART 的规则拒绝 |
 | 新类（新 lambda、匿名类） | 由 HotswapAgent 等工具定义 | 由热重载工具追加到加载器，见[提供新类](#提供新类) |

@@ -17,11 +17,21 @@ bool Protecting();
 // Caller supplies Native-probed Thread declarations and ART's existing admission root.
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, abi::arm64::Handle target);
-void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods);
+void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods,
+                        size_t gc_marking = ~size_t{0}, size_t method_index = ~size_t{0});
 // Named switch-interpreter selectors are installed; each transaction still
 // needs the Class/Thread/HandleScope probes that SelfCalls reports.
 bool SelectionServices();
 bool SelfCalls();
+// Probed Class/DexCache/collector declarations and named type lookup check
+// the symbolic owner, including inherited defaults and Object methods.
+bool ClassKinds();
+const char* ClassKindUnavailable();
+bool EnableClassKinds();
+bool ClassKindProtection();
+// Retired constructors still check current class instantiability before the
+// missing body, as reflection, MethodHandle and JNI construction do on JBR.
+bool UninstantiableConstructor(const void* method);
 // Commit under ART suspend-all/JIT suspension; IsCompilable gates both JIT and inlining.
 void KeepInterpreted(void* method, uint32_t precompiled_flag);
 }  // namespace artdcevm::invoke_kind

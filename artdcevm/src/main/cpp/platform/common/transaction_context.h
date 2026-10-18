@@ -37,6 +37,8 @@ struct Requirements {
   // ART's own mapping cannot commit the change: fail the transaction, before
   // ART's no-failure point, when a later probe disables the engine's mapping.
   bool member_mapping = false;
+  bool instance_precheck = false;
+  bool published_verification = false;
   // Link the target's new class under this superclass (a global reference that
   // outlives the transaction), which extends the old superclass.
   jclass superclass = nullptr;

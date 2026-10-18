@@ -17,6 +17,7 @@ SOURCE = r'''
 #include "platform/symbols/runtime_thread_symbols.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/common/runtime_roots.h"
+#include "platform/abi/arm64/common/redefinition.h"
 #include <cstring>
 #include <sys/mman.h>
 #include <cstddef>
@@ -34,13 +35,20 @@ void Require(bool ok, const char* reason);
 bool missing_method = false;
 abi::arm64::ArtMethodPrefix own_caller{};
 struct FakeScope { void* link; int32_t capacity; uint32_t size; uint32_t root; };
-struct FakeThread { uint32_t tid = 7; void* scope = nullptr; } fake_thread;
+struct FakeThread { uint32_t tid = 7; uint32_t marking = 0; void* scope = nullptr; } fake_thread;
 namespace artdcevm::abi::arm64 { struct RootInfo {}; }
 const abi::arm64::RootInfo root_info{};
 bool moving = false, other_loader = false, other_class = false;
+void* symbolic_type = nullptr;
+void* LookupType(void* l, uint16_t index, void* cache, void* loader) {
+  Require(l == linker && index == 4 && cache == reinterpret_cast<void*>(0x10000300) &&
+          loader == reinterpret_cast<void*>(1), "wrong symbolic owner lookup ABI");
+  return symbolic_type;
+}
 int selections = 0;
 int cache_reads = 0;
-uintptr_t CacheRead(void*) { cache_reads++; return 0x7000; }
+uintptr_t cache_value = 0x7000;
+uintptr_t CacheRead(void*) { cache_reads++; return cache_value; }
 bool use_barrier = true;
 void* Mark(void* object) { return object == reinterpret_cast<void*>(0x9000) ? reinterpret_cast<void*>(0x8000) : object; }
 void Visit(void* thread, abi::arm64::RootVisitor* visitor, uint32_t tid) {
@@ -102,6 +110,9 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
         name == std::string(kObsoleteCacheRead.name) || name == std::string(kObsoleteCacheRaw.name)) return nullptr;
   }
   if (mode >= 6) {
+    if ((mode == 12 || mode == 13) && name == std::string(symbols::interface_redefinition::kLookupCache.name)) return HookAddress(LookupType);
+    if (mode == 13 && (name == std::string(kSelectVirtual.name) || name == std::string(kSelectInterface.name) ||
+        name == std::string(kMethodLoader.name) || name == std::string(symbols::runtime_thread::kUseReadBarrier.name))) return nullptr;
     if (name == std::string(kSelectVirtual.name)) return HookAddress(Selection);
     if (mode != 7 && name == std::string(kSelectInterface.name)) return HookAddress(Selection);
     if (mode != 8 && name == std::string(kMethodDescriptor.name)) return HookAddress(Descriptor);
@@ -217,11 +228,11 @@ int main(int argc, char** argv) {
               Require(reinterpret_cast<decltype(&CacheRead)>(hook.replacement)(&method) == 0x7000,
                       "unprobed legacy cache bypassed ART");
         }
-        invoke_kind::ObserveClassLayout(0,4,8,8);
-        const bool complete = mode == 6 || mode == 10;
+        invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8);
+        const bool complete = mode == 6 || mode == 10 || mode == 12;
         Require(invoke_kind::SelfCalls() == complete && invoke_kind::SelectionServices() == complete,
                 "partial selection services enabled self calls");
-        if (complete || mode == 11) {
+        if (complete || mode == 11 || mode == 13) {
           void* klass = mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
           Require(klass != MAP_FAILED, "unable to allocate low-address class fixture");
           auto* fields = static_cast<uint32_t*>(klass); fields[0] = 0x00200000; fields[1] = 0x9000;
@@ -248,7 +259,61 @@ int main(int argc, char** argv) {
             fields[0] = 0x00200000; method.access_flags.store(0x00040000);
             Require(call(&method) == 0x7000, "declared obsolete cache bypassed ART");
           }
-          Require(cache_reads == (mode == 11 ? 4 : 6), "wrong obsolete cache delegation");
+          Require(cache_reads == (mode == 13 ? 0 : mode == 11 ? 4 : 6), "wrong obsolete cache delegation");
+          if (mode == 12 || mode == 13) {
+            uint8_t bytes[256]{};
+            uint32_t size = sizeof(bytes), count = 10, offset = 0x70;
+            std::memcpy(bytes + 32, &size, 4); std::memcpy(bytes + 88, &count, 4);
+            std::memcpy(bytes + 92, &offset, 4); bytes[0x70 + 9 * 8] = 4;
+            abi::arm64::DexFilePrefix dex{};
+            dex.begin = dex.data_begin = bytes; dex.data_size = sizeof(bytes);
+            auto* cache = reinterpret_cast<abi::arm64::DexCache*>(0x10000300);
+            cache->class_loader = 1;
+            cache->dex_file = reinterpret_cast<uintptr_t>(&dex);
+            fields[1] = 0x10000300;
+            symbolic_type = reinterpret_cast<void*>(0x10000500);
+            auto* symbolic_flags = static_cast<uint32_t*>(symbolic_type);
+            own_caller.declaring_class = 0x10000000; own_caller.access_flags.store(1);
+            if (mode == 13) {
+              self = &fake_thread; cache_value = 0x10000300;
+              own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);
+            }
+            referrer = &own_caller; method.access_flags.store(1);
+            Require(invoke_kind::ClassKinds() && invoke_kind::EnableClassKinds(), "complete kind guards unavailable");
+            for (const auto& hook : hooks) {
+              if (std::string(hook.name) != symbols::invoke_kind::kNterpGetMethod.name) continue;
+              auto call = reinterpret_cast<uintptr_t (*)(void*,void*,const uint16_t*)>(hook.replacement);
+              uint16_t inst[]{0x6e,9,0};
+              *symbolic_flags = 0;
+              // The resolved method can belong to an interface (copied
+              // default); only the DEX's symbolic class determines legality.
+              fields[0] = 0x0200;
+              Require(call(self,referrer,inst) == 42, "legal class call to inherited interface default rejected");
+              *symbolic_flags = 0x0200; fields[0] = 0;
+              Require(call(self,referrer,inst) == 0, "old virtual interface owner entered a vtable");
+              method.access_flags.store(2);
+              Require(call(self,referrer,inst) == 0, "private method access masked the symbolic class/interface ICCE");
+              method.access_flags.store(1);
+              inst[0] = 0x72;
+              Require(call(self,referrer,inst) == 42, "interface call to Object declaration rejected");
+              *symbolic_flags = 0;
+              Require(call(self,referrer,inst) == 0, "old interface class owner entered an IMT");
+              symbolic_type = nullptr;
+              Require(call(self,referrer,inst) == 0, "missing symbolic owner was accepted");
+              symbolic_type = reinterpret_cast<void*>(0x10000500);
+              struct Constructor { uint32_t owner; std::atomic<uint32_t> flags; uint32_t index; } ctor{0x10000000, 0x00050000, 9};
+              cache_value = 0x10000300;
+              *symbolic_flags = 0x0600;
+              Require(invoke_kind::UninstantiableConstructor(&ctor), "retired constructor ignored current interface instantiability");
+              *symbolic_flags = 0;
+              Require(!invoke_kind::UninstantiableConstructor(&ctor), "restored concrete class remained uninstantiable");
+            }
+            // Later self-call cases use a synthetic caller with no DEX.
+            invoke_kind::Installed(false);
+            munmap(klass,4096);
+            std::cout << "Invocation guard case " << mode << " PASS\n";
+            return 0;
+          }
           munmap(klass,4096); method.declaring_class = 0;
           self = &fake_thread; referrer = &own_caller;
           own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);
@@ -315,7 +380,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(12):
+        for case in range(14):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')

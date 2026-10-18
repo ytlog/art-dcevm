@@ -199,3 +199,5 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 原始日志和逐次设备报告只写入忽略的 `build/evidence/`。在本地 `local/verification/VERIFICATION.md` 记录命令、结论、匿名设备、型号、系统/API 与 APK 哈希；兼容性说明写入 `local/verification/ANDROID_COMPATIBILITY.md`，这两份文档不提交。逐套运行库清单与原始源码/哈希也只留本地。
 
 公开的 [COMPATIBILITY.md](COMPATIBILITY.md) 只接受脱敏精简结论，明确 JNI 模式、GC 证据及未验证范围，不收录原始日志、设备序列号、连接地址、个人路径或邮箱。不要由单次 GC 总数、零次标记读取、离线符号覆盖或故障注入推导超出证据的兼容性。
+
+类种类转换使用 `tools/compare-jbr-class-kinds.py --java-home <fixed-jbr>` 先测固定 JBR，再运行设备的 `--scenario-group class-kinds`；矩阵、已有实例与子类型前提、缓存调用及原生分配边界见[类种类演进](CLASS_KIND_EVOLUTION.md)。

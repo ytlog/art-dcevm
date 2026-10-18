@@ -40,7 +40,7 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 | `FinishNewClassAllocations` / `Run` / `LinkClass` | 只收集目标类的子类；执行事务并链接新类 | 接口后端准备接口及实现类型的组分配，在 Run 作用域保活替换类，失败时清理未发布的新类（`interface_allocation.cc`） |
 | `AllocateNewClassObject` | 使用旧层级重建类和子类 | 父类变化时把新父类写入调用方的父类 handle 槽位 |
 | `CheckVerification` | 校验器按描述符解析到旧类 | 父类变化或接口组校验期间，本线程的 `FindClass` 经校验重定向或接口后端返回对应替换类；接口组按加载器身份匹配 |
-| `CollectAndCreateNewInstances` | 为旧实例分配新实例 | 原函数成功后核对槽位声明并预先算好成员映射；依赖自有映射的事务在失败时返回错误 |
+| `CollectAndCreateNewInstances` | 为旧实例分配新实例 | 类转接口先经精确实例枚举拒绝直接实例；原函数成功后核对槽位声明并预先算好成员映射；依赖自有映射的事务在失败时返回错误 |
 | `CollectNewFieldAndMethodMappings` | 缺同名同签名方法会 CHECK，包括重链接子类的 copied default/miranda 消失时 | 写入预先算好的映射；没有计划的事务调用原映射 |
 | `UpdateClassStructurally` | 字段/锁字迁移、obsolete、引用替换、去优化、缓存失效 | 只设置 visitor 的事务作用域并完整调用原函数；复制阶段换用不含退役项的旧类字段数组，父类变化时让新类暂指原父类 |
 | `Runtime::VisitReflectiveTargets` | 原成员映射与 shadowing 处理 | 换回旧类字段数组；清除退役成员的 DexCache 项，记录退役 JNI ID，改写退役字段的反射 `Field` 与 VarHandle；其余交给原 visitor |
@@ -64,7 +64,7 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 2. `transaction::Scope` 为每次事务建立一个上下文，统一持有引擎批次、映射计划、接口状态、Native 阶段探测的线程服务、已探测布局和每个目标的 `Requirements`；嵌套事务整体压入并恢复该上下文。批次快照按 `jclass` 索引（ART 的 `ClassRedefinition::klass_` 就是同一个值），并为受影响类和已加载子类提前创建 JNI 全局根。外层递归事务锁把快照与 ART 事务串行化；ClassFileLoadHook 引发的嵌套事务成功后使外层快照失效。
 3. 原样调用 `StructurallyRedefineClasses`；成功退役时保留全局根，否则释放；返回后清理上下文并返回 ART 的结果。
 
-`Check*` 等 ART 内部阶段不调用 JNI/JVMTI 进行类加载、遍历、可赋值比较或策略计算。唯一例外是分配 Hook 在当前线程上对本事务私有数组和 holder 使用 JNI `SetObjectArrayElement`（含命名局部引用桥接和异常检查）：ART 13/14/15/16 的 `ScopedThreadStateChange` 在新旧状态同为 Runnable 时不切换状态；该元素写入执行 ART 自己的写屏障，不分配托管对象且没有挂起点。局部引用容量在 Native 状态预留。这一例外禁止用于任何 ART 回调或持有 ART 锁的区域，也不适用于已发布数组。
+`Check*` 等 ART 内部阶段不调用 JNI/JVMTI 进行类加载、遍历、可赋值比较或策略计算。例外包括类种类转换的 Collect 前置检查：ART 已暂停类加载与分配，公开 JVMTI 精确实例堆枚举在原实例分配之前拒绝不安全转换，回调不分配、不改 tag、不调用 JNI；详见[类种类演进](CLASS_KIND_EVOLUTION.md)。另一例外是分配 Hook 在当前线程上对本事务私有数组和 holder 使用 JNI `SetObjectArrayElement`（含命名局部引用桥接和异常检查）：ART 13/14/15/16 的 `ScopedThreadStateChange` 在新旧状态同为 Runnable 时不切换状态；该元素写入执行 ART 自己的写屏障，不分配托管对象且没有挂起点。局部引用容量在 Native 状态预留。这一例外禁止用于任何 ART 回调或持有 ART 锁的区域，也不适用于已发布数组。
 
 ### RetransformClasses
 
@@ -188,7 +188,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 接口目标的方法体更新 | 接受；需接口运行时探测与成员映射通过 |
 | 接口目标新增 public abstract/default/static/private 实例方法；删除或改签名任一方法；public 实例方法 abstract ↔ default；静态字段增删或改类型 | 成员映射与接口运行时可用、且继承与遮蔽检查通过时接受；缺实现或 default 冲突在调用时抛错 |
 | 接口目标新增 native；direct 遮蔽；选择服务不可用时的非 public 链接失败 | 拒绝 `METHOD_ADDED`（63） |
-| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；新父接口方法遮蔽检查失败；类种类变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
+| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；新父接口方法遮蔽检查失败；不满足前提的类种类变化（见[矩阵](CLASS_KIND_EVOLUTION.md)） | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
 | 接口运行时能力不可用（版本、命名服务或探测不支持） | 拒绝 `NOT_AVAILABLE`（98）；声明变化使用上述标准错误码 |
 | 新增字段、方法 | 接受 |
 | 已有成员的访问级别、final、volatile、transient、synchronized 变化（实例方法改为 private 除外）；Java → native；abstract ↔ concrete | 接受 |
@@ -200,7 +200,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 删除方法、改签名（含 native、abstract、构造器、类初始化器） | 可退役时接受；否则拒绝 `METHOD_DELETED`（67） |
 | 删除字段，字段类型或 static 属性变化 | 可退役且字段守卫可用时接受；否则拒绝 `SCHEMA_CHANGED`（64） |
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 而有已加载子类时拒绝 `CLASS_MODIFIERS_CHANGED`（70）；加 abstract 而该类自身仍有实例时，在 `CollectAndCreateNewInstances` 之后拒绝 70 |
-| 类在接口、注解、枚举之间变化 | 拒绝 70 |
+| 类在普通类、接口、注解、枚举之间变化 | 按[转换矩阵](CLASS_KIND_EVOLUTION.md)检查方向、实例、子类型及分配／分派前提 |
 | 新增接口（可同时调整顺序） | 运行时标志可读取且解析与访问检查通过时接受，普通类不单独依赖成员映射，接口目标需要；该接口本身或其父接口同批重建时先完成该重建并链接其替换类；无法解析、不是接口或不可访问时拒绝 `FAILS_VERIFICATION`（62）；没有可用布局读取标志时拒绝 `HIERARCHY_CHANGED`（66）；使用自有映射时新产生的 default 冲突拒绝 63 |
 | 移除接口；重复接口 | 普通类与接口目标（移除父接口）在成员映射与分派封闭可用时接受，见[移除接口](#移除接口)；普通类属于本批的接口组，或上述服务不可用时拒绝 66；重复拒绝 62 |
 | 父类变化 | 新父类扩展原父类时接受；其余按[放宽的父类变化](#放宽的父类变化)中的条件以 62、61 或 66 拒绝 |

@@ -304,6 +304,30 @@ SCENARIOS += (
     ("static-narrow-loaders", ["static-narrow-remove"] * 5 + ["static-narrow-struct"] * 5, 0),
 )
 
+CLASS_KIND_SCENARIOS = [("class-kind-abort", ["class-kind-c-i", "class-kind-enum-class"], 110)]
+CLASS_KIND_SCENARIOS.append(("class-kind-hook-reject", ["class-kind-c-original"], 70))
+for _old, _destinations in (("c", ("i", "a")), ("i", ("c", "a")), ("a", ("c", "i"))):
+    for _next in _destinations:
+        for _round in range(2):
+            _name = f"class-kind-{_old}-{_next}-{_round}"
+            CLASS_KIND_SCENARIOS.extend(((_name, [f"class-kind-{_old}-{_next}"], 0),
+                                        (_name + "-restore", [f"class-kind-{_old}-original"], 0)))
+CLASS_KIND_SCENARIOS.append(("class-kind-self-array-reject", ["class-kind-i-array-c"], 66))
+for _round in range(2):
+    for _kind, _variant in (("annotation", "kind-live-annotation"), ("interface", "kind-live-original")):
+        CLASS_KIND_SCENARIOS.append((f"class-kind-live-{_kind}-{_round}", [_variant], 0))
+CLASS_KIND_SCENARIOS.extend((f"class-kind-live-reject-{kind}", [f"class-kind-live-{kind}"], 66 if kind == "e" else 62) for kind in ("c", "e"))
+CLASS_KIND_SCENARIOS.append(("class-kind-proxy-reject", ["class-kind-i-c"], 62))
+CLASS_KIND_SCENARIOS.extend((("class-kind-instance-reject", ["class-kind-c-i"], 70),
+                             ("class-kind-subtype-reject", ["class-kind-subtype-interface"], 62)))
+CLASS_KIND_SCENARIOS.append(("class-kind-enum-verify-abort", ["class-kind-enum-class"], 62))
+for _round in range(2):
+    for _kind, _variant in (("class", "class-kind-enum-class"), ("restore", "class-kind-enum-original")):
+        CLASS_KIND_SCENARIOS.append((f"class-kind-enum-{_kind}-{_round}", [_variant], 0))
+CLASS_KIND_SCENARIOS.extend((f"class-kind-enum-reject-{kind}", [f"class-kind-enum-{kind}"], 66) for kind in ("c", "i", "a"))
+CLASS_KIND_SCENARIOS.extend((f"class-kind-{kind}-enum", [f"class-kind-{kind}-e"], 66) for kind in ("c", "i", "a"))
+SCENARIOS += tuple(CLASS_KIND_SCENARIOS)
+
 MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
                     "multi-interface-family", "multi-interface-shared", "multi-interface-after-shared", "multi-interface-covered",
                     "interface-overlap-uncovered","interface-overlap-body", "interface-overlap-structural", "interface-overlap-recovery","interface-implementation-body", "interface-implementation-add",
@@ -1117,10 +1141,60 @@ for _kind in ("private", "package", "protected"):
     REQUIRED_CHECKS["interface-abstract-unimplemented-" + _kind].update(
         {check: _error for check in ("interfaceHandle", "interfaceJni", "interfaceBytecode", "interfaceAfterGc")})
 
+REQUIRED_CHECKS["class-kind-abort"] = {"armed": 0, "classKept": False, "enumKept": True,
+    "constantKept": True, "oldNullCall": "java.lang.NullPointerException"}
+REQUIRED_CHECKS["class-kind-hook-reject"] = {"hookInstalled": 0, "hookCleared": 0,
+    "classKept": False, "oldNullCall": "java.lang.NullPointerException"}
+REQUIRED_CHECKS["class-kind-self-array-reject"] = {"interfaceKept": True, "oldNullCall": "java.lang.NullPointerException", "afterGc": True}
+for _kind in ("c", "e"):
+    REQUIRED_CHECKS[f"class-kind-live-reject-{_kind}"] = {"interfaceKept": True, "oldCall": 31, "jni": 31, "marker": 43}
+REQUIRED_CHECKS["class-kind-proxy-reject"] = {"interfaceKept": True, "oldCall": 37, "reflection": 37, "jni": 37, "afterGc": 37}
+REQUIRED_CHECKS["class-kind-instance-reject"] = {"classKept": False, "oldCall": 7, "marker": 97,
+    "reference": True, "reflection": 7, "handle": 7, "jni": 7, "afterGc": True}
+REQUIRED_CHECKS["class-kind-subtype-reject"] = {"classKept": False, "subtypeKept": True, "oldCallKept": True}
+REQUIRED_CHECKS["class-kind-enum-verify-abort"] = {"hookInstalled": 0, "hookCleared": 0,
+    "enumKept": True, "marker": 59, "oldCall": 17, "jni": 17}
+for _old, _destinations in (("c", ("i", "a")), ("i", ("c", "a")), ("a", ("c", "i"))):
+    for _next in _destinations:
+        for _round in range(2):
+            _name = f"class-kind-{_old}-{_next}-{_round}"
+            _error = "java.lang.IncompatibleClassChangeError" if (_old == "c") != (_next == "c") else "java.lang.NullPointerException"
+            REQUIRED_CHECKS[_name] = {"interface": _next != "c", "annotation": _next == "a", "enum": False,
+                "cachedOwner": True, "default": 13 if _next == "a" else None, "oldNullCall": _error,
+                "cachedNullReflection": "java.lang.NullPointerException", "cachedNullHandle": "java.lang.NullPointerException",
+                "castOther": "java.lang.ClassCastException", "castNull": None, "instanceOfNull": False,
+                "selfAssignable": True, "afterGc": _error}
+            if _old == "c":
+                REQUIRED_CHECKS[_name].update(oldInstanceOfNull=False, oldConstructor="java.lang.InstantiationError")
+                REQUIRED_CHECKS[_name].update({key: "java.lang.InstantiationException" for key in
+                    ("cachedConstructor", "cachedConstructorHandle", "cachedConstructorJni")})
+            REQUIRED_CHECKS[_name + "-restore"] = {"interface": _old != "c", "annotation": _old == "a",
+                "oldNullCall": "java.lang.NullPointerException", "cachedNullHandle": "java.lang.NullPointerException"}
+            if _old == "c":
+                REQUIRED_CHECKS[_name + "-restore"].update(cachedConstructor="java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+                    cachedConstructorHandle="java.lang.NoSuchMethodError", cachedConstructorJni="java.lang.NoSuchMethodError")
+for _round in range(2):
+    for _kind in ("annotation", "interface"):
+        REQUIRED_CHECKS[f"class-kind-live-{_kind}-{_round}"] = {"annotation": _kind == "annotation",
+            "annotationInstance": _kind == "annotation", "oldCall": 31, "reflection": 31, "handle": 31,
+            "jni": 31, "marker": 43, "afterGc": 31}
+    for _kind in ("class", "restore"):
+        REQUIRED_CHECKS[f"class-kind-enum-{_kind}-{_round}"] = {"enum": _kind == "restore",
+            "superclass": "java.lang.Enum", "constant": True, "name": "ONE", "ordinal": 0, "marker": 59,
+            "reference": "kept", "reflection": 17, "handle": 17, "jni": 17, "instanceof": True,
+            "constants": 1 if _kind == "restore" else -1, "afterGc": 17}
+for _kind in ("c", "i", "a"):
+    REQUIRED_CHECKS[f"class-kind-enum-reject-{_kind}"] = {"enumKept": True, "marker": 59, "oldCall": 17}
+    REQUIRED_CHECKS[f"class-kind-{_kind}-enum"] = {"enum": False, "interfaceKept": _kind != "c",
+        "oldNullCall": "java.lang.NullPointerException", "afterGc": False}
+MAPPED_SCENARIOS.update(name for name, _, code in CLASS_KIND_SCENARIOS if code == 0)
+
 def scenario_sequence(scenario_group, api=None):
     if api is not None and not 33 <= api <= 37:
         return tuple(item for item in scenario_sequence(scenario_group)
                      if not item[0].startswith("tool-retransform-"))
+    if scenario_group == "class-kinds":
+        return tuple(CLASS_KIND_SCENARIOS)
     if scenario_group == "interface-shadow":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-shadow-"))
     if scenario_group == "full":
@@ -1156,7 +1230,7 @@ def scenario_sequence(scenario_group, api=None):
         names = [item[0] for item in SCENARIOS]
         return tuple(item for item in SCENARIOS[:names.index("interface-method-bodies")]
                      + SCENARIOS[names.index("interface-hidden"):]
-                     if not item[0].startswith("static-narrow-"))
+                     if not item[0].startswith(("static-narrow-", "class-kind-")))
     raise RunFailure("Unsupported scenario group")
 
 
@@ -1362,7 +1436,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool", "interface-shadow"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool", "interface-shadow", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
                         help="Debug-only canonical IMT capture path to verify before engine initialization")

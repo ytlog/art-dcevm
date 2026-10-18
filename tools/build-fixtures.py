@@ -160,7 +160,7 @@ def publish(staged, out, state, name, fingerprint):
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def strip_class_methods(data, removals, access_changes=(), renames=None):
+def strip_class_methods(data, removals, access_changes=(), renames=None, class_access=None):
     """Remove declared classfile methods while preserving caller bytecode verbatim.
 
     This validates fixture identities and supports the standalone JVM probe.
@@ -198,6 +198,7 @@ def strip_class_methods(data, removals, access_changes=(), renames=None):
         if name not in pool or descriptor not in pool: raise ValueError('Invalid member identity')
         attributes()
         return (pool[name], pool[descriptor]), data[start:offset]
+    class_flags_offset = offset
     take(6); take(number(2) * 2)
     for _ in range(number(2)): member()
     methods_offset = offset
@@ -220,6 +221,13 @@ def strip_class_methods(data, removals, access_changes=(), renames=None):
     kept = [(struct.pack('>H', changes[identity]) + raw[2:] if identity in changes else raw)
             for identity, raw in methods if identity not in wanted]
     prefix = bytearray(data[:methods_offset])
+    if class_access is not None:
+        if (not isinstance(class_access, dict) or set(class_access) != {'clear', 'set'} or
+                any(type(value) is not int or not 0 <= value <= 0xffff for value in class_access.values())):
+            raise ValueError('Invalid classfile class access flags')
+        flags = struct.unpack_from('>H', prefix, class_flags_offset)[0]
+        struct.pack_into('>H', prefix, class_flags_offset,
+                         (flags & ~class_access['clear']) | class_access['set'])
     for old, new in (renames or {}).items():
         if not isinstance(old, str) or not isinstance(new, str) or not old.isascii() or not new.isascii() or len(old) != len(new):
             raise ValueError('Classfile fixture names must have equal ASCII width')
@@ -438,6 +446,15 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
         class_renames = {change[0]: change[3] for change in changes if len(change) == 4}
         klass = classes / path
         klass.write_bytes(strip_class_methods(klass.read_bytes(), [], [change[:3] for change in changes], class_renames))
+    kind_recipe = variant / 'class-access.json'
+    kind_changes = json.loads(kind_recipe.read_text()) if kind_recipe.exists() else {}
+    if not isinstance(kind_changes, dict): raise ValueError('Invalid classfile class access recipe')
+    for relative, flags in kind_changes.items():
+        path = Path(relative)
+        if path.is_absolute() or '..' in path.parts or path.suffix != '.class':
+            raise ValueError('Invalid classfile class access recipe entry')
+        klass = classes / path
+        klass.write_bytes(strip_class_methods(klass.read_bytes(), [], class_access=flags))
     for index, klass in enumerate(sorted(classes.rglob('*.class'))):
         dexdir = work / ('dex-' + str(index)); dexdir.mkdir()
         subprocess.run([str(sdk / 'build-tools/35.0.0/d8'), *D8_FLAGS, '--lib',
@@ -544,7 +561,7 @@ def build(sdk, java, out, fixtures=ROOT / 'fixtures'):
         for manifest in state.glob('*.json'):
             if manifest.stem not in live | {'hier-invalid'}: manifest.unlink()
         for variant, sources in variants:
-            recipes = [variant / name for name in ('remove-methods.json', 'method-access.json', 'rename-strings.json', 'class-method-access.json')]
+            recipes = [variant / name for name in ('remove-methods.json', 'method-access.json', 'rename-strings.json', 'class-method-access.json', 'class-access.json')]
             inputs = sources + [recipe for recipe in recipes if recipe.exists()]
             fingerprint = key({'common': common, 'sources': [(p.relative_to(variant).as_posix(), digest(p)) for p in inputs]})
             if hit(state, variant.name, fingerprint, out / variant.name):

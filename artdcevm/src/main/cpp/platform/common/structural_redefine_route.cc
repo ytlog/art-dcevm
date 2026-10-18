@@ -367,6 +367,16 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       }
       result = hierarchy_snapshot::CollectInterfaceSubclasses(process->snapshot_env, jni, klass, *group,
                                                                 &snapshot, &error);
+      // Proxies are retained in the affected union but intentionally excluded
+      // from ART's ordinary implementation rebuild. They still prevent an
+      // interface from becoming a superclass-bearing class. Include every
+      // loaded subtype, including not-yet-prepared ones, in that kind check.
+      if (result == JVMTI_ERROR_NONE && !snapshot.hierarchy.loaded_subclasses)
+        for (jclass candidate : index.affected)
+          if (!jni->IsSameObject(candidate, klass) && jni->IsAssignableFrom(candidate, klass)) {
+            snapshot.hierarchy.loaded_subclasses = true;
+            break;
+          }
     } else {
       snapshot.subtypes = &index.subtypes[ordinary_indices.at(klass)];
       result = hierarchy_snapshot::CollectSubclasses(process->snapshot_env, jni, klass,

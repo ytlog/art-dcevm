@@ -20,7 +20,8 @@ namespace {
 // cannot name application classes; newly prepared classes invalidate the snapshot.
 std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
                         const Snapshot& snapshot, const evolution::ClassSchema& incoming, Batch& batch,
-                        const std::vector<std::pair<structural_policy::MemberKey, uint32_t>>& changes) {
+                        const std::vector<std::pair<structural_policy::MemberKey, uint32_t>>& changes,
+                        bool class_kind = false) {
   const std::string method = changes.front().first.first + changes.front().first.second;
   const bool interface_target = snapshot.live.access & evolution::kAccInterface;
   const auto* subtypes = interface_target ? &snapshot.interface_subtypes : snapshot.subtypes;
@@ -38,13 +39,13 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
   for (const auto& [klass, ignored] : batch.classes)
     submitted.insert(class_layout::DecodeClass(process->layout_services.mirror_class, self, klass));
   for (const auto& [key, access] : changes) {
-    bool protected_change = false, private_change = false;
+    bool protected_change = class_kind, private_change = false;
     for (const auto& next : incoming.methods) {
       if (next.name != key.first || next.descriptor != key.second) continue;
       private_change = !(access & (evolution::kAccStatic | evolution::kAccPrivate)) &&
           !next.IsStatic() && (next.access & evolution::kAccPrivate);
-      protected_change = (bool(access & evolution::kAccStatic) != next.IsStatic() || private_change) &&
-          invoke_kind::Enable();
+      protected_change = class_kind || ((bool(access & evolution::kAccStatic) != next.IsStatic() || private_change) &&
+          invoke_kind::Enable());
     }
     // Old self frames require a probed selector that bypasses the vtable/IMT.
     if (batch.active_frame && (!protected_change || (private_change && !invoke_kind::SelfCalls())))
@@ -130,12 +131,23 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // that throws at the call.
   abilities.interface_members = abilities.member_mapping;
   abilities.interface_selection = interface_method_selection::Available();
+  abilities.class_kinds = abilities.member_mapping &&
+      (!((snapshot.live.access ^ incoming.access) & evolution::kAccInterface) ||
+       (process->capabilities.subclass_watch && invoke_kind::ClassKinds()));
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
   abilities.interface_removal = abilities.member_mapping && process->capabilities.subclass_watch &&
       imt_sealing::Available() && narrowed_references::Available();
   abilities.batch_interfaces = interfaces && interfaces->Available();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
+  if (decision.error == JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED &&
+      ((snapshot.live.access ^ incoming.access) & evolution::kAccInterface) && !invoke_kind::ClassKinds())
+    decision.reason += std::string(": ") + invoke_kind::ClassKindUnavailable();
+  if (decision.error == JVMTI_ERROR_NONE && decision.requires_instance_precheck &&
+      !process->capabilities.kind_instance_check) {
+    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
+    decision.reason = "class kind conversion requires a public heap precheck before ART instance allocation";
+  }
   const bool interface_target = (interfaces && interfaces->IsTarget(self));
   if (interface_target) {
     if (decision.error == JVMTI_ERROR_NONE && !abilities.member_mapping) {
@@ -179,6 +191,33 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       decision.reason = std::move(callers);
     }
   }
+  if (decision.error == JVMTI_ERROR_NONE && decision.interface_kind_changed) {
+    // The symbolic class/interface convention changes for every method id,
+    // including inherited Object methods. Scan each old declared/inherited
+    // signature with the existing caller protection path.
+    std::map<structural_policy::MemberKey, uint32_t> keys;
+    for (const auto& method : snapshot.live.methods)
+      if (method.name != "<init>" && method.name != "<clinit>")
+        keys[{method.name, method.descriptor}] = method.access;
+    for (const auto& key : snapshot.hierarchy.inherited_public) keys.emplace(key, 0);
+    for (const auto& key : snapshot.hierarchy.inherited_interface) keys.emplace(key, 0);
+    std::vector<std::pair<structural_policy::MemberKey, uint32_t>> changes(keys.begin(), keys.end());
+    bool frame_snapshot = false;
+    for (const auto& [klass, prepared] : batch->classes) frame_snapshot |= prepared.changes_invoke_kind;
+    if (!frame_snapshot || batch->active_frame || !invoke_kind::EnableClassKinds()) {
+      decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
+      decision.reason = "class/interface conversion requires a Native snapshot of inactive batch frames and invocation protection";
+    } else if (!changes.empty()) {
+      // Class-kind guards cover unchanged methods too. Make KindCallers scan
+      // and retain their callers without asking for a method-kind transition.
+      context->protect_invocations = true;
+      if (std::string callers = KindCallers(*thread, self, snapshot, incoming, *batch, changes, true);
+          !callers.empty()) {
+        decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED;
+        decision.reason = std::move(callers);
+      }
+    }
+  }
   if (decision.error != JVMTI_ERROR_NONE) {
     self->driver->result = decision.error;
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
@@ -208,6 +247,9 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   transaction::Requirements& requirements = context->targets[self];
   requirements.descriptor = incoming.descriptor;
   requirements.member_mapping = interface_target || decision.requires_member_mapping;
+  requirements.instance_precheck = decision.requires_instance_precheck;
+  requirements.published_verification = decision.published_verification &&
+      !(interfaces && interfaces->IsAffected(self));
   if (decision.requires_no_instances) batch->no_instances.insert(self);
   else batch->no_instances.erase(self);
   // The policy rejects a superclass change related to another batch target,
@@ -308,6 +350,24 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
                 ((context->narrowing || context->protect_invocations) && batch->any_class_loaded && batch->any_class_loaded->load())))
     return context->Reject(self, JVMTI_ERROR_INTERNAL,
         named("a subtype of a redefined class was loaded during the transaction"));
+  // ART has paused allocations and class loading before this decision point.
+  // The public JVMTI filter visits only exact instances. The callback neither
+  // tags objects nor calls JNI. Run before ART allocates any replacement: an
+  // interface cannot satisfy Class::Alloc's instantiability contract.
+  if (context) for (const auto& [target, requirements] : context->targets) {
+    if (!requirements.instance_precheck) continue;
+    bool exists = false;
+    jvmtiHeapCallbacks callbacks{};
+    callbacks.heap_iteration_callback = [](jlong, jlong, jlong*, jint, void* data) -> jint {
+      *static_cast<bool*>(data) = true;
+      return JVMTI_VISIT_ABORT;
+    };
+    const auto result = process->snapshot_env->IterateThroughHeap(0, target->klass, &callbacks, &exists);
+    if (result != JVMTI_ERROR_NONE || exists)
+      return context->Reject(self, result != JVMTI_ERROR_NONE ? result : JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
+          requirements.descriptor + (exists ? ": class kind conversion has live instances before ART allocation"
+                                           : ": class kind instance precheck failed"));
+  }
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
   const auto collect = reinterpret_cast<Function>(process->original_instances);
   if (interfaces ? !interfaces->CompleteInstances(self, data, collect) : !collect(self, data)) return false;

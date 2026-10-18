@@ -41,6 +41,11 @@ class Reader {
     ClassSchema result;
     result.descriptor = Type(class_type_);
     if (result.descriptor.front() != 'L') Fail("ClassDef does not name a class");
+    for (uint32_t i = 0; i < types_.count; ++i) {
+      const auto type = Type(i);
+      if (type.front() == '[' && type.substr(type.find_first_not_of('[')) == result.descriptor)
+        result.self_array_reference = true;
+    }
     result.access = U32(def + 4);
     result.reflection_access = InnerClassAccess(U32(def + 20));
     if (const uint32_t super = U32(def + 8); super != UINT32_MAX) {

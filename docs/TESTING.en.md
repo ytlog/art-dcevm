@@ -197,3 +197,5 @@ A symbol's presence proves only that it can be located. Runtime probes check the
 Raw logs and per-run device reports stay under ignored `build/evidence/`. Record commands, conclusions, anonymous devices, models, OS/API versions and APK hashes in local `local/verification/VERIFICATION.md`; compatibility notes go in `local/verification/ANDROID_COMPATIBILITY.md`. Neither document is committed. Per-runtime inventories and raw source/hashes also remain local.
 
 Public [COMPATIBILITY.en.md](COMPATIBILITY.en.md) contains only concise sanitized conclusions, naming JNI modes, GC evidence and unverified scope. Exclude raw logs, device serials, connection addresses, personal paths and email. Do not infer compatibility beyond GC totals, zero marking reads, offline symbol inventories or fault injection evidence.
+
+For kind conversions, run `tools/compare-jbr-class-kinds.py --java-home <fixed-jbr>` before the device `--scenario-group class-kinds` suite. The [directional matrix](CLASS_KIND_EVOLUTION.md) records live-instance/subtype prerequisites, cached invocation behavior and ART allocation boundaries.

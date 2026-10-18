@@ -13,6 +13,8 @@
 
 #include "platform/symbols/member_retirement_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
+#include "platform/common/invoke_kind.h"
+#include "evolution/class_schema.h"
 
 namespace artdcevm::member_retirement {
 namespace {
@@ -45,7 +47,7 @@ struct Process {
   std::atomic<bool> obsolete_flag_trusted{true};
   std::shared_mutex retired_mutex;
   std::set<const void*> retired_methods;
-  std::set<jmethodID> retired_ids;
+  std::map<jmethodID, const void*> retired_ids;
   std::mutex roots_mutex;
   std::vector<jobject> retained_roots;
   std::atomic<uint64_t> jni_retirement_guards{0};
@@ -93,12 +95,14 @@ bool ContainsMethod(const void* method) {
   return process->retired_methods.count(method) != 0;
 }
 // Never dereferences the ID, so CheckJNI can still diagnose invalid IDs.
-bool ContainsId(jmethodID id) {
-  if (!AnyRetired()) return false;
+const void* RetiredIdMethod(jmethodID id) {
+  if (!AnyRetired()) return nullptr;
   std::shared_lock<std::shared_mutex> lock(process->retired_mutex);
-  return process->retired_ids.count(id) != 0 ||
-      ((reinterpret_cast<uintptr_t>(id) & 1) == 0 && process->retired_methods.count(id) != 0);
+  const auto found = process->retired_ids.find(id);
+  if (found != process->retired_ids.end()) return found->second;
+  return (reinterpret_cast<uintptr_t>(id) & 1) == 0 && process->retired_methods.count(id) ? id : nullptr;
 }
+bool ContainsId(jmethodID id) { return RetiredIdMethod(id) != nullptr; }
 void Retire(const void* method) {
   {
     std::unique_lock<std::shared_mutex> lock(process->retired_mutex);
@@ -108,7 +112,7 @@ void Retire(const void* method) {
 }
 void RecordId(const void* method, jmethodID id) {
   std::unique_lock<std::shared_mutex> lock(process->retired_mutex);
-  if (process->retired_methods.count(method)) process->retired_ids.insert(id);
+  if (process->retired_methods.count(method)) process->retired_ids[id] = method;
 }
 // Primitive kinds by descriptor; anything else is a reference.
 int FieldKind(std::string_view descriptor) {
@@ -185,7 +189,7 @@ void DisableVarHandle(const void* var_handle) {
 // field table: an ArtMethod for invoke kinds, an ArtField for accessor kinds.
 // Transformer handles carry neither, so the target is only looked up.
 enum class HandleTarget { kLive, kRetiredMethod, kRetiredField };
-HandleTarget RetiredHandle(Handle handle) {
+HandleTarget RetiredHandle(Handle handle, const void** retired_method) {
   if (!AnyRetired() && !AnyRetiredField()) return HandleTarget::kLive;
   const auto* object = handle.Get<Object>();
   if (!object) return HandleTarget::kLive;
@@ -201,14 +205,22 @@ HandleTarget RetiredHandle(Handle handle) {
   }
   uint64_t target = 0;
   std::memcpy(&target, reinterpret_cast<const uint8_t*>(object) + offset, sizeof(target));
-  if (ContainsMethod(Pointer<const void>(target))) return HandleTarget::kRetiredMethod;
+  if (ContainsMethod(Pointer<const void>(target))) {
+    *retired_method = Pointer<const void>(target);
+    return HandleTarget::kRetiredMethod;
+  }
   if (FindRetiredField(Pointer<const void>(target))) return HandleTarget::kRetiredField;
   return HandleTarget::kLive;
 }
 // Throws for a retired handle target; false when the handle may run.
 bool RejectHandle(void* self, Handle handle) {
-  switch (RetiredHandle(handle)) {
-    case HandleTarget::kRetiredMethod: ThrowRetired(self); return true;
+  const void* retired_method = nullptr;
+  switch (RetiredHandle(handle, &retired_method)) {
+    case HandleTarget::kRetiredMethod:
+      if (invoke_kind::UninstantiableConstructor(retired_method))
+        process->throw_exception(self, "Ljava/lang/InstantiationException;", "declaring class is not instantiable");
+      else ThrowRetired(self);
+      return true;
     case HandleTarget::kRetiredField:
       process->throw_exception(self, "Ljava/lang/NoSuchFieldError;", "field retired by structural redefinition");
       return true;
@@ -277,13 +289,28 @@ jfieldID EncodeFieldHandleWithClass(void* manager, Handle klass, ReflectiveHandl
 // against the old declaring class. Only public JNI identifies the target.
 constexpr char kRetiredMessage[] = "method retired by structural redefinition";
 
+void ThrowInstantiation(JNIEnv* env) {
+  jclass exception = process->jni->FindClass(env, "java/lang/InstantiationException");
+  if (exception) {
+    process->jni->ThrowNew(env, exception, "declaring class is not instantiable");
+    process->jni->DeleteLocalRef(env, exception);
+  }
+}
+
 // A cached reflective Method or Constructor whose target retired: throw, as
 // for a failing target, InvocationTargetException wrapping NoSuchMethodError.
 bool RejectReflected(JNIEnv* env, jobject executable) {
   if (!AnyRetired()) return false;
   jmethodID id = process->jni->FromReflectedMethod(env, executable);
-  if (!id || !ContainsId(id)) return false;
+  const void* method = id ? RetiredIdMethod(id) : nullptr;
+  if (!method) return false;
   process->jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
+  // Fast-native reflection is Runnable here. Check the current owner before
+  // the missing constructor body, including after repeated kind conversions.
+  if (invoke_kind::UninstantiableConstructor(method)) {
+    ThrowInstantiation(env);
+    return true;
+  }
   jstring message = process->jni->NewStringUTF(env, kRetiredMessage);
   jobject cause = message ? process->jni->NewObject(env, process->no_such_method_error, process->no_such_method_init, message)
                           : nullptr;
@@ -348,6 +375,23 @@ bool RejectJni(JNIEnv* env, jmethodID id) {
   process->jni->ThrowNew(env, process->no_such_method_error, kRetiredMessage);
   return true;
 }
+bool RejectJniConstructor(JNIEnv* env, jclass klass, jmethodID id) {
+  if (!invoke_kind::ClassKindProtection()) return RejectJni(env, id);
+  if (!ContainsId(id) || process->jni->ExceptionCheck(env)) return false;
+  // A JNI-table override may run while Native. Use public JNI to inspect the
+  // rooted current Class; managed-field reads require a Runnable ART entry.
+  jclass class_type = process->jni->GetObjectClass(env, klass);
+  jmethodID modifiers = class_type ? process->jni->GetMethodID(env, class_type, "getModifiers", "()I") : nullptr;
+  jint flags = modifiers ? process->jni->CallIntMethod(env, klass, modifiers) : 0;
+  if (class_type) process->jni->DeleteLocalRef(env, class_type);
+  if (process->jni->ExceptionCheck(env)) return true;
+  if (flags & evolution::kAccAbstract) {
+    process->jni_retirement_guards.fetch_add(1, std::memory_order_relaxed);
+    ThrowInstantiation(env);
+    return true;
+  }
+  return RejectJni(env, id);
+}
 #define ARTDCEVM_JNI_RESULT_CALLS(T, Name)                                                       \
   T Call##Name##Method(JNIEnv* env, jobject object, jmethodID id, ...) {                         \
     if (RejectJni(env, id)) return T();                                                          \
@@ -407,7 +451,7 @@ ARTDCEVM_JNI_RESULT_CALLS(jdouble, Double)
 #undef ARTDCEVM_JNI_RESULT_CALLS
 
 jobject NewObject(JNIEnv* env, jclass klass, jmethodID id, ...) {
-  if (RejectJni(env, id)) return nullptr;
+  if (RejectJniConstructor(env, klass, id)) return nullptr;
   va_list args;
   va_start(args, id);
   jobject result = process->jni->NewObjectV(env, klass, id, args);
@@ -415,10 +459,10 @@ jobject NewObject(JNIEnv* env, jclass klass, jmethodID id, ...) {
   return result;
 }
 jobject NewObjectV(JNIEnv* env, jclass klass, jmethodID id, va_list args) {
-  return RejectJni(env, id) ? nullptr : process->jni->NewObjectV(env, klass, id, args);
+  return RejectJniConstructor(env, klass, id) ? nullptr : process->jni->NewObjectV(env, klass, id, args);
 }
 jobject NewObjectA(JNIEnv* env, jclass klass, jmethodID id, const jvalue* args) {
-  return RejectJni(env, id) ? nullptr : process->jni->NewObjectA(env, klass, id, args);
+  return RejectJniConstructor(env, klass, id) ? nullptr : process->jni->NewObjectA(env, klass, id, args);
 }
 
 void CallVoidMethod(JNIEnv* env, jobject object, jmethodID id, ...) {

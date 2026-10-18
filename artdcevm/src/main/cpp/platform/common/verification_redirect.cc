@@ -10,6 +10,7 @@
 #include "platform/abi/arm64/common/redefinition.h"
 #include "platform/common/class_layout.h"
 #include "platform/common/runtime_thread.h"
+#include "platform/common/runtime_roots.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/verification_redirect_symbols.h"
@@ -44,12 +45,56 @@ bool resolves_classes = false;
 // FindClass hooks read it on any thread; Install publishes it.
 std::atomic<interface_redefinition::Backend*> interfaces{nullptr};
 
+// ART verifies an enum's synthetic self-array builders as well as every other
+// incoming method. With identical hierarchy and member declarations, changing
+// only ACC_ENUM cannot change verifier access or assignability. Use ART's
+// existing published self/array graph for that verification: redirecting only
+// self would mix a new Target with the published Target[] component. The
+// replacement remains rooted in NewClasses, and is restored before allocation
+// or commit. This changes neither code verification nor any published Class.
+class PublishedVerification {
+ public:
+  PublishedVerification(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data)
+      : thread_(thread), data_(data), replacement_(data.NewClassObject()) {
+    auto* array = data.holder->array.Get<abi::arm64::ObjectArray>();
+    Store(array->elements[data.index * RedefinitionDataIter::kNumSlots + RedefinitionDataIter::kSlotMirrorClass]);
+  }
+  ~PublishedVerification() { Store(static_cast<uint32_t>(reinterpret_cast<uintptr_t>(replacement_))); }
+ private:
+  void Store(uint32_t value) {
+    auto* array = data_.holder->array.Get<abi::arm64::ObjectArray>();
+    auto* slot = &array->elements[data_.index * RedefinitionDataIter::kNumSlots + RedefinitionDataIter::kSlotNewClassObject];
+    *slot = value;
+    // Fixed ThreadTlsPtrPrefix and CardTable (11--17), also used by Proxy
+    // relinking. The Native Thread probe proves the exception-adjacent slot.
+    static_assert(offsetof(abi::arm64::ThreadTlsPtrPrefix, exception) -
+                  offsetof(abi::arm64::ThreadTlsPtrPrefix, card_table) == sizeof(void*));
+    auto* cards = runtime_roots::Field<uint8_t*>(runtime_thread::Current(thread_),
+        runtime_thread::Layout(thread_).exception - sizeof(void*));
+    cards[reinterpret_cast<uintptr_t>(slot) >> 10] = 0x70;
+  }
+  const runtime_thread::VerifiedThread& thread_;
+  const RedefinitionDataIter& data_;
+  void* replacement_;
+};
+
 bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   transaction::Context* context = transaction::Current();
   const transaction::Requirements* target = context ? context->Find(self) : nullptr;
   if (!target || !target->redirect_verification)
     return reinterpret_cast<Function>(original_check_verification)(self, data);
+  if (target->published_verification) {
+    const auto thread = runtime_thread::Ready();
+    auto* classes = data.Classes(false);
+    if (!thread || !classes || classes->length < 1 || classes->elements[0] !=
+        static_cast<uint32_t>(reinterpret_cast<uintptr_t>(data.NewClassObject()))) {
+      self->driver->result = JVMTI_ERROR_INTERNAL;
+      return false;
+    }
+    PublishedVerification scope(*thread, data);
+    return reinterpret_cast<Function>(original_check_verification)(self, data);
+  }
   // The standard entry creates this state while Native. Without it the new
   // class cannot be shown to ART's verifier: fail rather than verify against
   // the old one. This noexcept hook does not allocate a diagnostic.

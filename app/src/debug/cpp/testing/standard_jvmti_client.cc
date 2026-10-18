@@ -525,7 +525,8 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheConstructor(JNIE
                                                                              jstring signature) {
   const char* descriptor = jni->GetStringUTFChars(signature, nullptr);
   if (!descriptor) return;
-  if (!constructor_class) constructor_class = static_cast<jclass>(jni->NewGlobalRef(type));
+  if (constructor_class) jni->DeleteGlobalRef(constructor_class);
+  constructor_class = static_cast<jclass>(jni->NewGlobalRef(type));
   constructor_id = jni->GetMethodID(type, "<init>", descriptor);
   jni->ReleaseStringUTFChars(signature, descriptor);
 }

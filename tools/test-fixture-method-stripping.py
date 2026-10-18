@@ -47,6 +47,15 @@ def main():
         klass = directory / 'Subject.class'
         original = klass.read_bytes()
         assert builder.strip_class_methods(original, []) == original
+        # Enum kind is independent of its superclass. Recipes must preserve
+        # every method/code byte while changing the ClassFile flag word.
+        changed = builder.strip_class_methods(original, [], class_access={'clear': 0, 'set': 0x4000})
+        assert changed != original
+        assert builder.strip_class_methods(changed, [], class_access={'clear': 0x4000, 'set': 0}) == original
+        for flags in ({'set': 0}, {'clear': -1, 'set': 0}, {'clear': 0, 'set': 65536}):
+            try: builder.strip_class_methods(original, [], class_access=flags)
+            except ValueError: pass
+            else: raise AssertionError('Invalid class-kind recipe accepted')
         removed = builder.strip_class_methods(original, [['directValue', '()I']])
         assert removed != original
         for data, removals in (

@@ -4,6 +4,7 @@
 #include <cstring>
 #include <mutex>
 #include "platform/common/runtime_roots.h"
+#include "platform/common/art_dex_view.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/symbols/invoke_kind_symbols.h"
@@ -25,6 +26,8 @@ void (*throw_exception)(void*, const char*, const char*) = nullptr;
 Nterp original_nterp = nullptr;
 std::atomic<void*> class_linker{nullptr};
 std::atomic<bool> installed{false}, enabled{false};
+std::atomic<bool> class_kinds_enabled{false};
+void* (*lookup_type)(void*, uint16_t, void*, void*) = nullptr;
 // ObjPtr<Object> is one uintptr_t in the fixed release ART declarations.
 using Select = void* (*)(void*, void*, uintptr_t*, const uint16_t*, bool, bool*);
 Select original_virtual = nullptr, original_interface = nullptr;
@@ -37,15 +40,19 @@ const abi::arm64::RuntimeThread* scope_thread_layout = nullptr;
 const abi::arm64::InterfaceRuntime* scope_layout = nullptr;
 using ObsoleteCache = uintptr_t (*)(void*);
 ObsoleteCache original_cache_read = nullptr, original_cache_raw = nullptr;
+ObsoleteCache named_cache_read = nullptr;
 void* (*mark)(void*) = nullptr;
 const bool* use_read_barrier = nullptr;
 std::atomic<bool> class_verified{false};
 size_t class_access = 0, class_dex_cache = 0, class_ext_data = 0, ext_obsolete_methods = 0;
+size_t gc_marking_offset = ~size_t{0};
+size_t method_index_offset = ~size_t{0};
 
 template <bool read_barrier>
 uintptr_t Reference(uint32_t reference) {
   if constexpr (read_barrier)
-    if (reference && *use_read_barrier)
+    if (reference && (use_read_barrier ? *use_read_barrier :
+        (gc_marking_offset != ~size_t{0} && runtime_roots::Field<uint32_t>(current_thread(), gc_marking_offset))))
       return reinterpret_cast<uintptr_t>(mark(reinterpret_cast<void*>(static_cast<uintptr_t>(reference))));
   return reference;
 }
@@ -67,14 +74,14 @@ uintptr_t CopiedObsoleteCache(void* method) noexcept {
           Reference<read_barrier>(runtime_roots::Field<uint32_t>(ext, ext_obsolete_methods))) : nullptr;
       for (int32_t i = 0; methods && i < methods->length; ++i)
         if (methods->elements[i] == reinterpret_cast<uintptr_t>(method))
-          return (read_barrier ? original_cache_read : original_cache_raw)(method);
+          return (read_barrier ? (original_cache_read ? original_cache_read : named_cache_read) : original_cache_raw)(method);
       // The original structural copy lives outside the interface's method
       // array, but its code still belongs to this retained interface's DEX.
       // Match Class::GetDexCache's CC/CMC and no-barrier behavior.
       return Reference<read_barrier>(runtime_roots::Field<uint32_t>(declaring, class_dex_cache));
     }
   }
-  return (read_barrier ? original_cache_read : original_cache_raw)(method);
+  return (read_barrier ? (original_cache_read ? original_cache_read : named_cache_read) : original_cache_raw)(method);
 }
 
 bool OwnClass(void* caller, void* resolved) {
@@ -82,6 +89,57 @@ bool OwnClass(void* caller, void* resolved) {
   // deliberately survive reference replacement, so pointer equality is insufficient.
   return method_loader(caller) == method_loader(resolved) &&
       std::strcmp(method_descriptor(caller), method_descriptor(resolved)) == 0;
+}
+
+// ResolveMethod has already resolved the symbolic owner, so this lookup never
+// loads a class. Read the caller's own (possibly obsolete) DEX, not the resolved
+// method's declaring class: a virtual class call can resolve a copied default,
+// and an interface call can resolve Object. Both are legal ART/JBR cases.
+void* MethodCache(void* caller) {
+  auto* method = static_cast<abi::arm64::ArtMethodPrefix*>(caller);
+  if (method->access_flags.load(std::memory_order_relaxed) & abi::arm64::kAccObsoleteMethod)
+    return reinterpret_cast<void*>(CopiedObsoleteCache<true>(caller));
+  void* declaring = reinterpret_cast<void*>(Reference<true>(method->declaring_class));
+  return reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(declaring, class_dex_cache)));
+}
+void* SymbolicOwner(void* cache, uint32_t index, void* loader, bool* valid) {
+  *valid = false;
+  if (!cache) return nullptr;
+  const auto* dex = reinterpret_cast<const abi::arm64::DexFilePrefix*>(static_cast<abi::arm64::DexCache*>(cache)->dex_file);
+  const auto view = DexViewOf(*dex);
+  // dex_file.h Header/MethodId, identical in StandardDex and CompactDex.
+  uint32_t count = 0, offset = 0;
+  if (view.size >= 0x70) {
+    std::memcpy(&count, view.begin + 88, sizeof(count));
+    std::memcpy(&offset, view.begin + 92, sizeof(offset));
+  }
+  const uint64_t at = uint64_t{offset} + uint64_t{index} * 8;
+  if (index >= count || at + 8 > view.size) {
+    return nullptr;
+  }
+  *valid = true;
+  uint16_t owner = 0;
+  std::memcpy(&owner, view.begin + at, sizeof(owner));
+  return lookup_type(class_linker.load(std::memory_order_acquire), owner, cache, loader);
+}
+bool CheckClassKind(void* self, void* caller, uint32_t index, int type,
+                    void* supplied_cache = nullptr, void* supplied_loader = nullptr) {
+  if (!class_kinds_enabled.load(std::memory_order_acquire) || (type != 2 && type != 4)) return true;
+  void* cache = supplied_cache ? supplied_cache : MethodCache(caller);
+  void* loader = supplied_cache ? supplied_loader : cache ? reinterpret_cast<void*>(
+      Reference<true>(static_cast<abi::arm64::DexCache*>(cache)->class_loader)) : nullptr;
+  bool valid = false;
+  void* klass = SymbolicOwner(cache, index, loader, &valid);
+  if (!valid) {
+    throw_exception(self ? self : current_thread(), "Ljava/lang/VerifyError;", "invalid symbolic method owner");
+    return false;
+  }
+  if (!klass || (bool(runtime_roots::Field<uint32_t>(klass, class_access) & evolution::kAccInterface) != (type == 4))) {
+    throw_exception(self ? self : current_thread(), "Ljava/lang/IncompatibleClassChangeError;",
+                    "symbolic owner changed between class and interface");
+    return false;
+  }
+  return true;
 }
 
 void* Check(void* self, void* resolved, int type) {
@@ -121,11 +179,14 @@ void* ResolveUnchecked(void* self, uint32_t index, void* caller, int type) {
   return resolved;
 }
 void* ResolveCaller(void* linker, void* self, uint32_t index, void* caller, int type) noexcept {
-  return Check(self, original_caller(linker, self, index, caller, type), type);
+  void* resolved = original_caller(linker, self, index, caller, type);
+  if (resolved && !unchecked_resolution && !CheckClassKind(self, caller, index, type)) return nullptr;
+  return Check(self, resolved, type);
 }
 void* ResolveCache(void* linker, uint32_t index, Handle cache, Handle loader,
                    void* caller, int type) noexcept {
   void* resolved = original_cache(linker, index, cache, loader, caller, type);
+  if (resolved && !unchecked_resolution && !CheckClassKind(nullptr, caller, index, type, cache.Get<void>(), loader.Get<void>())) return nullptr;
   return unchecked_resolution ? resolved : Check(nullptr, resolved, type);
 }
 uintptr_t GetMethod(void* self, void* caller, const uint16_t* instruction) noexcept {
@@ -142,7 +203,9 @@ uintptr_t GetMethod(void* self, void* caller, const uint16_t* instruction) noexc
       case 0x72: case 0x78: type = 4; break;  // interface
       default: return original_nterp(self, caller, instruction);
     }
-    void* resolved = Check(self, ResolveUnchecked(self, instruction[1], caller, type), type);
+    void* resolved = ResolveUnchecked(self, instruction[1], caller, type);
+    if (resolved && !CheckClassKind(self, caller, instruction[1], type)) return 0;
+    resolved = Check(self, resolved, type);
     // Resolution or Check has installed the exception. Do not let
     // nterp cache a direct method's index as a virtual dispatch slot.
     if (!resolved) return 0;
@@ -167,6 +230,7 @@ void* SelectMethod(void* self, void* caller, uintptr_t* receiver,
     resolved = ResolveUnchecked(self, instruction[1], caller, type);
   }
   if (!resolved) return nullptr;
+  if (!CheckClassKind(self, caller, instruction[1], type)) return nullptr;
   const auto flags = static_cast<abi::arm64::ArtMethodPrefix*>(resolved)->access_flags.load(std::memory_order_relaxed);
   if ((flags & 0x0002) && !(flags & 0x0008) && OwnClass(caller, resolved)) {
     if (!*receiver) {
@@ -206,11 +270,13 @@ bool Prepare(std::vector<Hook>* hooks) {
   void* select_interface = symbols::Find(kSelectInterface);
   method_descriptor = reinterpret_cast<decltype(method_descriptor)>(symbols::Find(kMethodDescriptor));
   method_loader = reinterpret_cast<decltype(method_loader)>(symbols::Find(kMethodLoader));
+  lookup_type = reinterpret_cast<decltype(lookup_type)>(symbols::Find(symbols::interface_redefinition::kLookupCache));
   scope_visitors.unsigned_ids = reinterpret_cast<abi::arm64::HandleScopeVisitors::Unsigned>(
       symbols::Find(symbols::interface_redefinition::kHandleScopeVisitRoots));
   void* cache_legacy = symbols::Find(kObsoleteCacheLegacy);
   void* cache_read = symbols::Find(kObsoleteCacheRead);
   void* cache_raw = symbols::Find(kObsoleteCacheRaw);
+  named_cache_read = reinterpret_cast<ObsoleteCache>(cache_read ? cache_read : cache_legacy);
   mark = reinterpret_cast<decltype(mark)>(symbols::Find(symbols::runtime_thread::kReadBarrierMark));
   use_read_barrier = static_cast<const bool*>(symbols::Find(symbols::runtime_thread::kUseReadBarrier));
   // Profile Saver also reads copied obsolete methods. Older ART has the
@@ -248,13 +314,15 @@ void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
   scope_layout = layout;
   scope_verified.store(true, std::memory_order_release);
 }
-void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods) {
+void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods, size_t gc_marking, size_t method_index) {
   std::lock_guard<std::mutex> lock(scope_mutex);
   if (class_verified.load(std::memory_order_relaxed)) return;
   class_access = access_flags;
   class_dex_cache = dex_cache;
   class_ext_data = ext_data;
   ext_obsolete_methods = obsolete_methods;
+  gc_marking_offset = gc_marking;
+  method_index_offset = method_index;
   class_verified.store(true, std::memory_order_release);
 }
 bool SelectionServices() {
@@ -265,6 +333,35 @@ bool SelfCalls() {
       class_verified.load(std::memory_order_acquire);
 }
 bool Protecting() { return enabled.load(std::memory_order_acquire); }
+bool ClassKinds() {
+  return ClassKindUnavailable() == nullptr;
+}
+const char* ClassKindUnavailable() {
+  if (!installed.load(std::memory_order_acquire)) return "invocation guards not installed";
+  if (!class_verified.load(std::memory_order_acquire)) return "declaring Class not probed";
+  if (method_index_offset == ~size_t{0}) return "method index declaration not probed";
+  if (!lookup_type) return "named resolved type lookup unavailable";
+  if (!original_cache_read && !named_cache_read) return "named obsolete DexCache service unavailable";
+  if (!mark || (!use_read_barrier && gc_marking_offset == ~size_t{0})) return "read barrier collector declaration unavailable";
+  return nullptr;
+}
+bool EnableClassKinds() {
+  if (!ClassKinds() || !Enable()) return false;
+  class_kinds_enabled.store(true, std::memory_order_release);
+  return true;
+}
+bool UninstantiableConstructor(const void* method) {
+  if (!class_kinds_enabled.load(std::memory_order_acquire) || !method ||
+      !(static_cast<const abi::arm64::ArtMethodPrefix*>(method)->access_flags.load(std::memory_order_relaxed) & evolution::kAccConstructor)) return false;
+  void* cache = MethodCache(const_cast<void*>(method));
+  if (!cache) return false;
+  void* loader = reinterpret_cast<void*>(Reference<true>(static_cast<abi::arm64::DexCache*>(cache)->class_loader));
+  uint32_t index = runtime_roots::Field<uint32_t>(const_cast<void*>(method), method_index_offset);
+  bool valid = false;
+  void* klass = SymbolicOwner(cache, index, loader, &valid);
+  return klass && (runtime_roots::Field<uint32_t>(klass, class_access) & evolution::kAccAbstract);
+}
+bool ClassKindProtection() { return class_kinds_enabled.load(std::memory_order_acquire); }
 void Installed(bool value) { installed.store(value, std::memory_order_release); }
 void ObserveClassLinker(void* linker) { class_linker.store(linker, std::memory_order_release); }
 bool Enable() {

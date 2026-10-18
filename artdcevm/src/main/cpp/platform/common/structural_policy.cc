@@ -20,9 +20,10 @@ constexpr uint32_t kAccSuper = 0x0020;
 constexpr uint32_t kAccSynthetic = 0x1000;
 // Class modifiers a structural redefinition may change: the new Class takes
 // its flags from the new ClassDef (and reflection from its InnerClass entry).
-// Interface, annotation and enum kinds stay fixed.
+// Kind bits are admitted separately, with allocation and dispatch prerequisites.
 constexpr uint32_t kClassAllowed = kAccessLevel | acc::kAccStatic | acc::kAccFinal | kAccSuper |
     acc::kAccAbstract | kAccSynthetic;
+constexpr uint32_t kClassKinds = acc::kAccInterface | acc::kAccAnnotation | acc::kAccEnum;
 constexpr uint32_t kFieldTransient = 0x0080;
 constexpr uint32_t kFieldAllowed = kAccessLevel | acc::kAccFinal | acc::kAccVolatile | kFieldTransient;
 // Bridge, varargs, strict and synthetic only describe the method to reflection
@@ -40,6 +41,13 @@ Decision Reject(jvmtiError error, std::string reason) {
 std::string Describe(const Member& m) { return m.name + m.descriptor; }
 
 bool Initializer(const std::string& name) { return name == "<init>" || name == "<clinit>"; }
+
+bool SameMembers(const std::vector<Member>& before, const std::vector<Member>& after, bool methods) {
+  std::map<MemberKey, uint32_t> old, next;
+  for (const auto& m : before) old[{m.name, m.descriptor}] = methods ? MethodModifiers(m.access) : FieldModifiers(m.access);
+  for (const auto& m : after) next[{m.name, m.descriptor}] = methods ? MethodModifiers(m.access) : FieldModifiers(m.access);
+  return old == next;
+}
 
 // Static and private methods never occupy a vtable or iftable slot.
 bool Virtual(uint32_t modifiers) { return !(modifiers & (acc::kAccStatic | acc::kAccPrivate)); }
@@ -259,12 +267,24 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
                   const LoadedHierarchy& hierarchy, const Abilities& abilities,
                   const RetiredMethods& retired) {
   const bool interface_target = live.access & acc::kAccInterface;
+  const bool incoming_interface = incoming.access & acc::kAccInterface;
+  const bool interface_kind_changed = interface_target != incoming_interface;
   const bool owns_member_mapping = abilities.member_mapping;
   const bool retires_fields = abilities.member_mapping && abilities.field_retirement;
   const bool interface_members = abilities.member_mapping && abilities.interface_members;
   const bool superclass_changed = live.superclass != incoming.superclass;
   const bool parents_changed = live.interfaces != incoming.interfaces;
-  if (interface_target && (superclass_changed || (parents_changed && !interface_members)))
+  // JBR accepts this without live objects, but ART additionally needs a new
+  // self-array identity graph and libcore's enum constants cache does not
+  // accept the uninitialized values array that JBR reports as null. Keeping
+  // an existing Enum superclass does not introduce either mismatch.
+  if (superclass_changed && (incoming.access & acc::kAccEnum))
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "new Enum superclass requires self-array and uninitialized enum-constant semantics");
+  if (interface_kind_changed && incoming.self_array_reference)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "class/interface conversion requires a replacement graph for self-array components");
+  if (interface_target && !interface_kind_changed && (superclass_changed || (parents_changed && !interface_members)))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "interface redefinition does not support parent changes");
   if (superclass_changed) {
@@ -278,26 +298,37 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       (ClassModifiers(live.access) ^
        ClassModifiers(incoming.reflection_access.value_or(incoming.access))) |
       ((live.access ^ incoming.access) & kClassDefinitionFlags);
-  if (class_changed & ~kClassAllowed)
+  const bool kind_changed = class_changed & kClassKinds;
+  if (class_changed & ~(kClassAllowed | kClassKinds) ||
+      (kind_changed && (!abilities.class_kinds || !owns_member_mapping)))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
-                  "class kind changed (interface, annotation or enum)");
+                  "class kind change requires verified allocation, mapping and invocation guards");
+  if (interface_kind_changed && hierarchy.loaded_subclasses)
+    return Reject(JVMTI_ERROR_FAILS_VERIFICATION,
+                  "class/interface conversion invalidates a loaded subtype's superclass or interface list");
   const bool becomes_final = (incoming.access & acc::kAccFinal) && !(live.access & acc::kAccFinal);
   if (becomes_final && hierarchy.loaded_subclasses)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
                   "class made final has loaded subclasses");
   const bool becomes_abstract =
       (incoming.access & acc::kAccAbstract) && !(live.access & acc::kAccAbstract);
-  if (becomes_abstract && !abilities.instance_check)
+  const bool instance_precheck = interface_kind_changed && incoming_interface;
+  if ((becomes_abstract || instance_precheck) && !abilities.instance_check)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED,
-                  "class made abstract cannot be checked for instances");
+                  "class modifier or kind change cannot be checked for instances");
 
   Decision decision;
-  decision.requires_no_instances = becomes_abstract;
+  decision.requires_no_instances = becomes_abstract || instance_precheck;
+  decision.requires_instance_precheck = instance_precheck;
+  decision.interface_kind_changed = interface_kind_changed;
+  decision.published_verification = (class_changed & ~kAccSuper) == acc::kAccEnum &&
+      !superclass_changed && !parents_changed && SameMembers(live.fields, incoming.fields, false) &&
+      SameMembers(live.methods, incoming.methods, true);
   decision.superclass_changed = superclass_changed;
   decision.interfaces_removed = interfaces.interfaces_removed;
   // Copies of the removed interfaces' methods vanish from the re-linked classes.
-  decision.requires_member_mapping = superclass_changed || interfaces.interfaces_removed;
-  if (interface_target && parents_changed) {
+  decision.requires_member_mapping = kind_changed || superclass_changed || interfaces.interfaces_removed;
+  if (incoming_interface && parents_changed) {
     // CheckInterfaces already rejected removed or unresolvable parents.
     Decision parents = CheckInterfaceParents(incoming, hierarchy, abilities.interface_selection);
     if (parents.error != JVMTI_ERROR_NONE) return parents;
@@ -371,7 +402,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       if (!interface_target) new_methods.erase(it);
       continue;
     }
-    if (interface_target && changed) {
+    if (interface_target && incoming_interface && changed) {
       Decision kind = CheckInterfaceKindChange({old.name, old.descriptor}, old.access, now, hierarchy,
                                                interface_members, abilities.interface_selection);
       if (kind.error != JVMTI_ERROR_NONE) return kind;
@@ -406,7 +437,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     decision.kind_changes.push_back({key, before->second});
     decision.requires_member_mapping = true;
   }
-  if (interface_target) {
+  if (incoming_interface) {
     for (const auto& [key, now] : new_methods) {
       Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members, abilities.interface_selection);
       if (added.error != JVMTI_ERROR_NONE) return added;

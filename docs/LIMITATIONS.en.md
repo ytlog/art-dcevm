@@ -34,7 +34,7 @@ This capability is available on Android 11–17 (API 30–37) arm64 devices. API
 | Interface method modifier changes other than abstract/default switches and invoke-kind changes; without selection services, switching to default where it would share such an identity | `METHOD_MODIFIERS_CHANGED` (71) |
 | Removing a parent interface without member mapping or dispatch sealing; adding one without member mapping; a static/private method hiding a new parent's method, or, without selection services, a new parent default sharing such an identity | `HIERARCHY_CHANGED` (66) |
 | An added interface is rebuilt by the batch, and the new class and that rebuild depend on each other, or the new class precedes it within one rebuild | `HIERARCHY_CHANGED` (66) |
-| Changing the kind between interface, annotation and enum (an interface's access level, synthetic and similar modifiers may change as a class's) | `CLASS_MODIFIERS_CHANGED` (70) |
+| A class/interface conversion with loaded subtypes, or without the required exact-instance precheck | 62 or 70; see the [kind conversion matrix](CLASS_KIND_EVOLUTION.md) |
 | An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |
 | A boot interface, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
@@ -64,7 +64,7 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 | Change | Error code | Notes |
 | --- | --- | --- |
 | Making a virtual method private or re-adding a deleted virtual method as private, with an active batch frame but no self-call selection capability | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | JBR directly selects the new private method from an obsolete self frame. Runtimes that export the named `FindMethodToCall<kVirtual/kInterface>` selectors support this after Class/Thread/HandleScope probes pass, reported as `privateSelfSelection`: API 36 (device-verified) and most API 34–35 libraries (fixed sources, not yet run on a device). API 30–33 inline the selection, as do some API 34 and 37 modules, and retain rejection 71. Old external callers without access may remain and throw IAE; see [invoke kind changes](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kind-changes) |
-| Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
+| A kind conversion lacking its instance, subtype, allocation or dispatch prerequisites | 62 / 66 / 70 | See the [kind conversion matrix](CLASS_KIND_EVOLUTION.md); interface/annotation and preserved-Enum-superclass round trips are supported |
 | Changing the superclass in a way that drops an existing superclass | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
 | Removing an interface without member mapping or dispatch protection | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | See [removing interfaces](#removing-interfaces) |
 
@@ -157,7 +157,7 @@ The target semantics come from fixed JBR DCEVM sources and matching runtime comp
 | Superclass narrowing (the new chain omits an old superclass) | Rejected | Rejected with 66 |
 | A concrete subclass, loaded later, of an abstract class that lost an interface | Dispatches by the new hierarchy | Persistent pre-publication protection and later rebuilds preserve dispatch; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces) |
 | An interface with Proxy implementations drops a parent interface | Accepted; existing proxies stop being instances of the parent | Accepted; shared parents remain until their last inheritance path disappears, with the same narrowing rules for retained references |
-| Switching a class between class, interface and other kinds | Accepted | Rejected with 70 |
+| Kind conversions | Direction, live objects and loaded subtypes matter; some accepted conversions have unsafe cached-handle or GC behavior | Admit verified cases from the [matrix](CLASS_KIND_EVOLUTION.md), retaining necessary 62 / 66 / 70 boundaries |
 | Making a class abstract while its own instances exist | Accepted; instances stay and a new abstract method throws `AbstractMethodError` | Rejected with 70: an ART abstract class has no embedded vtable/IMT, and compiled code dispatches through the receiver class's embedded tables, so an instance of an abstract class would read past its class object. ART's DEX verifier also rules out linking it as concrete and changing the flag afterwards |
 | Boot classes, `Thread` and its supertypes, arrays, proxy classes themselves | Partly redefinable | Rejected under ART's rules |
 | New classes (new lambdas, anonymous classes) | Defined by tools such as HotswapAgent | Appended to the class loader by the reload tool; see [providing new classes](#providing-new-classes) |

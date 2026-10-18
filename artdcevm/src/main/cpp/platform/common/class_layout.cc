@@ -219,7 +219,8 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     const auto* methods = art.find_instance_field(type, "obsoleteMethods", "Ljava/lang/Object;");
     if (methods)
       invoke_kind::ObserveClassLayout(offsetof(Class, access_flags), offsetof(Class, dex_cache),
-                                     offsetof(Class, ext_data), methods->offset);
+                                     offsetof(Class, ext_data), methods->offset, runtime_thread::Layout(thread).is_gc_marking,
+                                     offsetof(Method, dex_method_index));
   }
   static constexpr ProbeOps Make(int android) {
     return {android, Observe, VerifyTarget, VerifyIter, HasInterpreted, KeepInterpreted, Access, Superclass, Origin};

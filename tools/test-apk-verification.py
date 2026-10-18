@@ -125,6 +125,28 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_class_kinds_require_precise_calls_types_and_retained_members(self):
+        report = complete_report(36)
+        report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('class-kind-')]
+        runner.validate_report(report, scenario_group='class-kinds')
+        for name, key in (('class-kind-c-i-0', 'oldNullCall'),
+                          ('class-kind-a-c-1', 'castOther'),
+                          ('class-kind-live-annotation-0', 'jni'),
+                          ('class-kind-enum-class-0', 'marker'),
+                          ('class-kind-abort', 'constantKept'),
+                          ('class-kind-instance-reject', 'afterGc')):
+            broken = copy.deepcopy(report)
+            scenario = next(s for s in broken['scenarios'] if s['name'] == name)
+            scenario['checks'] = [c for c in scenario['checks'] if c['name'] != key]
+            with self.subTest(scenario=name, missing=key), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group='class-kinds')
+        broken = copy.deepcopy(report)
+        scenario = next(s for s in broken['scenarios'] if s['name'] == 'class-kind-c-i-0')
+        call = next(c for c in scenario['checks'] if c['name'] == 'oldNullCall')
+        call['expected'] = call['actual'] = 'java.lang.NullPointerException'
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(broken, scenario_group='class-kinds')
+
     def test_proxy_parent_graph_requires_type_reference_and_call_evidence(self):
         report = complete_report(36)
         report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("proxy-interface")]

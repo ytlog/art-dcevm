@@ -818,6 +818,36 @@ int main(int argc, char** argv) {
         next = live; next.access |= kind;
         Reject(live, next, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED);
       }
+      policy::Abilities kinds;
+      kinds.member_mapping = kinds.interface_members = kinds.class_kinds = kinds.instance_check = true;
+      auto iface = live;
+      iface.access = acc::kAccPublic | acc::kAccInterface | acc::kAccAbstract;
+      const auto conversion = policy::Evaluate(live, iface, {}, kinds);
+      Require(conversion.error == JVMTI_ERROR_NONE && conversion.interface_kind_changed &&
+              conversion.requires_no_instances && conversion.requires_instance_precheck &&
+              conversion.requires_member_mapping && conversion.methods_structural,
+              "class-to-interface must require a new layout, mapping and pre-allocation instance check");
+      auto facts = policy::LoadedHierarchy{}; facts.loaded_subclasses = true;
+      Require(policy::Evaluate(live, iface, facts, kinds).error == JVMTI_ERROR_FAILS_VERIFICATION &&
+              policy::Evaluate(iface, live, facts, kinds).error == JVMTI_ERROR_FAILS_VERIFICATION,
+              "class/interface conversion must not invalidate loaded subtypes");
+      auto array_class = live; array_class.self_array_reference = true;
+      Require(policy::Evaluate(iface, array_class, {}, kinds).error == JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+              "self arrays must not mix old components with a different class/interface kind");
+      auto annotation = iface; annotation.access |= acc::kAccAnnotation;
+      const auto annotated = policy::Evaluate(iface, annotation, facts, kinds);
+      Require(annotated.error == JVMTI_ERROR_NONE && !annotated.interface_kind_changed &&
+              !annotated.requires_no_instances && annotated.requires_member_mapping,
+              "annotation conversion must retain existing implementations");
+      auto ordinary_enum = live; ordinary_enum.access |= acc::kAccEnum;
+      Require(policy::Evaluate(live, ordinary_enum, {}, kinds).error == JVMTI_ERROR_NONE &&
+              !policy::Evaluate(live, ordinary_enum, {}, kinds).requires_no_instances &&
+              policy::Evaluate(live, ordinary_enum, {}, kinds).published_verification,
+              "an enum-bit round trip with unchanged superclass must preserve live objects");
+      auto changed_enum = ordinary_enum;
+      changed_enum.methods[0].descriptor = "(I)I";
+      Require(!policy::Evaluate(live, changed_enum, {}, kinds).published_verification,
+              "changed declarations must never verify against the published class graph");
     }
     policy::LoadedHierarchy subclasses;
     subclasses.visible.insert({"work", "()I"});

@@ -132,6 +132,13 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   process->record_method = reinterpret_cast<Record>(addresses[6]);
   std::vector<Hook> replacements;
   ProcessCapabilities prepared;
+  // Optional public heap enumeration. Kind conversions must reject live
+  // instances before ART's allocator, while its allocation pause is active.
+  if (potential.can_tag_objects && env->functions->AddCapabilities && env->functions->IterateThroughHeap) {
+    jvmtiCapabilities heap{};
+    heap.can_tag_objects = 1;
+    prepared.kind_instance_check = env->AddCapabilities(&heap) == JVMTI_ERROR_NONE;
+  }
   runtime_thread::Prepare();
   prepared.runtime_thread = runtime_thread::Available();
   class_layout::Prepare({});
