@@ -199,10 +199,23 @@ SCENARIOS = (
     ("proxy-interface-group-restore", ["proxy-group-original", "proxy-group-original", "proxy-group-original"], 0),
     ("proxy-interface-group-shared", ["proxy-group-add", "proxy-group-add", "proxy-group-add"], 0),
     ("proxy-interface-group-final", ["proxy-group-original", "proxy-group-original", "proxy-group-original"], 0),
+    ('proxy-interface-parents-cycle', ['proxy-parents-cycle-a', 'proxy-parents-cycle-b'], 61),
+    ('proxy-interface-parents-shared', ['proxy-parents-a-drop'], 0),
+    ('proxy-interface-parents-drop', ['proxy-parents-drop'], 0),
+    ('proxy-interface-parents-restore', ['proxy-parents-original', 'proxy-parents-original'], 0),
+    ('proxy-interface-parents-batch', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 0),
+    ('proxy-interface-parents-batch-shared', ['proxy-parents-added-b'], 0),
+    ('proxy-interface-parents-batch-restore', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 0),
+    ('proxy-interface-parents-shared-again', ['proxy-parents-a-drop'], 0),
+    ('proxy-interface-parents-drop-again', ['proxy-parents-drop'], 0),
+    ('proxy-interface-parents-restore-again', ['proxy-parents-original', 'proxy-parents-original'], 0),
+    ('proxy-interface-parents-batch-again', ['proxy-parents-add', 'proxy-parents-add', 'proxy-parents-add'], 0),
+    ('proxy-interface-parents-batch-shared-again', ['proxy-parents-added-b'], 0),
+    ('proxy-interface-parents-batch-restore-again', ['proxy-parents-original', 'proxy-parents-original', 'proxy-parents-original'], 0),
     ("proxy-interface", ["proxy-api-add"], 0),
     ("proxy-interface-restore", ["proxy-api-original"], 0),
     ("proxy-interface-parent", ["proxy-parent-add"], 0),
-    ("proxy-interface-parent-drop", ["proxy-api-original"], 66),
+    ("proxy-interface-parent-drop", ["proxy-api-original"], 0),
     ("interface-drop-parent", ["parent-remove"], 0),
     ("interface-drop-parent-restore", ["parent-remove-original"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
@@ -325,6 +338,7 @@ MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "
                          "multi-interface-unimplemented", "interface-default-conflict"})
 MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy", "tool-retransform-structural", "tool-retransform-restore"})
 MAPPED_SCENARIOS.update({"interface-shadow-static", "interface-shadow-private"})
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("proxy-interface-") and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
 VAR_HANDLE_API = 33
 # Up to this API, ART fails to link a package-private or protected
@@ -867,7 +881,21 @@ REQUIRED_CHECKS["proxy-interface-parent"] = {
     "parentBefore": False, "isParent": True, "directInterfaces": 1, "get": 5, "handlerSeesNewMethod": True,
     "twice": 77, "parentDefault": 41, "parentReflection": 41, "parentAbstract": "java.lang.AbstractMethodError",
     "parentSum": 41 * PROXY_TIMES, "freshSameClass": True, "freshIsParent": True, "afterGc": 41}
-REQUIRED_CHECKS["proxy-interface-parent-drop"] = {"isParent": True, "get": 5, "parentDefault": 41}
+REQUIRED_CHECKS["proxy-interface-parents-cycle"] = {"shared": 71, "a": 11, "b": 12, "afterGc": 71}
+REQUIRED_CHECKS["proxy-interface-parent-drop"] = {"isParent": False, "get": 5,
+    "parentCast": "java.lang.ClassCastException", "parentReflection": "java.lang.IllegalArgumentException", "freshIsParent": False}
+for _suffix in ("", "-again"):
+    for _name, _checks in {
+        "shared": {"shared": 71, "isShared": True, "sameClass": True},
+        "drop": {"isShared": False, "holderCleared": True, "retainedCall": "java.lang.IncompatibleClassChangeError",
+                 "reflection": "java.lang.IllegalArgumentException", "a": 11, "b": 12, "freshIsShared": False},
+        "restore": {"shared": 71, "holderStaysCleared": True, "directInterfaces": 2, "serializable": True},
+        "batch": {"isAdded": True, "added": 43, "extra": 44, "missing": "java.lang.AbstractMethodError", "shared": 71,
+                  "sameClass": True, "freshAdded": 43},
+        "batch-shared": {"added": 43, "shared": 71},
+        "batch-restore": {"isAdded": False, "shared": 71, "freshIsAdded": False},
+    }.items():
+        REQUIRED_CHECKS["proxy-interface-parents-" + _name + _suffix] = _checks
 PARENT_TIMES = 30_000  # DISPATCH_CALLS in StructuralRedefineInstrumentation
 REQUIRED_CHECKS["interface-drop-parent"] = {
     "warmedUp": 0, "defaultBefore": 7, "parents": 0, "isBase": False, "isChild": True, "child": 12, "side": 22,

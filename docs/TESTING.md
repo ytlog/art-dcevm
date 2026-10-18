@@ -37,8 +37,11 @@ done
 ```sh
 python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-field-retype.py --java-home JBR_REFERENCE_HOME
+python3 tools/compare-jbr-proxy-parents.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 ```
+
+`compare-jbr-proxy-parents.py` 与设备组 `proxy-interface` 共用父接口夹具，检查共享父接口的保留与移除、旧引用调用与字段清理、恢复、多个接口同时新增且父接口同批重定义、代理类缓存与重复 GC。
 
 `tools/compare-jbr-field-retype.py` 使用同一固定运行时与字段改型夹具，检查普通引用、直接与间接接口、动态代理、继承字段、恢复、重复更新和 GC。
 

@@ -125,6 +125,21 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_proxy_parent_graph_requires_type_reference_and_call_evidence(self):
+        report = complete_report(36)
+        report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("proxy-interface")]
+        runner.validate_report(report, scenario_group="proxy-interface")
+        for name, check in (("proxy-interface-parent-drop", "parentReflection"),
+                            ("proxy-interface-parents-drop", "holderCleared"),
+                            ("proxy-interface-parents-drop-again", "retainedCall"),
+                            ("proxy-interface-parents-batch", "extra"),
+                            ("proxy-interface-parents-batch-shared-again", "added")):
+            broken = copy.deepcopy(report)
+            scenario = next(s for s in broken["scenarios"] if s["name"] == name)
+            scenario["checks"] = [c for c in scenario["checks"] if c["name"] != check]
+            with self.subTest(scenario=name, missing=check), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group="proxy-interface")
+
     def test_interface_shadow_rejects_unsafe_defaults_on_every_release(self):
         for api in (30, 33, 34, 35, 36, 37):
             report = complete_report(api)

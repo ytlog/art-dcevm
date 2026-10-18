@@ -31,16 +31,17 @@ bool Install(const class_layout::Services& services, std::string* failure);
 bool Available();
 // Native: for each loaded proxy class and each interface target it implements,
 // a long[] sized for the new interface's IfTable methods. A target that adds
-// parent interfaces gives the proxy a new IfTable with an entry for each one
-// it does not implement yet, superinterfaces first. A target that drops a
-// parent interface is rejected, unlike JBR: the proxy would also need its
-// IfTable entries and the references it fills dropped.
+// parent interfaces rebuilds the complete IfTable from the final interface
+// graph of the batch. Shared parents are retained once, superinterfaces first.
 jvmtiError Prepare(JNIEnv* jni, const std::vector<jclass>& proxies, const std::vector<Interface>& interfaces,
                    std::string* error);
 // Before ART's no-failure point, match each interface by Class identity in
 // the structural owner's class arrays, fill its Proxy arrays and build IMTs.
 bool Plan(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
           const abi::arm64::RedefinitionDataIter& data, int selected, std::string* why);
+// The planned final IfTable of an affected Proxy, for reference compatibility
+// and instance-update propagation before publication. Null for other classes.
+void* FinalIfTable(void* proxy);
 // At commit, after ART replaced the interface's references: install the
 // arrays, point the proxy methods at their new interface methods and switch
 // to the sealed IMTs. No JNI: every thread is suspended.

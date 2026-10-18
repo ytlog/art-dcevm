@@ -326,12 +326,12 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         !class_layout::SuperclassMatches(*thread, self, *data, target->superclass, selected))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
           named("the new superclass was not applied"));
-    if (context->narrowing && !narrowed_references::Plan(*thread, self, *data, selected, &why))
-      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                             named(("interface reference cleanup cannot be planned: " + why).c_str()));
     if (!proxy_relink::Plan(*thread, self, *data, selected, &why))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                              named(("Proxy implementation cannot be relinked: " + why).c_str()));
+    if (context->narrowing && !narrowed_references::Plan(*thread, self, *data, selected, &why))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                             named(("interface reference cleanup cannot be planned: " + why).c_str()));
     // Last: every check above may still reject, and only the unpublished
     // replacements change here.
     // Replacements sit in an interface group's owner arrays, regardless of

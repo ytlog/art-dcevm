@@ -38,51 +38,31 @@ struct Services {
 Services services;
 std::atomic<bool> ready{false};
 
-// One proxy class and one interface target it implements.
-struct Entry {
-  jobject proxy = nullptr;      // Global references, released with the transaction.
+// One interface in the Proxy's final transitive interface graph. Its Class
+// root starts on the old definition; ART updates that root during commit.
+struct InterfaceEntry {
   jobject interface = nullptr;
-  jobject methods = nullptr;    // long[]: the new IfTable method array.
-  int32_t index = -1;            // The structural owner that commits this group.
-  int32_t class_index = -1;      // This interface in the owner's class arrays.
-  int32_t iftable_slot = -1;     // IfTable pair index of the interface.
-  std::vector<std::pair<void*, void*>> prototypes;  // Proxy method, new interface method.
-};
-// A parent interface that an interface target adds and the proxy class does
-// not implement yet: it gains an IfTable entry, as a re-linked proxy would.
-struct Inserted {
-  jobject interface = nullptr;  // Global references, released with the transaction.
-  jobject methods = nullptr;    // long[]: its IfTable method array.
+  jobject methods = nullptr;
 };
 struct Table {
   jobject proxy = nullptr;
+  jobject iftable = nullptr;
+  std::vector<InterfaceEntry> interfaces;
+  std::vector<std::pair<void*, void*>> prototypes;
   void** imt = nullptr;
-  bool built = false, published = false;
-  // Added parents, superinterfaces first, inserted before the IfTable pair of
-  // `anchor` (a target interface that added them) into a new IfTable sized
-  // `pairs` + inserted.size() pairs. Empty when no target adds parents.
-  std::vector<Inserted> inserted;
-  jobject anchor = nullptr;
-  jobject iftable = nullptr;    // Object[]: the new IfTable.
-  int32_t pairs = 0;            // IfTable pairs the proxy class has now.
-  int32_t before = -1;          // Pair index of `anchor` in the old IfTable.
-  int32_t owner = -1;           // The structural owner committing `anchor`.
-  bool planned = false, swapped = false;
+  bool planned = false, published = false;
 };
 struct State final : transaction::Part {
   JNIEnv* jni = nullptr;
   JavaVM* vm = nullptr;
-  std::vector<Entry> entries;
   std::vector<Table> tables;
+  bool planned = false;
   ~State() override {
-    for (auto& entry : entries)
-      for (jobject reference : {entry.proxy, entry.interface, entry.methods})
-        if (reference) jni->DeleteGlobalRef(reference);
     for (auto& table : tables) {
-      for (jobject reference : {table.proxy, table.anchor, table.iftable})
+      for (jobject reference : {table.proxy, table.iftable})
         if (reference) jni->DeleteGlobalRef(reference);
-      for (auto& parent : table.inserted)
-        for (jobject reference : {parent.interface, parent.methods})
+      for (auto& entry : table.interfaces)
+        for (jobject reference : {entry.interface, entry.methods})
           if (reference) jni->DeleteGlobalRef(reference);
     }
   }
@@ -107,10 +87,8 @@ void MarkCards(const VerifiedThread& thread, const void* object, size_t bytes) {
 
 struct Ops {
   bool (*plan)(const VerifiedThread&, abi::ClassRedefinitionPrefix*, const abi::RedefinitionDataIter&,
-               State&, Entry&, std::string*);
-  void (*apply)(const VerifiedThread&, State&, Entry&, void* new_interface);
-  bool (*plan_parents)(const VerifiedThread&, abi::ClassRedefinitionPrefix*, State&, Table&, std::string*);
-  void (*swap)(const VerifiedThread&, State&, Table&);
+               State&, Table&, std::string*);
+  void (*apply)(const VerifiedThread&, State&, Table&);
 };
 
 template <typename Class, typename Method> struct Relinker {
@@ -156,112 +134,67 @@ template <typename Class, typename Method> struct Relinker {
   static std::vector<Method*> Virtuals(Class* klass) {
     std::vector<Method*> result;
     auto* methods = class_layout::Members<Method>(klass->methods);
-    for (uint32_t i = 0; methods && i < methods->length; ++i)
-      if (Virtual(methods->At(i)->access_flags.load(std::memory_order_relaxed))) result.push_back(methods->At(i));
+    // modifiers.h, Android 11--17: copied defaults/conflicts are not declared
+    // interface methods and do not occupy an IfTable method-array slot.
+    constexpr uint32_t kCopied = 0x01000000;
+    for (uint32_t i = 0; methods && i < methods->length; ++i) {
+      const uint32_t flags = methods->At(i)->access_flags.load(std::memory_order_relaxed);
+      if (Virtual(flags) && !(flags & kCopied)) result.push_back(methods->At(i));
+    }
     return result;
   }
 
+  static Class* Replacement(const VerifiedThread& thread, const abi::RedefinitionDataIter& data, Class* klass) {
+    const auto* holder = data.holder->array.Get<abi::ObjectArray>();
+    for (int32_t owner = 0; holder && owner < holder->length / abi::RedefinitionDataIter::kNumSlots; ++owner) {
+      const abi::RedefinitionDataIter item{owner, data.holder};
+      const auto* before = item.Classes(true);
+      const auto* after = item.Classes(false);
+      for (int32_t i = 0; before && after && i < before->length; ++i)
+        if (class_layout::Element<Class>(thread, before, i) == klass)
+          return class_layout::Element<Class>(thread, after, i);
+    }
+    return klass;
+  }
   static bool Plan(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
-                   const abi::RedefinitionDataIter& data, State& state, Entry& entry, std::string* why) {
-    auto* old_interface = class_layout::Element<Class>(thread, data.Classes(true), entry.class_index);
-    auto* new_interface = class_layout::Element<Class>(thread, data.Classes(false), entry.class_index);
-    auto* proxy = static_cast<Class*>(services.decode_global(state.vm, entry.proxy));
-    auto* array = static_cast<abi::PointerArray*>(services.decode_global(state.vm, entry.methods));
-    if (!old_interface || !new_interface || !proxy || !array) return Fail(why, "proxy relink input missing");
-    // The proxy's IfTable must name the old interface exactly once.
-    auto* iftable = class_layout::Heap<abi::ObjectArray>(thread, proxy->iftable);
-    entry.iftable_slot = -1;
-    for (int32_t i = 0; iftable && 2 * i + 1 < iftable->length; ++i) {
-      if (class_layout::Heap<void>(thread, iftable->elements[2 * i]) != old_interface) continue;
-      if (entry.iftable_slot >= 0) return Fail(why, "proxy IfTable names the interface twice");
-      entry.iftable_slot = i;
+                   const abi::RedefinitionDataIter& data, State& state, Table& table, std::string* why) {
+    auto* proxy = static_cast<Class*>(services.decode_global(state.vm, table.proxy));
+    auto* replacement = static_cast<abi::ObjectArray*>(services.decode_global(state.vm, table.iftable));
+    if (!proxy || !replacement || replacement->length != 2 * static_cast<int32_t>(table.interfaces.size()))
+      return Fail(why, "proxy final IfTable differs from its prepared interface graph");
+    for (size_t i = 0; i < table.interfaces.size(); ++i) {
+      const auto& entry = table.interfaces[i];
+      auto* old_interface = static_cast<Class*>(services.decode_global(state.vm, entry.interface));
+      auto* interface = Replacement(thread, data, old_interface);
+      auto* array = static_cast<abi::PointerArray*>(services.decode_global(state.vm, entry.methods));
+      if (!interface || !array) return Fail(why, "proxy relink input missing");
+      if (!MapMethods(thread, proxy, interface, interface != old_interface ? old_interface : nullptr,
+                      array, &table.prototypes, why)) return false;
+      replacement->elements[2 * i] = class_layout::Reference(interface);
+      replacement->elements[2 * i + 1] = class_layout::Reference(array);
     }
-    if (entry.iftable_slot < 0) return Fail(why, "proxy IfTable does not name the interface");
-    entry.prototypes.clear();
-    if (!MapMethods(thread, proxy, new_interface, old_interface, array, &entry.prototypes, why)) return false;
-    for (auto& table : state.tables) {
-      if (table.built || services.decode_global(state.vm, table.proxy) != proxy) continue;
-      if (!imt_sealing::Build(thread, self, proxy, class_layout::Selected(), &table.imt, why)) return false;
-      table.built = true;
-    }
-    entry.index = data.index;
+    if (replacement->length) MarkCards(thread, replacement->elements, sizeof(uint32_t) * replacement->length);
+    if (!imt_sealing::Build(thread, self, proxy, class_layout::Selected(), &table.imt, why)) return false;
+    table.planned = true;
     return true;
   }
-
-  static void Apply(const VerifiedThread& thread, State& state, Entry& entry, void* new_interface) {
-    auto* proxy = static_cast<Class*>(services.decode_global(state.vm, entry.proxy));
-    auto* array = services.decode_global(state.vm, entry.methods);
-    // Another owner of the batch may already have swapped in a longer IfTable.
-    auto* iftable = class_layout::Heap<abi::ObjectArray>(thread, proxy->iftable);
-    int32_t slot = -1;
-    for (int32_t i = 0; iftable && 2 * i + 1 < iftable->length && slot < 0; ++i)
-      if (class_layout::Heap<void>(thread, iftable->elements[2 * i]) == new_interface) slot = i;
-    if (slot < 0) {
-      __android_log_write(ANDROID_LOG_FATAL, "ART-DCEVM", "proxy IfTable does not name the new interface");
-      return;
-    }
-    iftable->elements[2 * slot + 1] = class_layout::Reference(array);
-    MarkCards(thread, &iftable->elements[2 * slot + 1], sizeof(uint32_t));
-    for (const auto& [object, prototype] : entry.prototypes) {
+  // The complete batch has crossed ART's no-failure point and all mutators
+  // are suspended. Publish once, regardless of the order of structural owners.
+  // Subsequent ART reference passes also visit this rooted replacement table.
+  static void Apply(const VerifiedThread& thread, State& state, Table& table) {
+    auto* proxy = static_cast<Class*>(services.decode_global(state.vm, table.proxy));
+    auto* replacement = static_cast<abi::ObjectArray*>(services.decode_global(state.vm, table.iftable));
+    proxy->iftable = class_layout::Reference(replacement);
+    MarkCards(thread, &proxy->iftable, sizeof(uint32_t));
+    for (const auto& [object, prototype] : table.prototypes) {
       auto* method = static_cast<Method*>(object);
       method->dex_method_index = static_cast<Method*>(prototype)->dex_method_index;
       method->data = prototype;
     }
+    imt_sealing::Publish(proxy, class_layout::Selected(), table.imt);
+    table.published = true;
   }
-  // Before ART's no-failure point: check the IfTable Native counted, find the
-  // anchor's pair and fill the added parents' method arrays.
-  static bool PlanParents(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self, State& state,
-                          Table& table, std::string* why) {
-    auto* proxy = static_cast<Class*>(services.decode_global(state.vm, table.proxy));
-    auto* iftable = proxy ? class_layout::Heap<abi::ObjectArray>(thread, proxy->iftable) : nullptr;
-    void* anchor = class_layout::DecodeClass(services.mirror_class, self, static_cast<jclass>(table.anchor));
-    auto* replacement = static_cast<abi::ObjectArray*>(services.decode_global(state.vm, table.iftable));
-    if (!iftable || !anchor || !replacement) return Fail(why, "proxy parent relink input missing");
-    if (iftable->length != 2 * table.pairs ||
-        replacement->length != 2 * (table.pairs + static_cast<int32_t>(table.inserted.size())))
-      return Fail(why, "proxy IfTable differs from its loaded interfaces");
-    table.before = -1;
-    for (int32_t i = 0; i < table.pairs && table.before < 0; ++i)
-      if (class_layout::Heap<void>(thread, iftable->elements[2 * i]) == anchor) table.before = i;
-    if (table.before < 0) return Fail(why, "proxy IfTable does not name the interface adding parents");
-    for (auto& parent : table.inserted) {
-      auto* interface = static_cast<Class*>(services.decode_global(state.vm, parent.interface));
-      auto* array = static_cast<abi::PointerArray*>(services.decode_global(state.vm, parent.methods));
-      if (!interface || !array) return Fail(why, "proxy parent relink input missing");
-      if (!MapMethods(thread, proxy, interface, nullptr, array, nullptr, why)) return false;
-    }
-    return true;
-  }
-  // At commit, every thread suspended: copy the IfTable with the added
-  // parents before the anchor's pair (superinterfaces precede the interfaces
-  // that extend them) and publish it. Lookups by IfTable then see the new
-  // parents; the sealed IMT sends every interface call to that lookup.
-  static void Swap(const VerifiedThread& thread, State& state, Table& table) {
-    auto* proxy = static_cast<Class*>(services.decode_global(state.vm, table.proxy));
-    auto* iftable = class_layout::Heap<abi::ObjectArray>(thread, proxy->iftable);
-    auto* replacement = static_cast<abi::ObjectArray*>(services.decode_global(state.vm, table.iftable));
-    if (!iftable || !replacement || iftable->length != 2 * table.pairs) {
-      __android_log_write(ANDROID_LOG_FATAL, "ART-DCEVM", "proxy IfTable changed before its parents were added");
-      return;
-    }
-    int32_t out = 0;
-    for (int32_t i = 0; i <= table.pairs; ++i) {
-      if (i == table.before) {
-        for (auto& parent : table.inserted) {
-          replacement->elements[out++] = class_layout::Reference(services.decode_global(state.vm, parent.interface));
-          replacement->elements[out++] = class_layout::Reference(services.decode_global(state.vm, parent.methods));
-        }
-      }
-      if (i == table.pairs) break;
-      replacement->elements[out++] = iftable->elements[2 * i];
-      replacement->elements[out++] = iftable->elements[2 * i + 1];
-    }
-    MarkCards(thread, replacement->elements, sizeof(uint32_t) * replacement->length);
-    proxy->iftable = class_layout::Reference(replacement);
-    MarkCards(thread, &proxy->iftable, sizeof(uint32_t));
-    table.swapped = true;
-  }
-  static constexpr Ops Make(int) { return {Plan, Apply, PlanParents, Swap}; }
+  static constexpr Ops Make(int) { return {Plan, Apply}; }
 };
 const auto kRelinkers = class_layout::Table<Relinker, Ops>();
 }  // namespace
@@ -330,101 +263,112 @@ bool Contains(JNIEnv* jni, const std::vector<jclass>& classes, jclass klass) {
     if (jni->IsSameObject(known, klass)) return true;
   return false;
 }
-// Interfaces of `klass` and its superclasses, superinterfaces first: the
-// order of an IfTable.
-bool Closure(Reflection& reflection, jclass klass, std::vector<jclass>* out) {
-  std::vector<jclass> direct;
-  if (!reflection.Interfaces(klass, &direct)) return false;
-  for (jclass interface : direct) {
-    if (!Contains(reflection.jni, *out, interface)) {
-      if (!Closure(reflection, interface, out)) return false;
-      if (!Contains(reflection.jni, *out, interface)) out->push_back(interface);
-      else reflection.jni->DeleteLocalRef(interface);
-    } else {
-      reflection.jni->DeleteLocalRef(interface);
+// Read each target's final declarations once. Reflection is used only for
+// unchanged interfaces; an added parent may itself change in the same batch.
+struct Definition {
+  const Interface* target;
+  evolution::ClassSchema incoming;
+};
+struct Graph {
+  Reflection reflection;
+  const std::vector<Definition>& definitions;
+  std::vector<jclass> visiting, ordered;
+  std::string* error;
+  jvmtiError failure = JVMTI_ERROR_FAILS_VERIFICATION;
+  bool Visit(jclass klass) {
+    JNIEnv* jni = reflection.jni;
+    if (Contains(jni, ordered, klass)) return true;
+    if (Contains(jni, visiting, klass)) {
+      const Interface* target = definitions.front().target;
+      for (const auto& definition : definitions)
+        if (jni->IsSameObject(definition.target->klass, klass)) target = definition.target;
+      *error = target->live->descriptor + ": cyclic Proxy interface graph";
+      failure = JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION;
+      return false;
     }
+    visiting.push_back(klass);
+    const Definition* definition = nullptr;
+    for (const auto& candidate : definitions)
+      if (jni->IsSameObject(candidate.target->klass, klass)) definition = &candidate;
+    std::vector<jclass> parents;
+    if (definition) {
+      jobject loader = jni->CallObjectMethod(klass, reflection.loader_of);
+      if (reflection.Failed()) return false;
+      for (const auto& descriptor : definition->incoming.interfaces) {
+        std::string binary = descriptor.substr(1, descriptor.size() - 2);
+        std::replace(binary.begin(), binary.end(), '/', '.');
+        jstring name = jni->NewStringUTF(binary.c_str());
+        auto parent = name ? static_cast<jclass>(jni->CallStaticObjectMethod(
+            reflection.class_type, reflection.for_name, name, JNI_FALSE, loader)) : nullptr;
+        jni->DeleteLocalRef(name);
+        if (reflection.Failed() || !parent) { *error = "Proxy parent cannot be resolved: " + descriptor; return false; }
+        parents.push_back(parent);
+      }
+      jni->DeleteLocalRef(loader);
+    } else if (!reflection.Interfaces(klass, &parents)) return false;
+    for (jclass parent : parents)
+      if (!Visit(parent)) return false;
+    visiting.pop_back();
+    ordered.push_back(klass);
+    return true;
   }
-  return true;
-}
-
-// The interfaces that `target`'s added parents bring and the proxy does not
-// implement yet, with a method array each and the new IfTable.
-jvmtiError CollectParents(JNIEnv* jni, jclass proxy, const Interface& target, const std::vector<std::string>& added,
-                          const std::vector<Interface>& batch, Table& table, std::string* error) {
-  const auto fail = [&](jvmtiError code, std::string reason) {
-    if (jni->ExceptionCheck()) jni->ExceptionClear();
-    *error = target.live->descriptor + ": " + reason;
-    return code;
-  };
-  if (!table.inserted.empty() || table.anchor)
-    return fail(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                "a Proxy implementation cannot follow parent additions of two interfaces in one batch");
-  Reflection reflection{jni};
-  if (!reflection.Ready()) return fail(JVMTI_ERROR_INTERNAL, "proxy parent relinking lacks reflection");
-  jobject loader = jni->CallObjectMethod(target.klass, reflection.loader_of);
-  if (reflection.Failed()) return fail(JVMTI_ERROR_INTERNAL, "proxy parent relinking has no class loader");
-  // The proxy's current IfTable: interfaces of the proxy class and its superclasses.
-  std::vector<jclass> existing;
-  for (jclass klass = static_cast<jclass>(jni->NewLocalRef(proxy)); klass;) {
-    if (!Closure(reflection, klass, &existing)) return fail(JVMTI_ERROR_INTERNAL, "proxy interfaces unreadable");
-    jclass super = jni->GetSuperclass(klass);
-    jni->DeleteLocalRef(klass);
-    klass = super;
-  }
-  std::vector<jclass> parents;
-  for (const std::string& descriptor : added) {
-    std::string binary = descriptor.size() > 2 ? descriptor.substr(1, descriptor.size() - 2) : descriptor;
-    std::replace(binary.begin(), binary.end(), '/', '.');
-    jstring name = jni->NewStringUTF(binary.c_str());
-    auto parent = name ? static_cast<jclass>(jni->CallStaticObjectMethod(
-        reflection.class_type, reflection.for_name, name, JNI_FALSE, loader)) : nullptr;
-    jni->DeleteLocalRef(name);
-    if (reflection.Failed() || !parent)
-      return fail(JVMTI_ERROR_FAILS_VERIFICATION, "added parent interface cannot be resolved: " + descriptor);
-    std::vector<jclass> closure;
-    if (!Closure(reflection, parent, &closure)) return fail(JVMTI_ERROR_INTERNAL, "parent interfaces unreadable");
-    closure.push_back(parent);
-    for (jclass interface : closure) {
-      if (Contains(jni, existing, interface) || Contains(jni, parents, interface)) continue;
-      // A parent the batch also redefines would need its replacement Class,
-      // which ART publishes only as this owner commits.
-      for (const Interface& other : batch)
-        if (jni->IsSameObject(other.klass, interface))
-          return fail(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                      "a Proxy implementation cannot gain a parent interface the batch also redefines");
-      parents.push_back(interface);
+  jsize Count(jclass klass) {
+    for (const auto& definition : definitions) {
+      if (!reflection.jni->IsSameObject(definition.target->klass, klass)) continue;
+      jsize count = 0;
+      for (const auto& method : definition.incoming.methods)
+        if (Virtual(method.access) && method.name != "<init>" && method.name != "<clinit>") ++count;
+      return count;
     }
-  }
-  if (parents.empty()) return JVMTI_ERROR_NONE;
-  table.anchor = jni->NewGlobalRef(target.klass);
-  table.pairs = static_cast<int32_t>(existing.size());
-  jclass object_type = jni->FindClass("java/lang/Object");
-  jobjectArray iftable = object_type ? jni->NewObjectArray(
-      2 * static_cast<jsize>(existing.size() + parents.size()), object_type, nullptr) : nullptr;
-  table.iftable = iftable ? jni->NewGlobalRef(iftable) : nullptr;
-  if (!table.anchor || !table.iftable) return fail(JVMTI_ERROR_OUT_OF_MEMORY, "proxy IfTable allocation failed");
-  for (jclass parent : parents) {
     jsize count = 0;
-    if (!reflection.VirtualCount(parent, &count)) return fail(JVMTI_ERROR_INTERNAL, "parent methods unreadable");
-    jlongArray methods = jni->NewLongArray(count);
-    Inserted inserted{jni->NewGlobalRef(parent), methods ? jni->NewGlobalRef(methods) : nullptr};
-    table.inserted.push_back(inserted);
-    if (!inserted.interface || !inserted.methods)
-      return fail(JVMTI_ERROR_OUT_OF_MEMORY, "proxy IfTable allocation failed");
+    return reflection.VirtualCount(klass, &count) ? count : -1;
   }
-  return JVMTI_ERROR_NONE;
-}
-// Bounds the local references the reflection walk creates.
-jvmtiError PrepareParents(JNIEnv* jni, jclass proxy, const Interface& target, const std::vector<std::string>& added,
-                          const std::vector<Interface>& batch, Table& table, std::string* error) {
+};
+
+jvmtiError PrepareTable(JNIEnv* jni, jclass proxy, const std::vector<Definition>& definitions,
+                       Table& table, std::string* error) {
   if (jni->PushLocalFrame(64) != JNI_OK) {
-    jni->ExceptionClear();
-    *error = "proxy parent relinking cannot reserve local references";
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    *error = "proxy relinking cannot reserve local references";
     return JVMTI_ERROR_OUT_OF_MEMORY;
   }
-  const jvmtiError result = CollectParents(jni, proxy, target, added, batch, table, error);
-  jni->PopLocalFrame(nullptr);
-  return result;
+  struct Frame { JNIEnv* jni; ~Frame() { jni->PopLocalFrame(nullptr); } } frame{jni};
+  Graph graph{{jni}, definitions, {}, {}, error};
+  if (!graph.reflection.Ready()) { *error = "proxy relinking lacks reflection"; return JVMTI_ERROR_INTERNAL; }
+  // Proxy's direct interfaces do not change. Only their transitive final
+  // hierarchy changes, including removals and shared or batched additions.
+  std::vector<jclass> chain;
+  for (jclass klass = proxy; klass; klass = jni->GetSuperclass(klass)) chain.push_back(klass);
+  for (auto klass = chain.rbegin(); klass != chain.rend(); ++klass) {
+    std::vector<jclass> direct;
+    if (!graph.reflection.Interfaces(*klass, &direct)) return JVMTI_ERROR_INTERNAL;
+    for (jclass interface : direct)
+      if (!graph.Visit(interface)) return graph.failure;
+  }
+  table.proxy = jni->NewGlobalRef(proxy);
+  if (!table.proxy) return JVMTI_ERROR_OUT_OF_MEMORY;
+  jclass object_type = jni->FindClass("java/lang/Object");
+  if (!object_type) return JVMTI_ERROR_OUT_OF_MEMORY;
+  auto array = jni->NewObjectArray(2 * static_cast<jsize>(graph.ordered.size()), object_type, nullptr);
+  if (!array) return JVMTI_ERROR_OUT_OF_MEMORY;
+  table.iftable = jni->NewGlobalRef(array);
+  if (!table.iftable) return JVMTI_ERROR_OUT_OF_MEMORY;
+  for (jclass interface : graph.ordered) {
+    const jsize count = graph.Count(interface);
+    if (count < 0) { *error = "proxy interface methods unreadable"; return JVMTI_ERROR_INTERNAL; }
+    // Own the empty entry before allocating roots: a native vector allocation
+    // failure must not orphan a newly created global reference.
+    table.interfaces.emplace_back();
+    auto& entry = table.interfaces.back();
+    entry.interface = jni->NewGlobalRef(interface);
+    if (!entry.interface) return JVMTI_ERROR_OUT_OF_MEMORY;
+    auto methods = jni->NewLongArray(count);
+    if (!methods) return JVMTI_ERROR_OUT_OF_MEMORY;
+    entry.methods = jni->NewGlobalRef(methods);
+    if (!entry.methods) return JVMTI_ERROR_OUT_OF_MEMORY;
+    jni->DeleteLocalRef(methods);
+  }
+  return JVMTI_ERROR_NONE;
 }
 }  // namespace
 
@@ -444,71 +388,26 @@ jvmtiError Prepare(JNIEnv* jni, const std::vector<jclass>& proxies, const std::v
     *error = "proxy relinking has no JavaVM";
     return JVMTI_ERROR_INTERNAL;
   }
+  std::vector<Definition> definitions;
   for (const Interface& target : interfaces) {
-    std::vector<jclass> implementing;
-    for (jclass proxy : proxies) {
-      if (jni->IsAssignableFrom(proxy, target.klass)) implementing.push_back(proxy);
-      if (jni->ExceptionCheck()) { jni->ExceptionClear(); *error = "proxy assignability failed"; return JVMTI_ERROR_INTERNAL; }
-    }
-    if (implementing.empty()) continue;
-    const auto* definition = target.definition;
-    evolution::ClassSchema incoming;
-    std::string reason;
-    const evolution::DexView view{definition->class_bytes, static_cast<uint32_t>(definition->class_byte_count),
-                                  definition->class_bytes, static_cast<uint32_t>(definition->class_byte_count)};
-    if (!evolution::ReadClassDeclarations(view, &incoming, &reason)) {
-      *error = target.live->descriptor + ": proxy relinking cannot read the new definition: " + reason;
-      return JVMTI_ERROR_INVALID_CLASS_FORMAT;
-    }
-    const std::set<std::string> before(target.live->interfaces.begin(), target.live->interfaces.end());
-    std::vector<std::string> added;
-    for (const auto& name : incoming.interfaces) {
-      if (!before.count(name)) added.push_back(name);
-    }
-    for (const auto& name : before) {
-      // JBR drops the parent from the proxy; that needs IfTable removal and
-      // narrowed-reference cleanup for proxies, which this relink lacks.
-      if (std::find(incoming.interfaces.begin(), incoming.interfaces.end(), name) == incoming.interfaces.end()) {
-        *error = target.live->descriptor + ": a Proxy implementation cannot drop parent interface " + name;
-        return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-      }
-    }
-    jsize count = 0;
-    for (const auto& method : incoming.methods)
-      if (Virtual(method.access) && method.name != "<init>" && method.name != "<clinit>") ++count;
-    for (jclass proxy : implementing) {
-      Entry entry;
-      entry.proxy = jni->NewGlobalRef(proxy);
-      entry.interface = jni->NewGlobalRef(target.klass);
-      jlongArray array = jni->NewLongArray(count);
-      if (array) {
-        entry.methods = jni->NewGlobalRef(array);
-        jni->DeleteLocalRef(array);
-      }
-      const bool complete = entry.proxy && entry.interface && entry.methods;
-      state.entries.push_back(entry);
-      if (!complete) {
-        if (jni->ExceptionCheck()) jni->ExceptionClear();
-        *error = "proxy relinking allocation failed while Native";
-        return JVMTI_ERROR_OUT_OF_MEMORY;
-      }
-      Table* table = nullptr;
-      for (auto& known : state.tables)
-        if (jni->IsSameObject(known.proxy, proxy)) table = &known;
-      if (!table) {
-        state.tables.emplace_back();
-        table = &state.tables.back();
-        table->proxy = jni->NewGlobalRef(proxy);
-        if (!table->proxy) {
-          if (jni->ExceptionCheck()) jni->ExceptionClear();
-          *error = "proxy relinking allocation failed while Native";
-          return JVMTI_ERROR_OUT_OF_MEMORY;
-        }
-      }
-      if (!added.empty()) {
-        const jvmtiError result = PrepareParents(jni, proxy, target, added, interfaces, *table, error);
-        if (result != JVMTI_ERROR_NONE) return result;
-      }
+    Definition definition{&target, {}};
+    const auto* bytes = target.definition;
+    const evolution::DexView view{bytes->class_bytes, static_cast<uint32_t>(bytes->class_byte_count),
+                                  bytes->class_bytes, static_cast<uint32_t>(bytes->class_byte_count)};
+    if (!evolution::ReadClassDeclarations(view, &definition.incoming, error)) return JVMTI_ERROR_INVALID_CLASS_FORMAT;
+    definitions.push_back(std::move(definition));
+  }
+  for (jclass proxy : proxies) {
+    bool affected = false;
+    for (const Interface& target : interfaces) affected |= jni->IsAssignableFrom(proxy, target.klass);
+    if (jni->ExceptionCheck()) { jni->ExceptionClear(); *error = "proxy assignability failed"; return JVMTI_ERROR_INTERNAL; }
+    if (!affected) continue;
+    state.tables.emplace_back();
+    const jvmtiError result = PrepareTable(jni, proxy, definitions, state.tables.back(), error);
+    if (result != JVMTI_ERROR_NONE) {
+      if (jni->ExceptionCheck()) jni->ExceptionClear();
+      if (error->empty()) *error = "proxy final IfTable preparation failed";
+      return result;
     }
   }
   return JVMTI_ERROR_NONE;
@@ -518,56 +417,28 @@ bool Plan(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
           const abi::RedefinitionDataIter& data, int selected, std::string* why) {
   State* state = CurrentState();
   if (!state) return true;
-  auto* old_classes = data.Classes(true);
-  auto* new_classes = data.Classes(false);
-  if (!old_classes || !new_classes) return true;
-  if (old_classes->length != new_classes->length) return Fail(why, "proxy class arrays differ");
-  for (Entry& entry : state->entries) {
-    void* target = class_layout::DecodeClass(services.mirror_class, self, static_cast<jclass>(entry.interface));
-    for (int32_t i = 0; i < old_classes->length; ++i) {
-      if (class_layout::Element<void>(thread, old_classes, i) != target) continue;
-      entry.class_index = i;
-      if (!kRelinkers[selected].plan(thread, self, data, *state, entry, why)) return false;
-      break;
-    }
-  }
-  // A proxy's added parents commit with the owner that commits their anchor.
-  for (Table& table : state->tables) {
-    if (table.planned || table.inserted.empty()) continue;
-    void* proxy = services.decode_global(state->vm, table.proxy);
-    void* anchor = services.decode_global(state->vm, table.anchor);
-    for (const Entry& entry : state->entries) {
-      if (entry.index != data.index || services.decode_global(state->vm, entry.proxy) != proxy ||
-          services.decode_global(state->vm, entry.interface) != anchor) continue;
-      if (!kRelinkers[selected].plan_parents(thread, self, *state, table, why)) return false;
-      table.owner = data.index;
-      table.planned = true;
-      break;
-    }
-  }
+  if (state->planned) return true;
+  for (Table& table : state->tables)
+    if (!kRelinkers[selected].plan(thread, self, data, *state, table, why)) return false;
+  state->planned = true;
   return true;
 }
 
-void Apply(abi::ClassRedefinitionPrefix* self, const abi::RedefinitionDataIter& data) noexcept {
+void* FinalIfTable(void* proxy) {
+  State* state = CurrentState();
+  if (!state || !state->planned) return nullptr;
+  for (const Table& table : state->tables)
+    if (services.decode_global(state->vm, table.proxy) == proxy)
+      return services.decode_global(state->vm, table.iftable);
+  return nullptr;
+}
+
+void Apply(abi::ClassRedefinitionPrefix*, const abi::RedefinitionDataIter&) noexcept {
   State* state = CurrentState();
   const int selected = class_layout::Selected();
   const auto thread = runtime_thread::Ready();
-  if (!state || selected < 0 || !thread) return;
-  bool applied = false;
-  for (Entry& entry : state->entries) {
-    if (entry.index != data.index) continue;
-    kRelinkers[selected].apply(*thread, *state, entry,
-        class_layout::Element<void>(*thread, data.Classes(false), entry.class_index));
-    applied = true;
-  }
-  if (!applied) return;
+  if (!state || !state->planned || selected < 0 || !thread) return;
   for (auto& table : state->tables)
-    if (table.planned && !table.swapped && table.owner == data.index) kRelinkers[selected].swap(*thread, *state, table);
-  for (auto& table : state->tables) {
-    if (!table.imt || table.published) continue;
-    imt_sealing::Publish(services.decode_global(state->vm, table.proxy), selected, table.imt);
-    table.published = true;
-  }
-  (void)self;
+    if (!table.published) kRelinkers[selected].apply(*thread, *state, table);
 }
 }  // namespace artdcevm::proxy_relink

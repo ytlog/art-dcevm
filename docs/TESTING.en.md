@@ -37,8 +37,11 @@ The device runner records `totalSeconds` and per-command `commandSeconds` in `ru
 ```sh
 python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-field-retype.py --java-home JBR_REFERENCE_HOME
+python3 tools/compare-jbr-proxy-parents.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 ```
+
+`compare-jbr-proxy-parents.py` shares the Proxy parent fixtures with device group `proxy-interface`: shared-parent retention and removal, retained calls and reference cleanup, restoration, simultaneously added parents also redefined by the batch, cached Proxy classes and repeated GC.
 
 `tools/compare-jbr-field-retype.py` uses the same fixed runtime and shared field-retyping fixtures to check ordinary values, direct and indirect interfaces, dynamic proxies, inherited fields, restoration, repeated updates and GC.
 

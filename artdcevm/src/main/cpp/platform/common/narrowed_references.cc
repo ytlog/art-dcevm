@@ -9,6 +9,7 @@
 #include "platform/common/art_method_identity.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/transaction_context.h"
+#include "platform/common/proxy_relink.h"
 #include "platform/symbols/narrowed_reference_symbols.h"
 
 namespace artdcevm::narrowed_references {
@@ -175,7 +176,9 @@ template <typename Class, typename Method> struct Planner {
           return found != index.end() && state.types[found->second].modifies_instances;
         };
         bool flag = inherit(class_layout::Heap<Class>(thread, final[t]->super_class));
-        const auto* interfaces = class_layout::Heap<abi::ObjectArray>(thread, final[t]->iftable);
+        const auto* interfaces = state.types[t].proxy
+            ? static_cast<abi::ObjectArray*>(proxy_relink::FinalIfTable(final[t])) : nullptr;
+        if (!interfaces) interfaces = class_layout::Heap<abi::ObjectArray>(thread, final[t]->iftable);
         for (int32_t i = 0; !flag && interfaces && i + 1 < interfaces->length; i += 2)
           flag |= inherit(class_layout::Element<Class>(thread, interfaces, i));
         if (flag) { state.types[t].modifies_instances = true; changed = true; }
