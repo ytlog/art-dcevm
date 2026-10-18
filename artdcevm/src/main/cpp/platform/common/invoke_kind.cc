@@ -208,10 +208,16 @@ bool Prepare(std::vector<Hook>* hooks) {
   method_loader = reinterpret_cast<decltype(method_loader)>(symbols::Find(kMethodLoader));
   scope_visitors.unsigned_ids = reinterpret_cast<abi::arm64::HandleScopeVisitors::Unsigned>(
       symbols::Find(symbols::interface_redefinition::kHandleScopeVisitRoots));
+  void* cache_legacy = symbols::Find(kObsoleteCacheLegacy);
   void* cache_read = symbols::Find(kObsoleteCacheRead);
   void* cache_raw = symbols::Find(kObsoleteCacheRaw);
   mark = reinterpret_cast<decltype(mark)>(symbols::Find(symbols::runtime_thread::kReadBarrierMark));
   use_read_barrier = static_cast<const bool*>(symbols::Find(symbols::runtime_thread::kUseReadBarrier));
+  // Profile Saver also reads copied obsolete methods. Older ART has the
+  // same DEX ownership rule without switch-selector services or templates.
+  if (cache_legacy && !cache_read && !cache_raw && mark && use_read_barrier)
+    prepared.push_back({cache_legacy, HookAddress(CopiedObsoleteCache<true>),
+                        HookSlot(&original_cache_read), kObsoleteCacheLegacy.name});
   // Android 14--16 share FindMethodToCall<type>; 14--15 resolve through the
   // hooked ResolveMethod<kNoChecks> original instead of ResolveMethodId.
   if ((resolve_method_id || caller) && select_virtual && select_interface && method_descriptor && method_loader &&

@@ -92,10 +92,15 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (name == std::string(symbols::runtime_thread::kCurrentThread.name)) return HookAddress(Current);
   if (name == std::string(symbols::structural::kThrowNewException.name)) return HookAddress(Throw);
   // Case 10 is the Android 14--15 shape: selectors without ResolveMethodId.
-  if ((mode == 1 || mode == 4 || (mode >= 6 && mode != 10)) && name == std::string(kResolveMethodId.name)) return HookAddress(Resolve);
-  if ((mode == 2 || mode == 3 || mode == 5 || mode == 10) && name == std::string(kResolveCaller.name)) return HookAddress(Caller);
-  if ((mode == 2 || mode == 3 || mode == 10) && name == std::string(kResolveCache.name)) return HookAddress(Cache);
+  if ((mode == 1 || mode == 4 || (mode >= 6 && mode != 10 && mode != 11)) && name == std::string(kResolveMethodId.name)) return HookAddress(Resolve);
+  if ((mode == 2 || mode == 3 || mode == 5 || mode == 10 || mode == 11) && name == std::string(kResolveCaller.name)) return HookAddress(Caller);
+  if ((mode == 2 || mode == 3 || mode == 10 || mode == 11) && name == std::string(kResolveCache.name)) return HookAddress(Cache);
   if ((mode == 1 || mode == 2 || mode == 5 || mode >= 6) && name == std::string(kNterpGetMethod.name)) return HookAddress(Nterp);
+  if (mode == 11) {
+    if (name == std::string(kObsoleteCacheLegacy.name)) return HookAddress(CacheRead);
+    if (name == std::string(kSelectVirtual.name) || name == std::string(kSelectInterface.name) ||
+        name == std::string(kObsoleteCacheRead.name) || name == std::string(kObsoleteCacheRaw.name)) return nullptr;
+  }
   if (mode >= 6) {
     if (name == std::string(kSelectVirtual.name)) return HookAddress(Selection);
     if (mode != 7 && name == std::string(kSelectInterface.name)) return HookAddress(Selection);
@@ -206,11 +211,17 @@ int main(int argc, char** argv) {
         Require(!invoke_kind::SelfCalls(), "unprobed scope enabled self calls");
         invoke_kind::ObserveScope(&fake_thread,&thread_layout,&layout,{&admission.root});
         Require(!invoke_kind::SelfCalls(), "unprobed Class enabled self calls");
+        if (mode == 11) {
+          for (const auto& hook : hooks)
+            if (std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheLegacy.name)
+              Require(reinterpret_cast<decltype(&CacheRead)>(hook.replacement)(&method) == 0x7000,
+                      "unprobed legacy cache bypassed ART");
+        }
         invoke_kind::ObserveClassLayout(0,4,8,8);
         const bool complete = mode == 6 || mode == 10;
         Require(invoke_kind::SelfCalls() == complete && invoke_kind::SelectionServices() == complete,
                 "partial selection services enabled self calls");
-        if (complete) {
+        if (complete || mode == 11) {
           void* klass = mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
           Require(klass != MAP_FAILED, "unable to allocate low-address class fixture");
           auto* fields = static_cast<uint32_t*>(klass); fields[0] = 0x00200000; fields[1] = 0x9000;
@@ -220,7 +231,8 @@ int main(int argc, char** argv) {
           ext[2] = 0x10000200; obsolete->length = 0;
           method.declaring_class = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(klass));
           for (const auto& hook : hooks) {
-            bool read = std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheRead.name;
+            bool read = std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheRead.name ||
+                        std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheLegacy.name;
             if (!read && std::string(hook.name) != symbols::invoke_kind::kObsoleteCacheRaw.name) continue;
             auto call = reinterpret_cast<decltype(&CacheRead)>(hook.replacement);
             method.access_flags.store(0x01040000);
@@ -236,7 +248,7 @@ int main(int argc, char** argv) {
             fields[0] = 0x00200000; method.access_flags.store(0x00040000);
             Require(call(&method) == 0x7000, "declared obsolete cache bypassed ART");
           }
-          Require(cache_reads == 6, "wrong obsolete cache delegation");
+          Require(cache_reads == (mode == 11 ? 4 : 6), "wrong obsolete cache delegation");
           munmap(klass,4096); method.declaring_class = 0;
           self = &fake_thread; referrer = &own_caller;
           own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);
@@ -244,7 +256,7 @@ int main(int argc, char** argv) {
           for (const auto& hook : hooks)
             if (std::string(hook.name) == symbols::invoke_kind::kResolveCache.name)
               cache_hook = reinterpret_cast<decltype(cache_hook)>(hook.replacement);
-          Require((cache_hook != nullptr) == (mode == 10), "unexpected cache overload hook");
+          Require((cache_hook != nullptr) == (mode == 10 || mode == 11), "unexpected cache overload hook");
           for (const auto& hook : hooks) {
             if (std::string(hook.name) != symbols::invoke_kind::kSelectVirtual.name &&
                 std::string(hook.name) != symbols::invoke_kind::kSelectInterface.name) continue;
@@ -303,7 +315,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(11):
+        for case in range(12):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')

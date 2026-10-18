@@ -17,6 +17,8 @@ inline constexpr NamedSymbol kSelectInterface{Library::kArt, "_ZN3art16FindMetho
 inline constexpr NamedSymbol kMethodDescriptor{Library::kArt, "_ZN3art9ArtMethod27GetDeclaringClassDescriptorEv", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kMethodLoader{Library::kArt, "_ZN3art9ArtMethod14GetClassLoaderEv", SymbolTable::kAnyNamed};
 // art_method.cc: copied obsolete defaults live outside the declaring interface's array.
+// Android 11--13 use the non-template read-barrier entry.
+inline constexpr NamedSymbol kObsoleteCacheLegacy{Library::kArt, "_ZN3art9ArtMethod19GetObsoleteDexCacheEv", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kObsoleteCacheRead{Library::kArt, "_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE0EEENS_6ObjPtrINS_6mirror8DexCacheEEEv", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kObsoleteCacheRaw{Library::kArt, "_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE1EEENS_6ObjPtrINS_6mirror8DexCacheEEEv", SymbolTable::kAnyNamed};
 }  // namespace artdcevm::symbols::invoke_kind
