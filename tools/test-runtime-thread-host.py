@@ -208,6 +208,7 @@ def main():
                    str(native / 'platform/common/runtime_thread.cc'),
                    str(native / 'platform/common/transaction_context.cc'),
                    str(native / 'platform/common/class_layout.cc'),
+                   str(native / 'platform/common/invoke_kind.cc'),
                    str(native / 'platform/common/structural_policy.cc'),
                    str(native / 'evolution/dex_schema.cc'), '-o', str(binary)]
         build = subprocess.run(command, capture_output=True, text=True)

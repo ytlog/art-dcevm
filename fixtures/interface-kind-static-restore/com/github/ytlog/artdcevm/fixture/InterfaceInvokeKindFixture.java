@@ -15,6 +15,7 @@ public final class InterfaceInvokeKindFixture {
     }
     public static final class Caller {
         private Caller() {}
+        public static int interfaceCall(Contract contract) { return contract.value(); }
         public static int call(Impl impl) { return impl.value(); }
     }
 }

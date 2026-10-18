@@ -1,4 +1,5 @@
 #include "platform/common/verification_redirect.h"
+#include "platform/common/invoke_kind.h"
 #include "platform/common/interface_redefinition.h"
 
 #include <android/log.h>
@@ -115,6 +116,7 @@ void* MovedClass(void* found) {
   return found;
 }
 void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {
+  invoke_kind::ObserveClassLinker(linker);
   if (auto* backend = interfaces.load(std::memory_order_acquire)) backend->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, descriptor, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, Handle);
@@ -122,6 +124,7 @@ void* FindClass(void* linker, void* thread, const char* descriptor, Handle loade
 }
 void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
                           Handle loader) noexcept {
+  invoke_kind::ObserveClassLinker(linker);
   if (auto* backend = interfaces.load(std::memory_order_acquire)) backend->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, {descriptor, length}, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, size_t, Handle);

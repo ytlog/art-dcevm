@@ -77,7 +77,7 @@ SCENARIOS = (
     ("interface-parent-rebuilt", ["interface-parent-rebuilt", "interface-parent-rebuilt"], 0),
     ("interface-access", ["interface-access"], 0),
     ("interface-access-restore", ["interface-access-restore"], 0),
-    ("interface-kind-static-rejected", ["interface-kind-static"], 71),
+    ("interface-kind-static-legacy", ["interface-kind-static"], 0),
     ("interface-kind-static", ["interface-kind-static", "interface-kind-static"], 0),
     ("interface-kind-static-restore", ["interface-kind-static-restore", "interface-kind-static-restore"], 0),
     ("interface-batch-unrelated", ["interface-batch-body", "interface-batch-body"], 0),
@@ -200,7 +200,7 @@ SCENARIOS = (
     ("kind-instance", ["kind-instance"], 71),
     ("kind-instance-batch", ["kind-instance", "kind-instance"], 0),
     ("kind-private", ["kind-private"], 0),
-    ("kind-static-rejected", ["kind-static"], 71),
+    ("kind-static", ["kind-static"], 0),
     ("preload-subclass", ["preload-subclass"], 0),
     ("preload-hook-subclass", ["preload-hook-original"], 0),
     ("tool-add-classes", ["tool-v1", "tool-v1"], 0),
@@ -210,6 +210,13 @@ SCENARIOS = (
     ("field-types", ["field-types"], 0),
     ("field-retype", ["field-retype"], 0),
     ("field-retype-restore", ["field-retype-restore"], 0),
+    ("invoke-kind-abort", ["invoke-kind-static", "class-interface"], 70),
+    ("invoke-kind-static", ["invoke-kind-static"], 0),
+    ("invoke-kind-caller-rebuild", ["invoke-kind-caller-rebuild"], 0),
+    ("invoke-kind-restore", ["invoke-kind-original"] * 4, 0),
+    ("invoke-kind-static-again", ["invoke-kind-static"], 0),
+    ("invoke-kind-caller-rebuild-again", ["invoke-kind-caller-rebuild"], 0),
+    ("invoke-kind-restore-again", ["invoke-kind-original"] * 4, 0),
     ("thread-subclass", ["thread-subclass-add"], 0),
     ("interface-removal", ["interface-remove", "interface-remove"], 0),
     ("interface-removal-repeat", ["interface-remove-again"], 0),
@@ -280,6 +287,8 @@ MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
 MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "nested-interface-parents",
                          "interface-kind-abstract-missing", "interface-parent-missing",
                          "multi-interface-unimplemented", "interface-default-conflict"})
+MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy"})
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith("invoke-kind-"))
 VAR_HANDLE_API = 33
 # Up to this API, ART fails to link a package-private or protected
 # implementation of an interface method, so the transaction rejects with 63;
@@ -596,12 +605,14 @@ REQUIRED_CHECKS = {
     "kind-instance-batch": {"instanceKind": False, "caller": 3, "instanceCall": 4,
         "retiredStatic": "java.lang.NoSuchMethodError", "marker": 9, "callerAfterGc": 3},
     "kind-private": {"privateKind": True, "useHelper": 6, "marker": 9},
-    "kind-static-rejected": {"rejectionReason": True, "callerUnchanged": 3},
+    "kind-static": {"staticKind": True, "staticCall": 4, "oldCaller": "java.lang.IncompatibleClassChangeError"},
     "method-descriptive-flags": {"varargsBefore": True, "varargsAfter": False, "strictAfter": False,
         "sum": 7, "half": 2.5},
     "interface-access": {"publicAfter": False, "value": 2, "marker": 3},
     "interface-access-restore": {"publicAfter": True, "value": 3, "marker": 3},
-    "interface-kind-static-rejected": {"rejectionReason": True, "callerUnchanged": 11},
+    "interface-kind-static-legacy": {"interfaceBefore": 11, "valueStatic": True, "staticValue": 21,
+        **{key: "java.lang.NoSuchMethodError" for key in ("oldVirtual", "oldVirtualAfterGc")},
+        **{key: "java.lang.IncompatibleClassChangeError" for key in ("oldInterface", "oldInterfaceAfterGc")}},
     "interface-kind-static": {"valueStatic": True, "staticValue": 21, "caller": 22,
         "retiredDefault": "java.lang.NoSuchMethodError", "twiceDefault": True, "twice": 12, "helperPrivate": True,
         "useHelper": 7, "newImpl": 12, "marker": 9, "callerAfterGc": 22},
@@ -649,6 +660,20 @@ REQUIRED_CHECKS = {
                                    "staticCleared", "mismatchNull", "staticMismatchNull", "proxyKept", "proxyBaseKept",
                                    "indirectProxyNull", "childProxyKept", "childProxyBaseKept", "childIndirectProxyNull")}},
 }
+
+REQUIRED_CHECKS["invoke-kind-abort"] = {"before": 8, "after": 8, "range": 13, "instanceKind": False, "entered": 0}
+for suffix in ("", "-again"):
+    REQUIRED_CHECKS["invoke-kind-static" + suffix] = {
+        "activeCompleted": True, "activeError": "java.lang.IncompatibleClassChangeError",
+        "activeTargetError": "java.lang.IncompatibleClassChangeError", "hotFailures": 30000,
+        **{kind + str(i): "java.lang.IncompatibleClassChangeError" for kind in ("virtual", "inherited", "range", "super") for i in range(32)},
+        "oldCallsDidNotEnterStatic": 0, "newStatic": 101, "newStaticRange": 106,
+        "singleStepEnable": 0, "singleStepDisable": 0, "singleStepObserved": True,
+        **{key: "java.lang.IncompatibleClassChangeError" for key in ("interpreterVirtual", "interpreterRange", "virtualAfterGc", "rangeAfterGc")},
+        "entered": 2, "marker": 7}
+    REQUIRED_CHECKS["invoke-kind-caller-rebuild" + suffix] = {"hotFailures": 30000, "oldCaller": "java.lang.IncompatibleClassChangeError", "entered": 2}
+    REQUIRED_CHECKS["invoke-kind-restore" + suffix] = {"virtual": 8, "range": 13, "inherited": 8, "super": 8, "marker": 7}
+
 # Interface direct targets retain exact old reflection objects, handles and
 # JNI IDs, and old bytecode wrappers still name the removed declarations.
 INTERFACE_DIRECT_RETIRED = {
@@ -708,8 +733,7 @@ REQUIRED_CHECKS.update({
 UNCHANGED_CHECKS = {
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
     "interface-overlap-superclass": ("unchangedParent",),
-    **{name: ("unchangedSubject",) for name in ("kind-instance", "kind-static-rejected")},
-    "interface-kind-static-rejected": ("unchangedContract",),
+    **{name: ("unchangedSubject",) for name in ("kind-instance",)},
     **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
@@ -944,6 +968,10 @@ def scenario_sequence(scenario_group):
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
     if scenario_group == "thread-subclass":
         return tuple(item for item in SCENARIOS if item[0] == "thread-subclass")
+    if scenario_group == "invoke-interface-kind":
+        return tuple(item for item in SCENARIOS if item[0].startswith("interface-kind-static"))
+    if scenario_group == "invoke-kind":
+        return tuple(item for item in SCENARIOS if item[0].startswith("invoke-kind-"))
     if scenario_group == "field-retype":
         return tuple(item for item in SCENARIOS if item[0].startswith("field-retype"))
     if scenario_group == "static-narrow":
@@ -1133,7 +1161,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
                         help="Debug-only canonical IMT capture path to verify before engine initialization")

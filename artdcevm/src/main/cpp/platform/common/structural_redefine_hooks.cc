@@ -9,22 +9,18 @@
 #include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
+#include "platform/common/invoke_kind.h"
 #include "platform/common/runtime_thread.h"
 
 namespace artdcevm::structural_redefine::detail {
 namespace {
-// Verified code re-resolves a method by name and runs it as the kind it was
-// verified against. A kind change is accepted only when no loaded class
-// outside the batch has code naming the old method through the target or a
-// loaded subtype (an interface's implementations and subinterfaces); classes
-// loaded later verify against the new kind. Boot code cannot name application
-// classes.
+// Plan compiler restrictions for callers protected by invocation checks. Other
+// invoke-kind changes still require callers in the batch. Boot code cannot
+// name application classes; newly prepared classes invalidate the snapshot.
 std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
-                        const Snapshot& snapshot, const Batch& batch,
+                        const Snapshot& snapshot, const evolution::ClassSchema& incoming, Batch& batch,
                         const std::vector<std::pair<structural_policy::MemberKey, uint32_t>>& changes) {
   const std::string method = changes.front().first.first + changes.front().first.second;
-  if (batch.active_frame)
-    return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
   const bool interface_target = snapshot.live.access & evolution::kAccInterface;
   const auto* subtypes = interface_target ? &snapshot.interface_subtypes : snapshot.subtypes;
   if (!batch.loaded || !subtypes) return "loaded code cannot be checked for the old kind of " + method;
@@ -41,6 +37,13 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
   for (const auto& [klass, ignored] : batch.classes)
     submitted.insert(class_layout::DecodeClass(process->layout_services.mirror_class, self, klass));
   for (const auto& [key, access] : changes) {
+    bool protected_change = false;
+    for (const auto& next : incoming.methods)
+      if (next.name == key.first && next.descriptor == key.second)
+        protected_change = !(access & evolution::kAccStatic) && next.IsStatic() && invoke_kind::Enable();
+    if (batch.active_frame && !protected_change)
+      return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
+    transaction::Current()->protect_invocations |= protected_change;
     std::map<const abi::arm64::DexFilePrefix*, std::vector<uint32_t>> ids;
     for (jint i = 0; i < batch.loaded_count; ++i) {
       if (submitted.count(class_layout::DecodeClass(process->layout_services.mirror_class, self, batch.loaded[i]))) continue;
@@ -64,7 +67,11 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
       bool invokes = false;
       if (!evolution::CodeReferencesMethods(view, static_cast<uint32_t>(class_def), found->second, &invokes, &error))
         return "loaded code cannot be checked for the old kind of " + key.first + key.second + ": " + error;
-      if (invokes) return "loaded class " + caller + " still invokes the old kind of " + key.first + key.second;
+      if (invokes) {
+        if (!protected_change)
+          return "loaded class " + caller + " still invokes the old kind of " + key.first + key.second;
+        transaction::Current()->interpreted_callers.insert(batch.loaded[i]);
+      }
     }
   }
   return {};
@@ -159,7 +166,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   }
 
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
-    if (std::string callers = KindCallers(*thread, self, snapshot, *batch, decision.kind_changes); !callers.empty()) {
+    if (std::string callers = KindCallers(*thread, self, snapshot, incoming, *batch, decision.kind_changes);
+        !callers.empty()) {
       decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
       decision.reason = std::move(callers);
     }
@@ -290,7 +298,7 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
     return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY, named("injected instance allocation failure"));
   const Batch* batch = BatchOf(context);
   if (batch && ((batch->subclass_loaded && batch->subclass_loaded->load()) ||
-                (context->narrowing && batch->any_class_loaded && batch->any_class_loaded->load())))
+                ((context->narrowing || context->protect_invocations) && batch->any_class_loaded && batch->any_class_loaded->load())))
     return context->Reject(self, JVMTI_ERROR_INTERNAL,
         named("a subtype of a redefined class was loaded during the transaction"));
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
@@ -328,6 +336,27 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                              named(("interface dispatch cannot be sealed: " + why).c_str()));
     class_layout::Select(selected);
+    if (invoke_kind::Protecting() && !context->collected_interpreted_callers) {
+      // ART invalidates every compiled method even for an unrelated target.
+      // Its counter reset can reuse PreCompiled's bit for PreviouslyWarm.
+      // Reapply existing restrictions after each Update, including when the
+      // caller is implicitly rebuilt. Loaded-class locals are updated by ART.
+      std::set<void*> submitted;
+      for (const auto& [klass, ignored] : batch->classes)
+        submitted.insert(class_layout::DecodeClass(process->layout_services.mirror_class, self, klass));
+      for (jint i = 0; i < batch->loaded_count; ++i) {
+        jclass klass = batch->loaded[i];
+        if (submitted.count(class_layout::DecodeClass(process->layout_services.mirror_class, self, klass))) continue;
+        const abi::arm64::DexFilePrefix* dex = nullptr;
+        int32_t class_def;
+        bool boot;
+        std::string descriptor;
+        if (class_layout::ClassOrigin(*thread, self, klass, &dex, &class_def, &boot, &descriptor) && !boot &&
+            class_layout::HasInterpretedMethods(*thread, self, klass))
+          context->interpreted_callers.insert(klass);
+      }
+      context->collected_interpreted_callers = true;
+    }
     if (ARTDCEVM_FAULT(22))
       return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY,
                             named("injected failure after interface mapping plan"));

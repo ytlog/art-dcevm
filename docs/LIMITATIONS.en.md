@@ -62,7 +62,7 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 
 | Change | Error code | Notes |
 | --- | --- | --- |
-| Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind, while code of a loaded class outside the batch still names it with the old kind or a batch class has an active frame | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kind changes](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kind-changes). Submit those callers in the same batch |
+| Changing static to instance, making a virtual method private, or re-adding a deleted method with either of those changes, while code of a loaded class outside the batch still names it with the old kind or a batch class has an active frame | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kind changes](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kind-changes). Submit those callers in the same batch |
 | Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
 | Changing the superclass in a way that drops an existing superclass | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
 | Removing an interface without member mapping or dispatch protection | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | See [removing interfaces](#removing-interfaces) |
@@ -113,7 +113,7 @@ The following conflicts reject the transaction:
 
 - Deleted methods and the old versions of methods whose signatures change are retired. Bytecode, JNI and MethodHandle calls to them throw `NoSuchMethodError`; a cached reflection `Method.invoke` throws `InvocationTargetException` wrapping that error. Old method frames already executing continue to run the old body.
 - Access to retired fields through bytecode, JNI or MethodHandle throws `NoSuchFieldError`. Cached reflection `Field` access throws `IllegalArgumentException` for instance fields and `NoClassDefFoundError` for static fields. VarHandle access throws `UnsupportedOperationException`. The name and declaring class of a cached reflection `Field` identify a field in a placeholder class inside the library.
-- Restoring a member with the same name creates a new member. Previously cached references remain retired. A restored method keeps its earlier static or instance form, and a method that was virtual cannot come back as private.
+- Restoring a member with the same name creates a new member. Previously cached references remain retired. Restoring an instance identity as static uses invocation protection and old calls throw ICCE; the reverse change or restoration as private still requires updating old callers in the batch.
 - Classes that have retired members, and their class loaders, are kept alive until process exit.
 
 ## ART's own restrictions
@@ -151,7 +151,7 @@ The target semantics come from fixed JBR DCEVM sources and matching runtime comp
 | --- | --- | --- |
 | Retyping an instance field holding a dynamic proxy | Preserve the value for a directly declared interface or `Proxy` superclass; clear it for an interface implemented only indirectly | Matching behavior for target and inherited fields; see the [field-retyping comparison](TESTING.en.md#jbr-comparisons) |
 | A new abstract interface method for which a loaded implementation has only a non-public method of that signature | Accepted; calls throw `AbstractMethodError` for a private method and `IllegalAccessError` for a package-private/protected one | ART's selection: Android 15 and 16 accept, and calls throw `IllegalAccessError`; Android 13 and 14 cannot link a package-private/protected implementation and reject with 63 |
-| An instance method becomes static while loaded code outside the batch still calls the old kind | Accepted; calls re-resolve and throw `IncompatibleClassChangeError` | Rejected with 71: ART re-resolves without checking the invoke kind and cannot throw that error. Submitting the callers in the same batch is accepted |
+| A class instance method becomes static while loaded code outside the batch still calls the old kind | Accepted; calls re-resolve and throw `IncompatibleClassChangeError` | Accepted with named invocation protection; old calls throw ICCE. Old callers cannot JIT compile or inline; ART retains its deoptimization. Android 13/16 cover normal/CheckJNI, hot calls, active frames, GC and implicit rebuilds. Missing services retain 71 |
 | Superclass narrowing (the new chain omits an old superclass) | Rejected | Rejected with 66 |
 | A concrete subclass, loaded later, of an abstract class that lost an interface | Dispatches by the new hierarchy | Persistent pre-publication protection and later rebuilds preserve dispatch; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces) |
 | Switching a class between class, interface and other kinds | Accepted | Rejected with 70 |

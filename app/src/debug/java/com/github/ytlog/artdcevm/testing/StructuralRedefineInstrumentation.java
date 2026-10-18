@@ -18,6 +18,7 @@ import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
 import com.github.ytlog.artdcevm.fixture.SuperBatchFixture;
 import com.github.ytlog.artdcevm.fixture.ModifierFlagsFixture;
 import com.github.ytlog.artdcevm.fixture.KindFixture;
+import com.github.ytlog.artdcevm.fixture.InvokeKindFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
 import com.github.ytlog.artdcevm.fixture.AbstractCandidate;
 import com.github.ytlog.artdcevm.fixture.ClinitSubject;
@@ -177,6 +178,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("interface-drop-parent".equals(isolated)) runParentRemovalScenarios();
             else if ("static-narrow".equals(isolated)) runStaticNarrowingScenarios();
             else if ("field-retype".equals(isolated)) runRetypeScenarios();
+            else if ("invoke-kind".equals(isolated)) runInvokeKindScenarios();
+            else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
                 runAbstractUnimplementedScenario(isolated.substring("interface-abstract-unimplemented-".length()));
             else throw new IllegalArgumentException("Unsupported isolated scenario");
@@ -359,6 +362,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runFieldScenarios(fields, originalFieldSchema, originalFieldValues,
                 originalObject, originalStaticObject);
         runRetypeScenarios();
+        runInvokeKindScenarios();
         runThreadSubclassScenario();
         runInterfaceRemovalScenarios();
         if (!ordinaryOnly) runStaticNarrowingScenarios();
@@ -971,6 +975,105 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("mismatchNull", true, subject.mismatch == null);
             scenario.check("staticMismatchNull", true, RetypeFixture.Subject.staticMismatch == null);
         });
+    }
+
+    private void runInvokeKindScenarios() throws Exception {
+        InvokeKindFixture.Subject subject = new InvokeKindFixture.Subject();
+        InvokeKindFixture.Child child = new InvokeKindFixture.Child();
+        runScenario("invoke-kind-abort", 70, scenario -> {
+            scenario.expectRejectionBy(ClassFinalSubject.class);
+            scenario.check("before", 8, InvokeKindFixture.Caller.call(subject));
+            scenario.redefine(new Class<?>[]{InvokeKindFixture.Subject.class, ClassFinalSubject.class},
+                    "invoke-kind-static", "class-interface");
+            scenario.check("after", 8, InvokeKindFixture.Caller.call(subject));
+            scenario.check("range", 13, InvokeKindFixture.Caller.range(subject));
+            scenario.check("instanceKind", false, Modifier.isStatic(
+                    InvokeKindFixture.Subject.class.getMethod("convert", int.class).getModifiers()));
+            scenario.check("entered", 0, InvokeKindFixture.Subject.entered);
+        });
+        for (int cycle = 0; cycle < 2; cycle++) {
+            String suffix = cycle == 0 ? "" : "-again";
+            // Resolve and warm old virtual, inherited, super and range call sites.
+            for (int i = 0; i < 30000; i++) {
+                if (InvokeKindFixture.Caller.call(subject) != 8 ||
+                        InvokeKindFixture.Caller.inherited(child) != 8 ||
+                        InvokeKindFixture.Caller.range(subject) != 13 || child.throughSuper() != 8)
+                    throw new AssertionError("invoke-kind warmup");
+            }
+            CountDownLatch ready = new CountDownLatch(2), resume = new CountDownLatch(1);
+            Throwable[] activeError = new Throwable[2];
+            Thread active = new Thread(() -> {
+                try { InvokeKindFixture.Caller.await(subject, ready, resume); }
+                catch (Throwable error) { activeError[0] = error; }
+            });
+            Thread activeTarget = new Thread(() -> {
+                try { InvokeKindFixture.Caller.awaitTarget(subject, ready, resume); }
+                catch (Throwable error) { activeError[1] = error; }
+            });
+            active.start(); activeTarget.start();
+            if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("active caller not ready");
+            runScenario("invoke-kind-static" + suffix, 0, scenario -> {
+                try {
+                    scenario.redefine(new Class<?>[]{InvokeKindFixture.Subject.class}, "invoke-kind-static");
+                    resume.countDown(); active.join(10000); activeTarget.join(10000);
+                    scenario.check("activeCompleted", true, !active.isAlive() && !activeTarget.isAlive());
+                    scenario.check("activeError", IncompatibleClassChangeError.class.getName(),
+                            activeError[0] == null ? "" : activeError[0].getClass().getName());
+                    scenario.check("activeTargetError", IncompatibleClassChangeError.class.getName(),
+                            activeError[1] == null ? "" : activeError[1].getClass().getName());
+                    scenario.check("hotFailures", 30000, InvokeKindFixture.Caller.hotFailures(subject, 30000));
+                    for (int i = 0; i < 32; i++) {
+                        scenario.expectError("virtual" + i, IncompatibleClassChangeError.class,
+                                () -> InvokeKindFixture.Caller.call(subject));
+                        scenario.expectError("inherited" + i, IncompatibleClassChangeError.class,
+                                () -> InvokeKindFixture.Caller.inherited(child));
+                        scenario.expectError("range" + i, IncompatibleClassChangeError.class,
+                                () -> InvokeKindFixture.Caller.range(subject));
+                        scenario.expectError("super" + i, IncompatibleClassChangeError.class, child::throughSuper);
+                    }
+                    scenario.check("oldCallsDidNotEnterStatic", 0, InvokeKindFixture.Subject.entered);
+                    scenario.check("newStatic", 101, InvokeKindFixture.Subject.class.getMethod("convert", int.class).invoke(null, 1));
+                    scenario.check("newStaticRange", 106, InvokeKindFixture.Subject.class.getMethod("range", long.class, long.class, long.class).invoke(null, 1L, 2L, 3L));
+                    long before = StandardJvmtiClient.singleStepCount();
+                    scenario.check("singleStepEnable", 0, StandardJvmtiClient.setThreadSingleStep(true));
+                    try {
+                        scenario.expectError("interpreterVirtual", IncompatibleClassChangeError.class,
+                                () -> InvokeKindFixture.Caller.call(subject));
+                        scenario.expectError("interpreterRange", IncompatibleClassChangeError.class,
+                                () -> InvokeKindFixture.Caller.range(subject));
+                    } finally {
+                        scenario.check("singleStepDisable", 0, StandardJvmtiClient.setThreadSingleStep(false));
+                    }
+                    scenario.check("singleStepObserved", true, StandardJvmtiClient.singleStepCount() > before);
+                    System.gc();
+                    scenario.expectError("virtualAfterGc", IncompatibleClassChangeError.class,
+                            () -> InvokeKindFixture.Caller.call(subject));
+                    scenario.expectError("rangeAfterGc", IncompatibleClassChangeError.class,
+                            () -> InvokeKindFixture.Caller.range(subject));
+                    scenario.check("entered", 2, InvokeKindFixture.Subject.entered);
+                    scenario.check("marker", 7, subject.marker);
+                } finally { resume.countDown(); active.join(10000); activeTarget.join(10000); }
+            });
+            runScenario("invoke-kind-caller-rebuild" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{InvokeKindFixture.CallerBase.class}, "invoke-kind-caller-rebuild");
+                scenario.check("hotFailures", 30000, InvokeKindFixture.Caller.hotFailures(subject, 30000));
+                scenario.expectError("oldCaller", IncompatibleClassChangeError.class,
+                        () -> InvokeKindFixture.Caller.call(subject));
+                scenario.check("entered", 2, InvokeKindFixture.Subject.entered);
+            });
+            runScenario("invoke-kind-restore" + suffix, 0, scenario -> {
+                // The reverse direction still requires callers in the batch.
+                scenario.redefine(new Class<?>[]{InvokeKindFixture.Subject.class,
+                        InvokeKindFixture.Caller.class, InvokeKindFixture.Child.class, InvokeKindFixture.CallerBase.class},
+                        "invoke-kind-original", "invoke-kind-original", "invoke-kind-original", "invoke-kind-original");
+                scenario.check("virtual", 8, InvokeKindFixture.Caller.call(subject));
+                scenario.check("range", 13, InvokeKindFixture.Caller.range(subject));
+                scenario.check("inherited", 8, InvokeKindFixture.Caller.inherited(child));
+                scenario.check("super", 8, child.throughSuper());
+                scenario.check("marker", 7, subject.marker);
+                InvokeKindFixture.Subject.entered = 0;
+            });
+        }
     }
 
     // A started thread blocked in run() and an unstarted one of an application
@@ -1775,13 +1878,23 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         impl.marker = 9;
         if (InterfaceInvokeKindFixture.Caller.call(impl) != 11) throw new AssertionError("Caller precondition");
         Method cachedValue = type.getMethod("value");
-        String schema = memberSchema(type);
-        runScenario("interface-kind-static-rejected", 71, scenario -> {
+        runScenario("interface-kind-static-legacy", 0, scenario -> {
+            scenario.check("interfaceBefore", 11, InterfaceInvokeKindFixture.Caller.interfaceCall(impl));
             scenario.redefine(new Class<?>[]{type}, "interface-kind-static");
-            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains(
-                    "loaded class Lcom/github/ytlog/artdcevm/fixture/InterfaceInvokeKindFixture$Caller; still invokes the old kind"));
-            scenario.check("unchangedContract", schema, memberSchema(type));
-            scenario.check("callerUnchanged", 11, InterfaceInvokeKindFixture.Caller.call(impl));
+            scenario.check("valueStatic", true, Modifier.isStatic(type.getMethod("value").getModifiers()));
+            scenario.check("staticValue", 21, type.getMethod("value").invoke(null));
+            // The implementing class no longer inherits this default, so an
+            // old invokevirtual naming Impl cannot find it. invokeinterface
+            // naming Contract resolves the static member and throws ICCE.
+            scenario.expectError("oldVirtual", NoSuchMethodError.class,
+                    () -> InterfaceInvokeKindFixture.Caller.call(impl));
+            scenario.expectError("oldInterface", IncompatibleClassChangeError.class,
+                    () -> InterfaceInvokeKindFixture.Caller.interfaceCall(impl));
+            System.gc();
+            scenario.expectError("oldVirtualAfterGc", NoSuchMethodError.class,
+                    () -> InterfaceInvokeKindFixture.Caller.call(impl));
+            scenario.expectError("oldInterfaceAfterGc", IncompatibleClassChangeError.class,
+                    () -> InterfaceInvokeKindFixture.Caller.interfaceCall(impl));
         });
         runScenario("interface-kind-static", 0, scenario -> {
             scenario.redefine(new Class<?>[]{type, InterfaceInvokeKindFixture.Caller.class},
@@ -2846,14 +2959,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("useHelper", 6, subject.useHelper());
             scenario.check("marker", 9, subject.marker);
         });
-        String instanceSchema = memberSchema(KindFixture.Subject.class);
-        runScenario("kind-static-rejected", 71, scenario -> {
-            // The new Caller now invokes convert as an instance method.
+        runScenario("kind-static", 0, scenario -> {
             scenario.redefine(new Class<?>[]{KindFixture.Subject.class}, "kind-static");
-            scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
-                    .contains("loaded class Lcom/github/ytlog/artdcevm/fixture/KindFixture$Caller; still invokes the old kind"));
-            scenario.check("unchangedSubject", instanceSchema, memberSchema(KindFixture.Subject.class));
-            scenario.check("callerUnchanged", 3, KindFixture.Caller.call());
+            scenario.check("staticKind", true, Modifier.isStatic(
+                    KindFixture.Subject.class.getDeclaredMethod("convert", int.class).getModifiers()));
+            scenario.check("staticCall", 4, KindFixture.Subject.class.getDeclaredMethod("convert", int.class).invoke(null, 1));
+            scenario.expectError("oldCaller", IncompatibleClassChangeError.class, KindFixture.Caller::call);
         });
     }
 
@@ -3233,9 +3344,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
-    // Verified callers resolve a method by name and signature without checking
-    // its invoke kind, so no change may make a method of that identity static
-    // where it was an instance method (or the reverse), or private where it was virtual.
+    // Reverse static-to-instance and virtual-to-private changes retain the
+    // outside-batch rejection. Instance-to-static calls have invocation guards.
     private void runMethodKindChangeScenarios() throws Exception {
         AccessSubject access = new AccessSubject();
         runScenario("method-private", 71, scenario -> {

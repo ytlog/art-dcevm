@@ -62,6 +62,11 @@ int32_t HolderEntry(const runtime_thread::VerifiedThread& thread, abi::arm64::Cl
                     const abi::arm64::RedefinitionDataHolderPrefix* holder, jclass klass);
 // The table index of the current transaction's selected layout, or -1.
 int Selected();
+// Commit only, with a selected layout: keep declared caller methods out of JIT/inlining.
+bool HasInterpretedMethods(const runtime_thread::VerifiedThread& thread,
+                           abi::arm64::ClassRedefinitionPrefix* self, jclass klass);
+void KeepInterpreted(const runtime_thread::VerifiedThread& thread,
+                     abi::arm64::ClassRedefinitionPrefix* self, jclass klass);
 // Later redefinitions of this transaction use only `index`; -1 selects none.
 void Select(int index);
 

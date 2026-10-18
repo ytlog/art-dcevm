@@ -330,14 +330,15 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 
 ## 调用方式变化
 
-已校验的代码按名称与签名解析方法，不检查方法是否仍是校验时的调用方式：跳过访问检查的方法使用不带检查的解析，Android 16 起这条路径（`ClassLinker::ResolveMethodId`）不再接收调用类型。解析结果随后按指令的调用类型执行：
+已校验代码会跳过方法调用方式检查。Android 16 起，不受检的 `ClassLinker::ResolveMethodId` 甚至不接收调用类型；直接用重新解析出的 static 方法的索引执行旧 `invoke-virtual`，会分派到错误目标。
 
-- `invoke-static` 解析到实例方法时，以缺少接收者的参数执行实例方法体。
-- `invoke-virtual` 解析到 static 方法或 private 方法时，按它们并不拥有的 vtable 索引分派到别的方法。
+实例方法改为 static 时，`invoke_kind` 在命名解析入口补查 static 标志与实际指令的调用类型：较早版本 Hook `ClassLinker::ResolveMethod<kNoChecks>` 的两种重载；`NterpGetMethod` 覆盖 nterp 和 Android 14 起共用该入口的 switch 解释器，按 35c／3rc 指令取调用类型及 method_idx。Android 16 起通过命名 `ResolveMethodId` 取得解析结果。类型不匹配时使用 ART `Thread::ThrowNewException` 抛 `IncompatibleClassChangeError`，在读取 vtable／IMT 槽位和填充调用点缓存之前返回；解析本身的失败保持不变。检查不改变原有的访问检查策略。ClassLinker 身份复用已有 `FindClass` Hook 的观察结果，不读取 Runtime 私有字段。接口 default 改为 static 时，旧 `invoke-interface` 直接命名接口，抛 ICCE；旧 `invoke-virtual` 若命名实现类，该类已不再继承此 default，按固定 JBR 对照抛 `NoSuchMethodError`。
 
-调用方的 DexCache 项随旧方法退役而清除，之后的重新解析正是这条路径；引擎无法让它抛 `IncompatibleClassChangeError`。因此调用方式变化只在没有这样的调用方时接受：`CheckClass` 对批次之外每个已加载的非 boot 类，经布局读取其 DexFile 与 ClassDef，在该 DEX 中找出经目标或其已加载子类型（接口目标为组内的实现类、子接口及其子类）命名旧身份的 method_ids，再有界遍历该类全部代码的 invoke（35c、3rc、45cc、4rcc）与方法类 const-method-handle；找到即以 71 拒绝并写明调用方。之后才加载的类按新调用方式重新校验；boot 代码不能命名应用类。Native 阶段在批次可能改变调用方式时经 `GetAllStackTraces` 检查批次类的活动帧：旧帧继续执行旧代码，其下一次调用同样按名称重新解析。接受后旧声明退役（映射不把它映射到另一种调用方式的新方法），新声明是新成员。接口目标同样适用（default ↔ static、default/abstract → private、static → abstract 等），新声明按接口新增成员校验：新 static/private 不得遮蔽继承的接口方法，新 default 不得遮蔽子类型方法，新 abstract 需要每个已加载实现；实现类中旧 default 的 copied 方法经已有的 kCopied 映射消失。private 方法可以变成虚方法：直接调用它的只有该类自己的代码，仍然有效。构造器与类初始化器总是直接调用，不受此限制。
+仅检查解释器还不够：JIT 可以把重新解析的旧虚调用再次编译为错误分派。`CheckClass` 有界扫描批次外已加载非 boot 类的 DEX，找出仍通过目标及其已加载子类型引用旧方法身份的类；提交前不修改它们。提交时在 ART 原有的 JIT 暂停和 suspend-all 内，将这些类声明的字节码方法标为 `kAccCompileDontBother`，同时清除对应版本的 `kAccPreCompiled`；ART 的 `IsCompilable` 同时阻止 JIT 编译及内联。已有机器码的去优化、失效、对象迁移和缓存清理仍完全由 ART 结构事务执行。之后因父类或接口变化而隐式重建的调用方继承这项标记；显式提交已修正调用方式的新 DEX 则使用新声明的标志。这些旧调用方保持解释执行，直到其代码被更新；不全局关闭 JIT。
 
-引擎记录每个类在已提交事务中退役的方法及其修饰符，之后以另一种调用方式重新加入同一身份时按同样规则扫描调用方；记录随类保留到进程结束。字段的解析带有 static 属性，找不到另一种存储方式的同名字段，因此字段的 static 变化可以按退役处理。
+调用方集合规划后若又有类完成加载，在实例分配前失败并重新快照。实例改 static 的事务可以保留旧活动帧，旧调用方和目标自身的 obsolete 帧在下一次旧调用处抛 ICCE。一次失败的事务不会应用调用方编译标记；已启用的类型检查可单调保留，原定义中的合法调用行为不变。缺少命名入口时保留 71 保护。
+
+反向 static 改实例，以及 virtual 改 private，仍要求批次外没有引用旧调用方式的已加载类，且批次类没有活动帧；否则以 71 拒绝。相同检查覆盖曾退役后重新加入的方法身份。同批更新调用方仍可接受。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
 
 ## 活动帧
 

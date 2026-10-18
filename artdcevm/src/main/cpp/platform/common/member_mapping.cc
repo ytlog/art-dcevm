@@ -598,6 +598,10 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
     reinterpret_cast<Function>(original_update)(self, data);
   }
   RestoreFieldArrays();
+  if (const auto thread = runtime_thread::Ready()) {
+    if (context)
+      for (jclass caller : context->interpreted_callers) class_layout::KeepInterpreted(*thread, self, caller);
+  }
   if (plan && class_layout::Selected() >= 0)
     if (const auto thread = runtime_thread::Ready()) kPlanners[class_layout::Selected()].clear_narrowed(*thread, data, *plan);
   // ART has replaced the interface's references, proxy IfTables included.

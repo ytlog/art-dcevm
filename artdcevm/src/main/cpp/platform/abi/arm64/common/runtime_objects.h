@@ -64,6 +64,7 @@ struct ArtMethodPrefix {
 // art_method.h of android-12.0.0_r1 through android-17.0.0_r1; Android 11
 // declares its own in android11/art_method.h.
 struct ArtMethod {
+  static constexpr uint32_t kPreCompiled = 0x00800000;  // modifiers.h, Android 12--17.
   uint32_t declaring_class;
   std::atomic<uint32_t> access_flags;
   uint32_t dex_method_index;
@@ -75,6 +76,7 @@ struct ArtMethod {
 static_assert(sizeof(ArtMethod) == 32);
 // libdexfile/dex/modifiers.h; ART sets it on each method of a replaced class.
 inline constexpr uint32_t kAccObsoleteMethod = 0x00040000;
+inline constexpr uint32_t kAccCompileDontBother = 0x02000000;
 inline constexpr uint32_t kAccJavaFlagsMask = 0xffff;
 
 // base/length_prefixed_array.h: At() aligns the first element after length_.

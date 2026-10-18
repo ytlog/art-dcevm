@@ -94,8 +94,8 @@ struct Abilities {
   // inherited_interface and subtype_shadows.
   bool interface_members = false;
   // A class method may change its invoke kind (static <-> instance, virtual ->
-  // private) when no loaded code outside the batch still invokes its old kind;
-  // the engine checks that before accepting (requires member_mapping).
+  // private). The engine checks loaded callers and either protects their
+  // resolution/compilation or requires them in the batch (requires member_mapping).
   bool kind_changes = false;
   // An added interface the batch also rebuilds can link as its replacement:
   // the engine allocates that rebuild first.
@@ -127,8 +127,8 @@ struct Decision {
   bool superclass_changed = false;
   // The class stops implementing some interface: seal its replacements' dispatch.
   bool interfaces_removed = false;
-  // Methods whose old invoke kind loaded code outside the batch must not still
-  // use, with that old kind's modifiers. The old declarations retire.
+  // Methods whose old invoke kind needs caller protection or batch checks,
+  // with the old kind's modifiers. The old declarations retire.
   std::vector<std::pair<MemberKey, uint32_t>> kind_changes;
 };
 

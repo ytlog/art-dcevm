@@ -120,6 +120,11 @@ jvmtiError JNICALL Redefine(jvmtiEnv*, jint, const jvmtiClassDefinition*) { retu
 extern "C" void* shadowhook_dlopen(const char*) { return reinterpret_cast<void*>(1); }
 extern "C" void shadowhook_dlclose(void*) {}
 extern "C" void* shadowhook_dlsym(void*, const char* name) {
+  // Preserve the base installer contract with optional invoke-kind services
+  // absent. test-invoke-kind-host.py exercises their separate ABI families.
+  if (std::strstr(name, "ClassLinker13ResolveMethod") ||
+      std::strstr(name, "ClassLinker15ResolveMethodId") ||
+      std::strcmp(name, "NterpGetMethod") == 0) return nullptr;
   const std::string key(name);
   if (key == symbols::structural::kStructurallyRedefineClasses.name) return reinterpret_cast<void*>(Structural);
   if (key == symbols::structural::kJvmtiRedefineClasses.name) return reinterpret_cast<void*>(Redefine);

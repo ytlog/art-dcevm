@@ -11,6 +11,7 @@
 #include "platform/common/art_dex_view.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/field_array_probe.h"
+#include "platform/common/invoke_kind.h"
 #include "evolution/modifiers.h"
 #include "platform/common/transaction_context.h"
 
@@ -35,6 +36,8 @@ struct ProbeOps {
   bool (*verify_target)(const VerifiedThread&, void* klass, void* class_type, const evolution::ClassSchema& live, std::string* why);
   bool (*verify_iter)(const VerifiedThread&, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                       std::string* why);
+  bool (*has_interpreted)(void* klass);
+  void (*keep_interpreted)(void* klass);
   uint32_t (*access)(const void* klass);
   uint32_t (*superclass)(const void* klass);
   void (*origin)(const void* klass, uint32_t* dex_cache, uint32_t* class_loader, int32_t* class_def, int32_t* type);
@@ -175,6 +178,25 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     return true;
   }
 
+  static bool HasInterpreted(void* klass) {
+    auto* methods = Members<Method>(static_cast<Class*>(klass)->methods);
+    for (uint32_t i = 0; methods && i < methods->length; ++i) {
+      Method* method = methods->At(i);
+      const uint32_t flags = method->access_flags.load();
+      if (method->declaring_class == Reference(klass) &&
+          (flags & (abi::kAccCompileDontBother | Method::kPreCompiled | 0x80000000 | 0x0100 | 0x0400)) ==
+              abi::kAccCompileDontBother) return true;
+    }
+    return false;
+  }
+  static void KeepInterpreted(void* klass) {
+    auto* methods = Members<Method>(static_cast<Class*>(klass)->methods);
+    for (uint32_t i = 0; methods && i < methods->length; ++i) {
+      Method* method = methods->At(i);
+      if (method->declaring_class == Reference(klass))
+        invoke_kind::KeepInterpreted(method, Method::kPreCompiled);
+    }
+  }
   static uint32_t Access(const void* klass) {
     return static_cast<const Class*>(klass)->access_flags & kAccJavaFlagsMask;
   }
@@ -188,7 +210,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     *type = declared->dex_type_index;
   }
   static constexpr ProbeOps Make(int android) {
-    return {android, VerifyTarget, VerifyIter, Access, Superclass, Origin};
+    return {android, VerifyTarget, VerifyIter, HasInterpreted, KeepInterpreted, Access, Superclass, Origin};
   }
 };
 
@@ -252,6 +274,13 @@ bool VerifyTarget(const std::optional<VerifiedThread>& thread, ClassRedefinition
   Report(layout >= 0 ? "verified: android" + std::to_string(kProbes[layout].android) + " class layout"
                      : "rejected: " + why);
   return layout >= 0;
+}
+
+bool HasInterpretedMethods(const VerifiedThread&, ClassRedefinitionPrefix* self, jclass klass) {
+  return kProbes[Selected()].has_interpreted(DecodeClass(art.mirror_class, self, klass));
+}
+void KeepInterpreted(const VerifiedThread&, ClassRedefinitionPrefix* self, jclass klass) {
+  kProbes[Selected()].keep_interpreted(DecodeClass(art.mirror_class, self, klass));
 }
 
 bool ClassAccess(const VerifiedThread&, ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {

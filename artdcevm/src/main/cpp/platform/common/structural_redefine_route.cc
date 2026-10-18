@@ -421,7 +421,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   ARTDCEVM_TEST(fault_injection::SnapshotFinished(loaded_start, count, loaded.count));
   result = InvokeStructural(env, count, definitions, context);
   *capture_references |= context->capture_references_on_retry;
-  *subclass_loaded = watch.SubclassLoaded() || (context->narrowing && watch.AnyClassPrepared()) ||
+  *subclass_loaded = watch.SubclassLoaded() || ((context->narrowing || context->protect_invocations) && watch.AnyClassPrepared()) ||
                      context->capture_references_on_retry;
   return result;
 }

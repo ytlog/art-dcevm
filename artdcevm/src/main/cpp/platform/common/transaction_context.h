@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
 #include <vector>
 #include "platform/abi/arm64/common/redefinition.h"
@@ -69,6 +70,10 @@ struct Context {
   std::unique_ptr<Part> verification;  // Current verification redirection scope.
   std::unique_ptr<Part> thread;  // Native-probed runtime thread services.
   std::unique_ptr<Part> references;  // Planned JBR instance-reference compatibility.
+  // Borrowed loaded-class roots remain valid through the standard entry.
+  std::set<jclass> interpreted_callers;
+  bool protect_invocations = false;
+  bool collected_interpreted_callers = false;
   bool narrowing = false;  // Actual accepted input removes an interface.
   // An interface removal appeared that the Native phase did not predict (a
   // ClassFileLoadHook changed the bytes): retry with the reference capture.

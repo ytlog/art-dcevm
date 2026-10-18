@@ -8,6 +8,7 @@
 #include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
+#include "platform/common/invoke_kind.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/verification_redirect.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -133,6 +134,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   class_layout::Prepare({});
   std::string retirement_note, interface_note, sealing_note, failure;
   bool sealing_prepared = false, references_prepared = false;
+  bool invoke_kind_prepared = false;
   size_t sealing_hook_begin = 0, sealing_hook_end = 0;
   JNIEnv* jni = nullptr;
   vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
@@ -141,6 +143,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   if (mapping_ready) mapping_ready = member_retirement::Prepare({process->layout_services.find_instance_field}, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = member_mapping::Prepare(process->layout_services, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = verification_redirect::Prepare(&retirement_hooks, &failure);
+  if (mapping_ready) invoke_kind_prepared = invoke_kind::Prepare(&retirement_hooks);
   if (mapping_ready) {
     struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };
     const Required decisions[] = {
@@ -247,6 +250,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   }
   imt_sealing::Installed(prepared.retirement && sealing_prepared);
   narrowed_references::Installed(prepared.retirement && references_prepared);
+  invoke_kind::Installed(prepared.retirement && invoke_kind_prepared);
   // The engine's own environment carries no other events.
   jvmtiEventCallbacks callbacks{};
   callbacks.ClassPrepare = ClassPrepared;

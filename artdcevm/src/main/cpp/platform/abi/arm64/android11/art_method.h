@@ -7,6 +7,7 @@
 // dex_code_item_offset_ precedes dex_method_index_. Later releases drop it.
 namespace artdcevm::abi::arm64::android11 {
 struct ArtMethod {
+  static constexpr uint32_t kPreCompiled = 0x00200000;  // libdexfile/dex/modifiers.h.
   uint32_t declaring_class;
   std::atomic<uint32_t> access_flags;
   uint32_t dex_code_item_offset;

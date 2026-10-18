@@ -27,6 +27,7 @@ INTERFACE_IMPLEMENTATIONS = tuple(COMMON / name for name in (
 # Every engine module may name structural services.
 STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(COMMON.glob('*.cc')))
 OPTIONAL_CATALOGS = (
+    ('invokeKindServices', 'Invoke kind', 'invoke_kind_symbols.h', 'invoke_kind.cc'),
     ('imtSealingServices', 'IMT sealing', 'imt_sealing_symbols.h', 'imt_sealing.cc'),
     ('narrowedReferenceServices', 'Narrowed references', 'narrowed_reference_symbols.h', 'narrowed_references.cc'),
 )

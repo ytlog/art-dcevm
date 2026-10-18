@@ -6,6 +6,6 @@ public final class InterfaceBatchFixture {
     }
     public static class Implementation implements Contract {
         public int marker = 17;
-        public static int ownValue() { return 99; }
+        private int ownValue() { return 99; }
     }
 }
