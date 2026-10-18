@@ -26,9 +26,13 @@ INTERFACE_IMPLEMENTATIONS = tuple(COMMON / name for name in (
     'interface_group_snapshot.cc', 'interface_allocation.cc', 'interface_redefinition_internal.h'))
 # Every engine module may name structural services.
 STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(COMMON.glob('*.cc')))
+OPTIONAL_CATALOGS = (
+    ('imtSealingServices', 'IMT sealing', 'imt_sealing_symbols.h', 'imt_sealing.cc'),
+    ('narrowedReferenceServices', 'Narrowed references', 'narrowed_reference_symbols.h', 'narrowed_references.cc'),
+)
 LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
 TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')
-ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{Library::(k\w+),\s*"([^"]+)"'
+ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{\s*Library::(k\w+),\s*"([^"]+)"'
                    r'(?:,\s*SymbolTable::(k\w+))?\s*\}')
 SCOPE = 'Defined exact names only; no address, ABI, loader or callability proof'
 
@@ -161,6 +165,14 @@ def main(argv=None):
             shared = collect_report(args.runtime_lib, runtime_catalog, runtime_hash)
             shared['implementationSha256'] = runtime_source_hash
             report['runtimeThreadServices'] = shared
+            for key, label, header, implementation in OPTIONAL_CATALOGS:
+                path = CATALOG.parent / header
+                if not path.exists():
+                    continue
+                entries, digest, source_digest = read_active_catalog(path, COMMON / implementation, label)
+                services = collect_report(args.runtime_lib, entries, digest)
+                services['implementationSha256'] = source_digest
+                report[key] = services
         if destination:
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text(json.dumps(report, indent=2, ensure_ascii=False) + '\n')
@@ -185,6 +197,13 @@ def main(argv=None):
             table = '.dynsym' if entry['requiredTables'] == ['.dynsym'] else 'any-named'
             print(f"Interface service {entry['id']}: {count}/{len(optional['sets'])} {table}")
     shared_ok = True
+    for key, label, _, _ in OPTIONAL_CATALOGS:
+        optional = report.get(key)
+        if not optional:
+            continue
+        for index, entry in enumerate(optional['sets'][0]['catalog']):
+            count = sum(runtime['catalog'][index]['present'] for runtime in optional['sets'])
+            print(f"{label} service {entry['id']}: {count}/{len(optional['sets'])}; name coverage only")
     if 'runtimeThreadServices' in report:
         shared = report['runtimeThreadServices']
         for index, entry in enumerate(shared['sets'][0]['catalog']):

@@ -99,6 +99,13 @@ class SymbolCatalogTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Structural catalog contains unused services: kWrapper'):
             check.read_active_catalog(check.CATALOG, (first, second), "Structural")
 
+    def test_catalog_accepts_multiline_initializers(self):
+        check.CATALOG.write_text(
+            'NamedSymbol kAllocator{\n'
+            '    Library::kArt, "allocator", SymbolTable::kAnyNamed};\n')
+        catalog, _ = check.read_catalog(check.CATALOG)
+        self.assertEqual(catalog, [('kAllocator', 'kArt', 'allocator', 'kAnyNamed')])
+
     def test_report_keeps_each_table_without_private_paths(self):
         report = self.root / 'build/evidence/symbols.json'
         result, output = self.run_check('--report', report)
