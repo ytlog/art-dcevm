@@ -159,13 +159,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
                       (decision.superclass_changed ? ", which changes its superclass too"
                                                    : ", whose rebuild cannot be allocated first");
   }
-  // An interface group re-links its members and their ancestors in its own
-  // allocation, which does not seal interface dispatch.
-  if (decision.error == JVMTI_ERROR_NONE && decision.interfaces_removed && !interface_target &&
-      interfaces && (interfaces->IsAffected(self) || interfaces->SharesImplementationGroup(self))) {
-    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-    decision.reason = "interface removal overlaps an interface group of the batch";
-  }
+
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
     if (std::string callers = KindCallers(*thread, self, snapshot, *batch, decision.kind_changes); !callers.empty()) {
       decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;

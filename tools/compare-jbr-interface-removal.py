@@ -42,6 +42,11 @@ public class RemovalOracle {
     var task = new InterfaceRemovalFixture.Task();
     var thread = new Thread(task);
     eq("warm", 0, InterfaceRemovalFixture.failures(subject, TIMES));
+    redefine("interface-remove", InterfaceRemovalFixture.Subject.class, InterfaceRemovalFixture.Kept.class);
+    eq("batched-removal", TIMES, InterfaceRemovalFixture.failures(subject, TIMES));
+    eq("batched-kept", 22, InterfaceRemovalFixture.kept(subject));
+    redefine("interface-remove-original", InterfaceRemovalFixture.Subject.class, InterfaceRemovalFixture.Kept.class);
+    eq("batched-restored", 0, InterfaceRemovalFixture.failures(subject, TIMES));
     InterfaceRemovalFixture.Subject.self = subject;
     InterfaceRemovalFixture.Subject.keptSelf = subject;
     redefine("interface-remove", InterfaceRemovalFixture.Subject.class, InterfaceRemovalFixture.Task.class);
@@ -123,7 +128,7 @@ def main():
     args = p.parse_args()
     evidence = new_evidence_directory(ROOT / 'build/evidence/jbr-interface-removal')
     jbr = args.java_home.resolve()
-    manifest = {'scenarios': ['repeated-structure', 'interface-group', 'late-override',
+    manifest = {'scenarios': ['batched-class-interface-removal', 'repeated-structure', 'interface-group', 'late-override',
                              'abstract-direct-indirect', 'abstract-boot', 'abort-retry', 'restore'],
                 'sourceOracleRevision': 'cf1f197170a0', 'fixtureSha256': {}}
     with tempfile.TemporaryDirectory(prefix='oracle-', dir=evidence) as temp:

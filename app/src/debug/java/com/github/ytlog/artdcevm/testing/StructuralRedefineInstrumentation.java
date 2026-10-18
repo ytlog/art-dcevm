@@ -159,7 +159,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
             else if ("thread-subclass".equals(isolated)) runThreadSubclassScenario();
-            else if ("interface-removal".equals(isolated)) runInterfaceRemovalScenarios();
+            else if ("interface-removal".equals(isolated)) {
+                runInterfaceRemovalBatchScenario();
+                runInterfaceRemovalScenarios();
+            }
             else if ("proxy-interface".equals(isolated)) runProxyScenarios();
             else if ("interface-drop-parent".equals(isolated)) runParentRemovalScenarios();
             else if (isolated.startsWith("interface-abstract-reject-"))
@@ -423,15 +426,21 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
     }
 
-    // An interface group of the batch re-links its implementations itself, so
-    // one of them cannot drop an interface in the same batch.
+    // The interface group's owner carries the whole replacement set; narrowing
+    // one submitted implementation seals that set before ART commits it.
     private void runInterfaceRemovalBatchScenario() throws Exception {
         InterfaceRemovalFixture.Subject subject = new InterfaceRemovalFixture.Subject();
-        runScenario("interface-removal-batched", 66, scenario -> {
-            scenario.expectRejectionBy(InterfaceRemovalFixture.Subject.class);
+        runScenario("interface-removal-batched", 0, scenario -> {
             scenario.redefine(new Class<?>[]{InterfaceRemovalFixture.Subject.class, InterfaceRemovalFixture.Kept.class},
                     "interface-remove", "interface-remove");
-            scenario.check("stillRemoved", true, InterfaceRemovalFixture.Removed.class.isInstance(subject));
+            scenario.check("removed", false, InterfaceRemovalFixture.Removed.class.isInstance(subject));
+            scenario.check("kept", 22, InterfaceRemovalFixture.kept(subject));
+            scenario.check("failures", 200_000, InterfaceRemovalFixture.failures(subject, 200_000));
+        });
+        runScenario("interface-removal-batched-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceRemovalFixture.Subject.class, InterfaceRemovalFixture.Kept.class},
+                    "interface-remove-original", "interface-remove-original");
+            scenario.check("restored", true, InterfaceRemovalFixture.Removed.class.isInstance(subject));
             scenario.check("viaRemoved", 11, InterfaceRemovalFixture.viaRemoved(subject));
         });
     }
