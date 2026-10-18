@@ -313,17 +313,6 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     }
     return nullptr;
   }
-  // `klass` is `type`, extends it, or implements it; java.lang.Object accepts any.
-  static bool Assignable(const runtime_thread::VerifiedThread& thread, Class* klass, Class* type, bool object) {
-    if (object) return true;
-    for (Class* c = klass; c; c = class_layout::Heap<Class>(thread, c->super_class))
-      if (c == type) return true;
-    if (!(type->access_flags & evolution::kAccInterface)) return false;
-    auto* table = class_layout::Heap<abi::ObjectArray>(thread, klass->iftable);
-    for (int32_t i = 0; table && i + 1 < table->length; i += 2)
-      if (class_layout::Element<Class>(thread, table, i) == type) return true;
-    return false;
-  }
   // Commit, every thread suspended and moving GC off, before ART copies the
   // fields: ART's CopyAndClearFields then runs its write barrier for each
   // target object, which covers these stores too.
@@ -334,16 +323,22 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     auto* olds = data.OldInstances();
     auto* news = data.Slot(RedefinitionDataIter::kSlotNewInstanceObjects);
     CopyStatics(thread, data, plan);
+    std::map<std::pair<Class*, std::string>, bool> compatible;
     for (const auto& retyped : plan.retyped) {
       auto* type = static_cast<Class*>(decode_global(runtime_vm, retyped.type));
       if (!type) continue;
-      const bool object = class_layout::ClassDescriptor(thread, *type) == "Ljava/lang/Object;";
+      const std::string signature = class_layout::ClassDescriptor(thread, *type);
       auto* old_class = class_layout::Element<Class>(thread, old_classes, retyped.class_index);
       auto* new_class = class_layout::Element<Class>(thread, new_classes, retyped.class_index);
       const auto copy = [&](void* from, void* to) {
         const uint32_t reference = *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(from) + retyped.old_field->offset);
         auto* value = static_cast<abi::Object*>(runtime_thread::Read(thread, reference));
-        if (!value || !Assignable(thread, class_layout::Heap<Class>(thread, value->klass), type, object)) return;
+        if (!value) return;
+        auto* klass = Replacement(thread, data, class_layout::Heap<Class>(thread, value->klass));
+        auto found = compatible.find({klass, signature});
+        if (found == compatible.end())
+          found = compatible.emplace(std::make_pair(klass, signature), InstanceCompatible(thread, data, klass, signature)).first;
+        if (!found->second) return;
         *reinterpret_cast<uint32_t*>(static_cast<uint8_t*>(to) + retyped.new_field->offset) = class_layout::Reference(value);
       };
       if (retyped.is_static) { copy(old_class, new_class); continue; }
@@ -353,6 +348,40 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
           if (c == old_class) { copy(instance, class_layout::Element<abi::Object>(thread, news, i)); break; }
       }
     }
+  }
+  // The interfaces `klass` declares itself: its ClassDef list, a Proxy class's
+  // `interfaces` static (ClassLinker::CreateProxyClass), or an array class's IfTable.
+  static bool DirectInterfaces(const runtime_thread::VerifiedThread& thread, Class* klass,
+                               std::vector<std::string>* interfaces) {
+    std::string why;
+    if (const DexFilePrefix* dex = DexOf(thread, klass->dex_cache); dex && klass->dex_class_def_index >= 0)
+      return evolution::ReadClassInterfaces(DexViewOf(*dex), klass->dex_class_def_index, interfaces, &why);
+    if (ArtField* field = find_static_field(klass, "interfaces", "[Ljava/lang/Class;")) {
+      auto* array = class_layout::Heap<abi::ObjectArray>(
+          thread, *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(klass) + field->offset));
+      for (int32_t i = 0; array && i < array->length; ++i)
+        interfaces->push_back(class_layout::ClassDescriptor(thread, *class_layout::Element<Class>(thread, array, i)));
+      return true;
+    }
+    auto* table = class_layout::Heap<abi::ObjectArray>(thread, klass->iftable);
+    for (int32_t i = 0; table && i + 1 < table->length; i += 2)
+      interfaces->push_back(class_layout::ClassDescriptor(thread, *class_layout::Element<Class>(thread, table, i)));
+    return true;
+  }
+  // JBR's DcevmSharedGC::is_compatible for a retyped instance field: the
+  // newest class chain of the value names the field type, as a class or as an
+  // interface one of those classes declares directly. A superinterface of a
+  // declared interface does not count, and names are compared, not classes.
+  static bool InstanceCompatible(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                                 Class* klass, const std::string& signature) {
+    for (Class* c = klass; c; c = Replacement(thread, data, class_layout::Heap<Class>(thread, c->super_class))) {
+      if (class_layout::ClassDescriptor(thread, *c) == signature) return true;
+      std::vector<std::string> interfaces;
+      if (!DirectInterfaces(thread, c, &interfaces)) return false;
+      for (const auto& direct : interfaces)
+        if (direct == signature) return true;
+    }
+    return false;
   }
   static Class* Replacement(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data, Class* klass) {
     auto* holder = data.holder->array.Get<abi::ObjectArray>();

@@ -156,8 +156,7 @@ The target semantics come from fixed JBR DCEVM sources and matching runtime comp
 | Superclass narrowing (the new chain omits an old superclass) | Rejected | Rejected with 66 |
 | A concrete subclass, loaded later, of an abstract class that lost an interface | Dispatches by the new hierarchy | Persistent pre-publication protection and later rebuilds preserve dispatch; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces) |
 | Switching a class between class, interface and other kinds | Accepted | Rejected with 70 |
-| Making a class abstract while its own instances exist | Accepted | Rejected with 70 |
-| Instance reference-field retyping | Compatibility checks final class-chain and directly declared interface names | Still uses general assignability; not fully aligned |
+| Making a class abstract while its own instances exist | Accepted; instances stay and a new abstract method throws `AbstractMethodError` | Rejected with 70: an ART abstract class has no embedded vtable/IMT, and compiled code dispatches through the receiver class's embedded tables, so an instance of an abstract class would read past its class object. ART's DEX verifier also rules out linking it as concrete and changing the flag afterwards |
 | Boot classes, `Thread` and its supertypes, arrays, proxy classes themselves | Partly redefinable | Rejected under ART's rules |
 | New classes (new lambdas, anonymous classes) | Defined by tools such as HotswapAgent | Appended to the class loader by the reload tool; see [providing new classes](#providing-new-classes) |
 

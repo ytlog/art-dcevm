@@ -881,7 +881,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         RetypeFixture.Subject subject = new RetypeFixture.Subject();
         RetypeFixture.Child child = new RetypeFixture.Child();
         String text = subject.text;
-        Object number = subject.number, task = subject.task, childTask = child.task;
+        Object number = subject.number, task = subject.task, childTask = child.task, inherited = subject.inherited;
         Class<?> type = RetypeFixture.Subject.class;
         runScenario("field-retype", 0, scenario -> {
             scenario.redefine(new Class<?>[]{type}, "field-retype");
@@ -890,6 +890,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("numberKept", true, type.getField("number").get(subject) == number);
             scenario.check("mismatchCleared", true, type.getField("mismatch").get(subject) == null);
             scenario.check("interfaceKept", true, type.getField("task").get(subject) == task);
+            // JBR's FieldCopier names the type in the class chain or among
+            // directly declared interfaces; a superinterface does not count.
+            scenario.check("subinterfaceCleared", true, type.getField("deep").get(subject) == null);
+            scenario.check("inheritedKept", true, type.getField("inherited").get(subject) == inherited);
             scenario.check("staticCleared", true, type.getField("label").get(null) == null);
             scenario.check("staticMismatchCleared", true, type.getField("staticMismatch").get(null) == null);
             scenario.check("childTextKept", true, type.getField("text").get(child) == text);

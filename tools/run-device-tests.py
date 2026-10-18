@@ -615,7 +615,8 @@ REQUIRED_CHECKS = {
         **field_retired_checks("Restored")},
     "field-retype": {
         "textType": "java.lang.CharSequence", "keep": 41, "childOwn": 17,
-        **{name: True for name in ("textKept", "numberKept", "mismatchCleared", "interfaceKept", "staticCleared",
+        **{name: True for name in ("textKept", "numberKept", "mismatchCleared", "interfaceKept", "subinterfaceCleared",
+                                   "inheritedKept", "staticCleared",
                                    "staticMismatchCleared", "childTextKept", "childInterfaceKept",
                                    "textKeptAfterGc", "childInterfaceKeptAfterGc")}},
     "field-retype-restore": {
