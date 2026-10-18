@@ -65,7 +65,7 @@
 | 方法在 static 与实例之间变化、实例方法改为 private，或已删除的方法以另一种调用方式重新加入，而批次之外仍有已加载类的代码按旧调用方式引用它，或批次类有活动帧 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化)；把这些调用方同批提交即可 |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
 | 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
-| 普通类移除接口，而该类属于本批某个接口组（实现了同批重定义的接口，或是组成员的父类），或成员映射、分派封闭不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
+| 移除接口时成员映射或分派保护不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
 
 方法删除/改签名与字段删除/改类型/存储变化在退役不可用时分别以 `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67）与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝，native 改 Java 以 71 拒绝；新增接口与父类变化在没有探测通过的类布局时以 66 拒绝；父类变化还需要校验重定向。
 
@@ -96,9 +96,9 @@
 ## 移除接口的语义
 
 - 普通类可以不再实现某个接口。已有实例与已加载子类的实例随即不再是该接口的实例（`instanceof`、`isInstance` 与强制转换按新层级判断）。
-- 仍把这些对象当作被移除接口调用的已校验代码，以及字段、数组中以该接口类型保存的旧引用，调用其方法时抛 `IncompatibleClassChangeError`，与 JVM 相同；解释执行、JIT 编译后的代码与 boot 代码（例如 `Thread.run` 调用 `Runnable.run`）都如此。该类自己以被移除接口声明的静态字段若值已不实现该接口则置为 `null`（与 JBR 相同）；其他旧引用不会被置空。
+- 实例字段按 JBR 的持有者与实例更新规则清理不兼容引用；静态字段另按 JBR FieldCopier 的重定义类与签名规则复制，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。已有 `Thread` 持有的任务可能被清空，此后 `run()` 无动作；恢复接口也不会恢复被清空的字段。数组元素、局部变量和收窄后才创建的引用不受该次字段清理影响；经保留引用调用不再实现的接口时抛 `IncompatibleClassChangeError`，解释执行、JIT 与 boot 调用都须遵循此结果。
 - 类从被移除接口继承的 default 方法随之消失：以类本身调用它的旧字节码抛 `NoSuchMethodError`。
-- 这些类的接口调用经分派槽位查找执行，会稍慢。之后加载的具体子类继承这一行为；失去接口的抽象类之后才加载的具体子类除外，见引擎文档[移除接口](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。
+- 首次接口收窄后，分派保护持续到进程结束，覆盖后续结构重建与新链接的类，包括抽象父类的晚加载具体子类。接口调用需要查找；全进程后续链接与字段快照的性能成本尚未量化。
 - 接口目标也可以移除父接口：其子接口、实现类及其子类随之失去该父接口，语义同上；有 Proxy 实现类时以 66 拒绝。
 ## 方法种类的语义
 
@@ -143,14 +143,18 @@
 
 ## 与 JBR DCEVM 的对照
 
-下表对照 JetBrains Runtime 的增强重定义（`-XX:+AllowEnhancedClassRedefinition`），只列两者语义不同或需要说明的地方；方法、字段、修饰符、父类放宽、新增与移除接口、接口成员、Proxy 实现类与 `Thread` 子类的结构变化两者都接受。
+目标语义以固定 JBR DCEVM 源码和对应运行时对照为准（`-XX:+AllowEnhancedClassRedefinition`）。下表记录当前差异及关键边界，不是完整功能已对齐的声明。当前以错误码拒绝某项变化，不代表已经满足对齐目标；尚有差异的路径仍需修复。
 
 | 变化 | JBR DCEVM | art-dcevm |
 | --- | --- | --- |
 | 接口新增 abstract 方法，而已加载的实现类没有实现 | 接受，调用时抛 `AbstractMethodError` | 拒绝 63，提交前指出缺实现的类；Proxy 实现类除外，与 JBR 相同 |
-| 方法在 static 与实例之间变化，或改为 private，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 拒绝 71：ART 重新解析时不检查调用方式，无法抛出该错误；同批提交调用方即可接受 |
+| 实例方法改为 static，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 拒绝 71：ART 重新解析时不检查调用方式，无法抛出该错误；同批提交调用方即可接受 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
-| 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 可能分派到同一 IMT 槽位的其他方法，见[引擎风险](STRUCTURAL_REDEFINE_ENGINE.md#风险) |
-| 类在普通类与接口等种类之间变化 | 接受，旧调用点抛 `IncompatibleClassChangeError` | 拒绝 70 |
+| 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 持久发布前保护与后续结构重建共同保留正确分派，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口) |
+| 类在普通类与接口等种类之间变化 | 接受 | 拒绝 70 |
+| 类有自身实例时改为 abstract | 接受 | 拒绝 70 |
+| 实例引用字段改类型 | 按最终类链和直接声明接口名称检查兼容性 | 仍使用一般可赋值关系，尚未完整对齐 |
 | boot 类、`Thread` 及其父类型、数组、代理类自身 | 部分可重定义 | 按 ART 的规则拒绝 |
 | 新类（新 lambda、匿名类） | 由 HotswapAgent 等工具定义 | 由热重载工具追加到加载器，见[提供新类](#提供新类) |
+
+接口收窄字段清理、静态复制及保留的 JNI／MethodHandle 调用路径各有独立规则与验证范围，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。DEX 丢失原 ClassFile 字段声明顺序，纯声明重排的实例更新语义也尚未证明等价。

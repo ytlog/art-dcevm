@@ -24,6 +24,16 @@ done
 
 `python3 tools/test-structural-install-host.py` 编译公共生产模块，以公开 JNI/JVMTI 表与 ShadowHook 替身验证安装顺序、幂等性、inline hook 失败时不尝试 JNI 覆盖、JNI 表失败后保留基础能力，以及映射名称缺失后线程服务仍准备且诊断保留。测试不执行 ART 对象、收集器或真实 Hook，不能代替设备 ABI 验证。
 
+## JBR 对照
+
+`tools/compare-jbr-interface-removal.py` 将同一组 Java 夹具编译为 ClassFile，在固定 JBR `21.0.11+10-b1163.116` 上执行。源码基准为 `cf1f197170a0f04c6559feb873e362583be021d1`，运行时不匹配时拒绝把结果记为该基准的对齐证据：
+
+```sh
+python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
+```
+
+`JBR_REFERENCE_HOME` 是待替换的路径占位符。原始输出、输入夹具／执行器／运行时哈希保存在忽略的 `build/evidence/`。该对照覆盖特定接口收窄与引用字段规则，不能证明全部 JBR 功能已对齐。ART 设备测试应复核相同返回值、错误、引用清理及失败后行为。
+
 ## 设备回归
 
 `DEVICE_SELECTOR` 是待替换的设备选择器占位符；`--device-id` 使用匿名标签。脚本会安装指定 APK、结束旧示例进程、删除旧报告并从初始定义开始，核对已安装 APK 的 SHA-256 与完整场景顺序。它操作示例包 `dev.artdcevm.lab`。
@@ -37,7 +47,7 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
   --scenario-group full --checkjni-mode checkjni
 ```
 
-`ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，`thread-subclass` 单独运行应用 `Thread` 子类场景，`interface-removal` 单独运行接口移除与恢复场景，`proxy-interface` 单独运行 Proxy 实现类场景，`interface-drop-parent` 单独运行接口移除父接口场景，这些都不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
+`ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，`thread-subclass` 单独运行应用 `Thread` 子类场景，`interface-removal` 运行接口移除、重复重建、抽象父类晚加载、JBR 引用字段清理与恢复场景，`proxy-interface` 单独运行 Proxy 实现类场景，`interface-drop-parent` 单独运行接口移除父接口场景，`static-narrow` 检查静态字段的 JBR 复制规则，`field-retype` 检查字段改类型；这些都不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
 
 ## 失败恢复与故障隔离
 
@@ -149,8 +159,8 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | `methodDeletion`、`methodSignatureChange`、`interfaceAddition` | 方法退役 Hook 已安装 |
 | `fieldDeletion`、`fieldTypeChange`、`memberDeletion`、`memberTypeChange` | 字段守卫也可用 |
 | `superclassWidening` | 方法退役 Hook 与校验重定向均已安装 |
-| `interfaceRemoval` | 方法退役 Hook 已安装且接口分派封闭服务可用；普通类可以移除接口 |
-| `interfaceDispatchSealing` | `available` 或 `unavailable: 原因`（命名 `Runtime::CreateImtConflictMethod`、`LinearAlloc::Alloc` 或类加载器分配器读取不可用） |
+| `interfaceRemoval` | 方法退役、发布前分派保护、实例引用字段检查和 ClassPrepare 快照监视均可用；普通类可以移除接口 |
+| `interfaceDispatchSealing` | `available: ...` 或 `unavailable: 原因`；记录经实际探测的发布前链接边界及 canonical 来源，还需要命名分配服务与类加载器分配器读取 |
 | `hierarchyChange`、`fullDcevmComplete` | 始终为 false：父类收窄不支持，完整 DCEVM 尚未完成 |
 | `interfaceRedefinition` | 布尔值；安装且 Class/Thread/HandleScope/holder 全部探测通过时为 true。初始化后尚未探测、版本或服务不可用、进程级探测停用时为 false；单个目标拒绝不清除此值 |
 | `interfaceRuntime` | `unavailable`、`unverified: interface runtime declarations`、`verified: androidNN Class/Thread/HandleScope/holder probes` 或 `disabled: 原因`；可用版本仅 API 33–36，其他版本禁用并说明原因 |

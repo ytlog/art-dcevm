@@ -67,7 +67,7 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 | Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind, while code of a loaded class outside the batch still names it with the old kind or a batch class has an active frame | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kind changes](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kind-changes). Submit those callers in the same batch |
 | Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
 | Changing the superclass in a way that drops an existing superclass | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
-| An ordinary class removing an interface while it belongs to an interface group of the batch (it implements an interface the batch redefines, or is the superclass of a group member), or without member mapping or dispatch sealing | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | See [removing interfaces](#removing-interfaces) |
+| Removing an interface without member mapping or dispatch protection | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | See [removing interfaces](#removing-interfaces) |
 
 When retirement is unavailable, method deletion or signature changes are rejected with `UNSUPPORTED_REDEFINITION_METHOD_DELETED` (67), and field deletion, type changes or storage changes with `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED` (64). Changing native to Java is rejected with 71. Adding an interface or changing the superclass is rejected with 66 when no probed class layout is available. Superclass changes also require verification redirection.
 
@@ -100,9 +100,9 @@ The following conflicts reject the transaction:
 ## Removing interfaces
 
 - An ordinary class may stop implementing an interface. Its existing instances and those of loaded subclasses immediately stop being instances of that interface (`instanceof`, `isInstance` and casts follow the new hierarchy).
-- Verified code that still calls them as the removed interface, and old references stored in fields or arrays typed with it, throw `IncompatibleClassChangeError` when calling its methods, as on a JVM. This holds for interpreted code, JIT-compiled code and boot code (for example `Thread.run` calling `Runnable.run`). The class's own static fields declared with the removed interface become `null` when the value no longer implements it, as on JBR; other old references are not cleared.
+- Instance fields clear incompatible references according to JBR's holder and instance-update rules; static copying separately follows JBR FieldCopier's redefining-class and signature rules. See the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces). An existing `Thread` may lose its target, making `run()` do nothing; restoring the interface does not restore cleared fields. Array elements, locals and references created after narrowing are not subject to that transaction's field cleanup. Calling a no-longer-implemented interface through a retained reference throws `IncompatibleClassChangeError`, including interpreted, JIT and boot calls.
 - Default methods the class inherited from the removed interface disappear: old bytecode that calls one on the class throws `NoSuchMethodError`.
-- Interface calls on these classes are looked up through their dispatch slots and become slightly slower. Concrete subclasses loaded later inherit this, except a concrete subclass, loaded later, of an abstract class that lost the interface; see [removing interfaces](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces) in the engine design.
+- The first narrowing keeps dispatch protection active for the process, including later structural rebuilds and newly linked classes, even concrete descendants of abstract ancestors. Interface calls need lookup; the cost of process-wide later linking and field snapshots has not been quantified.
 - An interface target may also remove a parent interface: its subinterfaces, implementations and their subclasses lose it, with the same semantics; with Proxy implementations it is rejected with 66.
 ## Method kinds
 
@@ -147,14 +147,18 @@ Appending only adds to the end of the loader's path, cannot be undone and does n
 
 ## Comparison with JBR DCEVM
 
-This table compares JetBrains Runtime's enhanced redefinition (`-XX:+AllowEnhancedClassRedefinition`), listing only behavior that differs or needs a note. Both accept structural changes to methods, fields and modifiers, superclass widening, adding and removing interfaces, interface members, Proxy implementations and `Thread` subclasses.
+The target semantics come from fixed JBR DCEVM sources and matching runtime comparisons (`-XX:+AllowEnhancedClassRedefinition`). This table records current differences and important boundaries, not complete parity. Rejecting a change with an error code does not satisfy the parity goal; differing paths still need correction.
 
 | Change | JBR DCEVM | art-dcevm |
 | --- | --- | --- |
 | A new abstract interface method that a loaded implementation does not implement | Accepted; calls throw `AbstractMethodError` | Rejected with 63 before commit, naming the class; Proxy implementations behave as on JBR |
-| A method switching between static and instance, or becoming private, while loaded code outside the batch still calls the old kind | Accepted; calls re-resolve and throw `IncompatibleClassChangeError` | Rejected with 71: ART re-resolves without checking the invoke kind and cannot throw that error. Submitting the callers in the same batch is accepted |
+| An instance method becomes static while loaded code outside the batch still calls the old kind | Accepted; calls re-resolve and throw `IncompatibleClassChangeError` | Rejected with 71: ART re-resolves without checking the invoke kind and cannot throw that error. Submitting the callers in the same batch is accepted |
 | Superclass narrowing (the new chain omits an old superclass) | Rejected | Rejected with 66 |
-| A concrete subclass, loaded later, of an abstract class that lost an interface | Dispatches by the new hierarchy | May dispatch to another method in the same IMT slot; see [engine risks](STRUCTURAL_REDEFINE_ENGINE.en.md#risks) |
-| Switching a class between class, interface and other kinds | Accepted; old call sites throw `IncompatibleClassChangeError` | Rejected with 70 |
+| A concrete subclass, loaded later, of an abstract class that lost an interface | Dispatches by the new hierarchy | Persistent pre-publication protection and later rebuilds preserve dispatch; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces) |
+| Switching a class between class, interface and other kinds | Accepted | Rejected with 70 |
+| Making a class abstract while its own instances exist | Accepted | Rejected with 70 |
+| Instance reference-field retyping | Compatibility checks final class-chain and directly declared interface names | Still uses general assignability; not fully aligned |
 | Boot classes, `Thread` and its supertypes, arrays, proxy classes themselves | Partly redefinable | Rejected under ART's rules |
 | New classes (new lambdas, anonymous classes) | Defined by tools such as HotswapAgent | Appended to the class loader by the reload tool; see [providing new classes](#providing-new-classes) |
+
+Reference-field cleanup after narrowing, static copying and retained JNI/MethodHandle call paths have separate rules and evidence scopes; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces). DEX also loses original ClassFile field declaration order, so equivalent instance-update behavior for declaration-only reorderings remains unproven.

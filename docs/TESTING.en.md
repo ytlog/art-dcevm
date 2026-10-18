@@ -24,6 +24,16 @@ Host substitutes execute no ART objects, real hooks or collector and cannot repl
 
 `python3 tools/test-structural-install-host.py` compiles shared production modules with fake public JNI/JVMTI tables and ShadowHook services. It checks installation order, idempotence, no JNI override attempt after inline-hook failure, base-capability fallback after JNI-table failure, and independent Thread preparation/diagnostic preservation when mapping names are missing. It executes no ART objects, collector or real hooks and does not replace device ABI validation.
 
+## JBR comparisons
+
+`tools/compare-jbr-interface-removal.py` compiles the shared Java fixtures to ClassFile and runs them on fixed JBR `21.0.11+10-b1163.116`, using source revision `cf1f197170a0f04c6559feb873e362583be021d1`. A mismatched runtime is rejected as evidence for that reference:
+
+```sh
+python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
+```
+
+Replace the `JBR_REFERENCE_HOME` path placeholder. Raw output and fixture, harness and runtime hashes stay under ignored `build/evidence/`. These comparisons cover specific interface-narrowing and reference-field rules, not complete JBR parity. ART device tests must check matching values, errors, field clearing and behavior after failure.
+
 ## Device regression
 
 Replace the `DEVICE_SELECTOR` placeholder and use an anonymous `--device-id`. The runner installs the requested APK, stops the previous sample process, removes its report and starts from initial definitions. It verifies the installed APK SHA-256 and complete scenario order, operating on the sample package `dev.artdcevm.lab`.
@@ -37,7 +47,7 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
   --scenario-group full --checkjni-mode checkjni
 ```
 
-`ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` helps isolate abstract additions and `thread-subclass` runs the application `Thread` subclass scenario alone and `interface-removal` the interface removal and restoration scenarios, `proxy-interface` the Proxy implementation scenarios, and `interface-drop-parent` an interface dropping a parent; none of them replaces full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
+`ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` isolates abstract additions; `thread-subclass` covers application `Thread` subclasses. `interface-removal` covers removal, repeated rebuilds, late descendants of abstract ancestors, JBR reference-field cleanup and restoration. `proxy-interface` covers Proxy implementations and grouped updates; `interface-drop-parent` covers an interface dropping a parent. `static-narrow` checks JBR static copying and `field-retype` checks field retyping. These groups do not replace full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
 
 ## Recovery and fault isolation
 
@@ -147,8 +157,8 @@ A symbol's presence proves only that it can be located. Runtime probes check the
 | `methodDeletion`, `methodSignatureChange`, `interfaceAddition` | Method-retirement hooks are installed |
 | `fieldDeletion`, `fieldTypeChange`, `memberDeletion`, `memberTypeChange` | Field guards are also available |
 | `superclassWidening` | Method-retirement hooks and verification redirection are both installed |
-| `interfaceRemoval` | Method-retirement hooks are installed and interface dispatch sealing is available; an ordinary class may remove an interface |
-| `interfaceDispatchSealing` | `available` or `unavailable: reason` (named `Runtime::CreateImtConflictMethod`, `LinearAlloc::Alloc` or the class-loader allocator read is unavailable) |
+| `interfaceRemoval` | Method retirement, pre-publication dispatch protection, instance-reference checks and ClassPrepare snapshot monitoring are available; an ordinary class may remove an interface |
+| `interfaceDispatchSealing` | `available: ...` or `unavailable: reason`; records the executed pre-publication linking boundary and canonical source, and also requires named allocation services and the class-loader allocator read |
 | `hierarchyChange`, `fullDcevmComplete` | Always false: superclass narrowing is unsupported and full DCEVM is not complete |
 | `interfaceRedefinition` | Boolean: true only after installation and all Class/Thread/HandleScope/holder probes pass. False before probing, when versions/services are unavailable, or after process-wide probe disablement. A target-specific rejection does not clear it |
 | `interfaceRuntime` | `unavailable`, `unverified: interface runtime declarations`, `verified: androidNN Class/Thread/HandleScope/holder probes`, or `disabled: reason`. Only API 33–36 are allowed; other versions are disabled with a reason |
