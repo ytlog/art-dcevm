@@ -161,7 +161,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 删除的 default/abstract 声明按普通退役映射到自身；重链接后的实现类不再携带的 copied default/miranda 走现有“消失的 copied 方法映射到声明类的 canonical 成员”路径，canonical 即已退役的旧声明，因此 DexCache 清除、重新解析抛 `NoSuchMethodError`，JNI、反射与 MethodHandle 由现有守卫拒绝。default 改为 abstract 与新增 abstract 相同（见下文第 4 条）；abstract 改为 default 复用新增 default 的 `subtype_shadows` 检查。字段沿用普通类的字段退役与静态字段复制；接口在准入时已初始化，新增静态字段取默认值。
 
-新增父接口时，Native 阶段经公开 JVMTI 读取新父接口及其目标原先未继承（`IsAssignableFrom` 判定）的父接口所声明的虚方法。策略据此拒绝被目标 static/private 方法遮蔽的方法，以及选择服务不可用时遮蔽实现类链方法的 default；新父接口的 abstract 方法与新增 abstract 相同，实现类缺少实现时调用抛 `AbstractMethodError`。新增的接口若由同批重建（它本身或其父接口是目标），新类必须链接其替换类，否则 copied default 与分派槽位会停留在提交前的旧版本。目标的 `Requirements::linked_interfaces` 记下新增接口；分配该类（ART 自身的分配，或其所在接口组的分配）之前先完成那些重建，ART 链接期间的类型查找与 `CheckVerification` 期间的 `FindClass` 都把旧接口换成替换类。重建互相依赖或同组内顺序颠倒时以 66 拒绝。接口始终使用结构路径，`Abilities::interface_members` 仅在引擎拥有成员映射时启用。
+新增父接口时，Native 阶段经公开 JVMTI 读取新父接口及其目标原先未继承（`IsAssignableFrom` 判定）的父接口所声明的虚方法。策略据此拒绝被目标 static/private 方法遮蔽的方法，以及选择服务不可用时遮蔽实现类链方法的 default；新父接口的 abstract 方法与新增 abstract 相同，实现类缺少实现时调用抛 `AbstractMethodError`。新增的接口若由同批重建（它本身或其父接口是目标），新类必须链接其替换类，否则 copied default 与分派槽位会停留在提交前的旧版本。目标的 `Requirements::linked_interfaces` 记下新增接口，整批分配图把最终接口和父类作为依赖；ART 链接期间的类型查找与 `CheckVerification` 期间的 `FindClass` 都把旧类换成替换类。组之间互相引用可按类粒度交错分配，只有最终类图真正成环时才拒绝 61。接口始终使用结构路径，`Abilities::interface_members` 仅在引擎拥有成员映射时启用。
 
 这复用接口现有的重建组：接口、已加载子接口、实现类及其子类按新接口重新 `LinkClass`，未提交 DEX 的实现类使用原 DEX 与私有 DexCache，同样获得 copied default。新方法没有旧对应项，不进入旧方法映射。类链上的 public 实现优先于 default；更具体的子接口覆盖父接口，原 miranda 可变为 default 拷贝。实例迁移、引用改写、去优化与缓存失效仍全部由 ART 完成。
 
@@ -302,6 +302,8 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 ## 新增接口
 
+接口与普通类组合使用下节的整批最终层级排序；组之间互相引用不等于类依赖成环。接口组只决定迁移归属，不再决定连续分配顺序。
+
 ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把新类直接置为 kLoaded 后调用 `LinkClass`。`LinkClass` 对新 DEX 接口列表中的每一项调用 `ClassLinker::LookupResolvedType`（[16: NonProxyInterfacesAccessor](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/class_linker.cc#7183)；11 为 [`Class::GetDirectInterface`](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/mirror/class.cc#1217)），只在新类的类加载器的类表中查找。找不到时返回 null，release 构建会解引用空指针；找到时只检查它是不是接口，不检查可访问性。因此：
 
 - **预先解析**：进入 ART 之前，对新增的每个接口调用 `Class.forName(name, false, 目标类的定义加载器)`。11–17 的 `Class.forName` 都调用 `ClassLinker::FindClass`，后者把返回的类插入发起加载器的类表，即使该类由父加载器定义（[16: class_linker.cc#3444](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/class_linker.cc#3444)），`LinkClass` 随后就能查到。接口不在此初始化。`CheckClass` 读取的是 ClassFileLoadHook 之后的 DEX，那里出现的未解析接口按策略拒绝。
@@ -318,12 +320,14 @@ ART 的 `AllocateNewClassObject` 不调用 `LoadSuperAndInterfaces`，而是把�
   - 循环（B 扩展 T）：`CIRCULAR_CLASS_DEFINITION`（61）；
   - 不扩展 A（收窄）：66；
   - 新定义或已加载子类覆写了 B 链上的 final 方法：62；
-  - 同批还有同样改变父类的子类：66；同批的 T 的父类型（重建它会连同 T 一起重建）或 B 链上的接口只改方法体时接受（ART 对它们走非结构路径，类对象不变，新 T 链接到的正是它们），若其最终 DEX 在 `CheckClass` 中要求结构路径（成员变化、改父类、新增接口或属于接口重建组）则 66；
-  - 同批 B 链上、A 之下的普通类（B 本身或 B 与 A 之间的类）结构变化时接受：ART 按父类深度排序条目，同深度次序任意，因此接口模块的 `FinishNewClassAllocations` Hook 在分配 T 之前先按深度为这些链上条目调用分配（已初始化的条目 ART 直接返回，链上更深的类随其祖先的重建分配）；`AllocateNewClassObject` 把父类槽位写为 holder 中重建出的 B′（按各条目 OldClasses/NewClasses 的身份对应查找，B 不在批次中而随其祖先重建时同样适用）；校验 T 时 `FindClass` 解析出的旧链上类按这些条目映射到替换类；`CollectAndCreateNewInstances` 之后核对新类的父类为 B′。没有接口运行时（批次无接口目标）时，按各候选版本的固定 holder 声明自检，只接受唯一满足 holder 不变式的版本。链上类同样改父类或属于接口重建组时 66；只改成员的子类可以同批，ART 以其新 DEX 把它分配在新 T 之下；
   - 没有自有成员映射或校验重定向：66（B 会让 T 中的 copied default/miranda 消失，所以需要自有映射）。
-- **分配**：`AllocateNewClassObject` 把旧父类放进调用方 handle scope 中的槽位，再交给 `LinkClass`。Hook 在该槽位写入 B（槽位仍是 GC 根），新类因此链接在 B 之下；已加载子类随后以新 T 为父类重建。`CollectAndCreateNewInstances` 之后核对新类的父类确为 B，否则以 66 拒绝。
+- **批内分配**：批次先冻结迁移归属，再把全部替换类按最终直接父类和接口依赖做一次拓扑排序。接口组沿用 `chain_rebuilds`、`linked_interfaces` 和已加载类型快照；普通结构根使用同样的私有类数组。结构父类子树并入接口组，剩余普通根只由 ART 的 initial-structural 标志选择，每个旧类恰有一个拥有者。分配顺序可以跨组交错，数组仍按原拥有者顺序保存。节点以有根类身份区分加载器，父类 handle 和私有 DexCache 中的接口查找均链接最终替换类；成员映射与校验重定向复用这些数组。最终图有环时提交前拒绝 61；原层级中父子两个目标同时改父类仍按固定 JBR 拒绝 66。
 - **校验**：自 Android 13 起，校验器按描述符经类加载器解析类本身，得到的仍是旧类（父类为 A），新构造器调用 B 的构造器就会校验失败；Android 11/12 的 ART 自己把新类写入新 DexCache。引擎 Hook `ClassRedefinition::CheckVerification`：校验该类期间，本线程的 `ClassLinker::FindClass`（两种签名，每套库至少有一种）对该描述符返回 holder 中的新类对象。若某版本的校验器走其他解析路径，校验失败并以 62 拒绝，不会提交未校验的代码。校验同批子类 S 时，本线程 `FindClass` 原样解析出的旧 T 按身份（holder 槽位中的原类）改为新 T；ART 先校验父类型，引擎在校验 T 时记下其 holder 条目。没有该重定向时，把 `this` 当作 B 传递的 S 代码以 62 校验失败。
-- **字段复制**：ART 的 `CopyFields` 逐层配对新旧父类链，链长不同就会 `CHECK` 失败。由于 B 扩展 A，新 T 中 A 链各字段的偏移与旧 T 相同。Update 开始时把新 T 的父类指针暂时改回 A，ART 于是配对 (T', T)、(A, A) 等层级，复制 T 自身与全部继承字段；visitor 入口与 Update 结束时恢复为 B。
+- **字段复制**：ART 的 `CopyFields` 逐层配对父类链。计划为拥有者数组中的每个替换类预留临时父类槽位；Update 时略过新插入的祖先，并配对旧祖先的最终替换类，保留同批布局变化后的正确字段偏移。反射 visitor 与 Update 退出时恢复最终链。这样旧实例保留自身及旧父类链的兼容字段，新父类字段为零；每个实例只提交一次迁移。增强库不复制实例、不改写对象引用，也不重做 ART 的去优化或缓存失效。
+
+Native 快照对层级不变的纯普通类批次沿用 ART 等价的原排序；接口或层级变化批次统一规划全部替换类。进入 Run 之前经公开 JVMTI admission 取得真实 ART HandleScope 做声明探测，也覆盖此前没有 admission 的 RetransformClasses 路径。
+
+固定 `android-13.0.0_r1` / `android-16.0.0_r1` 的 `ti_redefine.cc` 在此流程一致：`FinishNewClassAllocations` 原先逐条目分配目标及旧子树，`AllocateNewClassObject` 直接使用传入父类 handle，`CollectAndCreateNewInstances` 只收集 initial-structural 拥有者，`UpdateClassStructurally` 消费它的类与实例对应数组。holder 每条目 13 槽：3 为新 DexCache，4 为旧类，8 为新类，9/10 为旧/新实例，11/12 为旧/新类数组。统一计划只替换分配决策和声明配对，使用固定声明及命名 ELF 服务；运行时 Thread、HandleScope、Class、holder 探测仍是前置条件。
 
 B 不在重定义时初始化，其静态初始化照常在首次需要时执行；已有实例不执行 B 的构造器。
 
@@ -453,7 +457,7 @@ API 30–33 的[固定解释器源码](https://android.googlesource.com/platform
 
 `Install` 唯一构造引擎的进程状态，并按依赖顺序调用各模块的 `Prepare`；退役与接口模块在首次 `Prepare` 时创建自己的进程状态，此后随进程保留，模块内只经这一条路径访问。接口运行时命名服务可用时才创建 `Backend`；它只暴露引擎与校验重定向调用的操作，准入与失败清理留在模块内部。引擎与校验重定向经同一次发布原子地看到同一个可空后端指针，缺失后端时保留原有能力与拒绝诊断。后端一旦创建便随进程保留；安装回滚或降级只撤销已发布的可用视图，不销毁已被 ART 栈上 Hook 借用的对象。原函数指针、Hook 令牌、进程能力和诊断不再各自散落为文件级全局状态；线程局部的字段 ID 捕获与接口计时仍保持原生命周期。
 
-`Context` 的模块专属内容已归回 Part：`verification_redirect` 持有当前校验作用域，引擎批次持有实例检查要求与子类监视指针。Native 阶段预先创建校验 Part，ART Hook 不为它分配内存；嵌套事务随整个上下文恢复各 Part。`targets`、拒绝原因、`layouts/probed` 与嵌套关系继续共享。`Requirements::superclass` 保留，因为引擎负责分配与提交前父类验收，成员映射还需据它准备字段复制时的父类配对；移入引擎 Part 会使映射反向依赖引擎，移入映射 Part 又会让分配决策依赖映射内部。`descriptor`、`member_mapping` 与 `redirect_verification` 同样在引擎、映射或校验模块间传递约束，不强行私有化。布局与策略共用 `evolution/modifiers.h`，布局不再依赖策略。
+`Context` 的模块专属内容已归回 Part：`verification_redirect` 持有当前校验作用域，引擎批次持有实例检查要求与子类监视指针。Native 阶段预先创建校验 Part，ART Hook 不为它分配内存；嵌套事务随整个上下文恢复各 Part。`targets`、拒绝原因、`layouts/probed` 与嵌套关系继续共享。`Requirements::superclass` 保留，因为引擎负责分配与提交前父类验收，成员映射则从整批替换数组准备字段复制时的父类配对；移入引擎 Part 会使映射反向依赖引擎，移入映射 Part 又会让分配决策依赖映射内部。`descriptor`、`member_mapping` 与 `redirect_verification` 同样在引擎、映射或校验模块间传递约束，不强行私有化。布局与策略共用 `evolution/modifiers.h`，布局不再依赖策略。
 
 ```mermaid
 flowchart TD

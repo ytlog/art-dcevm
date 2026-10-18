@@ -85,7 +85,18 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   }
   void* object = klass.Get<void>();
   Target* target = Find(object);
-  if (!target) return reinterpret_cast<Admission>(original)(klass, message);
+  if (!target) {
+    const auto result = reinterpret_cast<Admission>(original)(klass, message);
+    State* state = CurrentState();
+    if (result == JVMTI_ERROR_NONE && state && !state->runtime && !state->groups.empty() && RuntimeAvailable())
+      for (const auto& ordinary : state->class_targets)
+        if (Decode(ordinary.klass) == klass.Get<void>()) {
+          if (const char* reason = SelectRuntime(klass, ordinary))
+            return Reject(message, JVMTI_ERROR_NOT_AVAILABLE, reason);
+          break;
+        }
+    return result;
+  }
   State* state = CurrentState();
   state->rejected_target = target;
   state->rejection_class = nullptr;

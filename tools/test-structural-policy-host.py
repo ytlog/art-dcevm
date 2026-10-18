@@ -748,7 +748,39 @@ int main(int argc, char** argv) {
       parent.final_methods.insert({"other", "()V"});
       expect(JVMTI_ERROR_FAILS_VERIFICATION, "subclass override of a final method");
       parent.final_methods.clear();
-      parent.related_in_batch = true;
+      // s1: the old ancestor adds members while C moves under B.
+      auto ancestor = Base(), ancestor_next = ancestor;
+      ancestor_next.fields.push_back({"added", "J", acc::kAccPublic});
+      ancestor_next.methods.push_back({"extra", "()I", acc::kAccPublic});
+      Require(policy::Evaluate(ancestor, ancestor_next, {}, mapping).error == JVMTI_ERROR_NONE &&
+              policy::Evaluate(live, next, widened, mapping).superclass_changed, "s1 structural old ancestor");
+      // s3/s5/s6: a rebuilt interface composes with a moving target or
+      // a moving ancestor of an unsubmitted implementation. Loaded subtypes
+      // do not prohibit these moves; only s2's moving-descendant fact does.
+      auto contract = Base();
+      contract.access = acc::kAccPublic | acc::kAccInterface | acc::kAccAbstract;
+      contract.fields.clear(); contract.methods = {{"i", "()I", acc::kAccPublic}};
+      auto contract_next = contract;
+      contract_next.methods.push_back({"j", "()I", acc::kAccPublic});
+      mapping.interface_members = true;
+      for (int combination : {3, 5, 6}) {
+        auto before = live, after = next;
+        auto hierarchy = widened;
+        if (combination == 5) before.interfaces = after.interfaces = {"Lfixture/I;"};
+        hierarchy.loaded_subclasses = combination == 6;
+        Require(policy::Evaluate(contract, contract_next, {}, mapping).error == JVMTI_ERROR_NONE &&
+                policy::Evaluate(before, after, hierarchy, mapping).error == JVMTI_ERROR_NONE,
+                "s3/s5/s6 interface and moving implementation chain");
+      }
+      // s4: the new-chain B moves too, but is outside C's old subtree.
+      auto parent_before = live, parent_after = live;
+      parent_before.descriptor = parent_after.descriptor = "Lfixture/Parent;";
+      parent_after.superclass = "Lfixture/B2;";
+      Require(policy::Evaluate(parent_before, parent_after, widened, mapping).superclass_changed &&
+              policy::Evaluate(live, next, widened, mapping).error == JVMTI_ERROR_NONE,
+              "s4 two moves in different old subtrees");
+      // s2 alone preserves the explicit moving-descendant restriction.
+      parent.moving_subclass_in_batch = true;
       expect(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "moving subclass in batch");
     }
     // Interfaces: additions need a type resolved through the target's loader

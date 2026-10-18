@@ -100,10 +100,6 @@ struct StaticFieldPlan {
   std::vector<jobject> compatible;
 };
 struct MappingPlan {
-  // The target's new class links under a new superclass that extends the old
-  // one: while ART copies fields it pairs the old and new superclass chains
-  // level by level, so the new class temporarily names the old superclass.
-  bool superclass_changed = false;
   // For each old native method, UpdateClassStructurally copies the JNI entry
   // into the new method found by name (ti_redefine.cc, 11--17): a deleted one
   // finds nothing or an inherited method, a Java replacement keeps other data
@@ -583,18 +579,25 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
       swapped_field_arrays.emplace_back(slot, *slot);
       *slot = reinterpret_cast<uintptr_t>(swap.kept.data());
     }
-    // ART's CopyFields pairs target_class->GetSuperClass() with the old
-    // class's superclass. The new superclass extends the old one and shares
-    // its field layout, so pairing the old superclass chain with itself copies
-    // every inherited field; the new superclass's own fields stay zero.
+    // ART pairs superclass chains level by level. For every replacement,
+    // temporarily skip newly inserted ancestors but retain the replacement of
+    // each OLD ancestor: its field offsets may have changed in this batch.
+    // This changes only ART's declaration pairing; ART copies all instances.
     for (const HiddenNative& method : plan->hidden_natives) {
       hidden_natives.emplace_back(method, *method.quick_entry);
       method.access_flags->fetch_and(~evolution::kAccNative);
     }
-    if (plan->superclass_changed) {
-      uint32_t* slot = layout->superclass(data.Classes(false)->Get<void>(0));
-      swapped_superclasses.emplace_back(slot, *slot);
-      *slot = *layout->superclass(data.Classes(true)->Get<void>(0));
+    if (const auto thread = runtime_thread::Ready()) {
+      for (int32_t i = 0; i < old_classes->length; ++i) {
+        uint32_t* slot = layout->superclass(data.Classes(false)->Get<void>(i));
+        uint32_t parent = *layout->superclass(old_classes->Get<void>(i));
+        if (void* replacement = class_layout::Rebuilt(*thread, context->holder,
+              reinterpret_cast<void*>(static_cast<uintptr_t>(parent))))
+          parent = class_layout::Reference(replacement);
+        if (*slot == parent) continue;
+        swapped_superclasses.emplace_back(slot, *slot);
+        *slot = parent;
+      }
     }
     if (!plan->retyped.empty() || !plan->statics.empty())
       if (const auto thread = runtime_thread::Ready()) layout->copy_retyped(*thread, data, *plan);
@@ -660,7 +663,7 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
   return true;
 }
 
-bool Plan(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
+bool Plan(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix*,
           const RedefinitionDataIter& data, int selected, std::string* why) {
   auto* context = transaction::Current();
   MappingPlan plan;
@@ -668,8 +671,10 @@ bool Plan(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix*
     context->mapping.reset();
     return false;
   }
-  const auto* target = context->Find(self);
-  plan.superclass_changed = target && target->superclass;
+  // No allocation is allowed after ART's commit point. One Update owns at
+  // most this many temporary superclass slots and restores them before return.
+  swapped_superclasses.reserve(std::max(swapped_superclasses.capacity(),
+      static_cast<size_t>(data.Classes(true) ? data.Classes(true)->length : 0)));
   if (!context->mapping) context->mapping = std::make_unique<Plans>();
   static_cast<Plans*>(context->mapping.get())->by_index[data.index] = std::move(plan);
   return true;

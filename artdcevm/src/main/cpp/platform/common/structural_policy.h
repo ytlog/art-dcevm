@@ -37,7 +37,7 @@ struct NewSuperclass {
   // declare, as far as the target's package may override them.
   std::set<MemberKey> final_methods;
   // A subclass of the target in the batch changes its own superclass too.
-  bool related_in_batch = false;
+  bool moving_subclass_in_batch = false;
 };
 
 // Loaded classes related to a redefinition target, read through public JVMTI.

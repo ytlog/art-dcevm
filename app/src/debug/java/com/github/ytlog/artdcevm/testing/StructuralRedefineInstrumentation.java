@@ -179,7 +179,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         boolean ordinaryOnly = arguments != null && "ordinary".equals(arguments.getString("scenario"));
         if (!ordinaryOnly && arguments != null && arguments.containsKey("scenario")) {
             String isolated = arguments.getString("scenario");
-            if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
+            if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
+            else if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
             else if ("thread-subclass".equals(isolated)) runThreadSubclassScenario();
@@ -367,6 +368,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             runInterfaceBatchScenarios();
             runInterfaceImplementationScenarios();
             runInterfaceOverlapScenarios();
+            runBatchCombinationScenarios();
             runMultiInterfaceScenarios();
             runPointerIdScenarios();
             runCopiedDefaultScenario();
@@ -2035,18 +2037,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("existingAdded", 0, InterfaceOverlapFixture.Parent.class.getField("added").getInt(instance));
             scenario.check("marker", 73, instance.marker);
         });
-        String superclassSchema = memberSchema(InterfaceOverlapFixture.Parent.class);
-        runScenario("interface-overlap-superclass", 66, scenario -> {
-            scenario.expectRejectionBy(InterfaceOverlapFixture.Parent.class);
+        runScenario("interface-overlap-superclass", 0, scenario -> {
             scenario.redefine(new Class<?>[]{InterfaceOverlapFixture.Contract.class, InterfaceOverlapFixture.Parent.class},
                     "interface-overlap-superclass", "interface-overlap-superclass");
-            scenario.check("rejectionReason", true,
-                    DcevmRuntime.capabilities().getString("lastRejection").contains("superclass change overlaps"));
-            scenario.check("unchangedParent", superclassSchema, memberSchema(InterfaceOverlapFixture.Parent.class));
-            scenario.check("superclassUnchanged", "java.lang.Object",
+            scenario.check("newSuperclass", InterfaceOverlapFixture.Base.class.getName(),
                     InterfaceOverlapFixture.Parent.class.getSuperclass().getName());
-            scenario.check("interfaceUnchanged", 34, contract.value());
-            scenario.check("parentUnchanged", 23, instance.parentValue());
+            scenario.check("oldIsBase", true, InterfaceOverlapFixture.Base.class.isInstance(instance));
+            scenario.check("interfaceAfter", 35, contract.value());
+            scenario.check("parentAfter", 23, instance.parentValue());
             scenario.check("marker", 73, instance.marker);
         });
         Object other = Class.forName("com.github.ytlog.artdcevm.fixture.InterfaceOverlapFixture$OtherImplementation")
@@ -3842,6 +3840,106 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     // A superclass change may share the batch with a subclass of the moving
     // class; that subclass verifies against the moving class's new version.
+    private static Class<?> combinationType(int index, String name) throws Exception {
+        return Class.forName("com.github.ytlog.artdcevm.fixture.BatchCombinationFixture$S" + index + "$" + name);
+    }
+
+    private void runBatchCombinationScenarios() throws Exception {
+        String[][] names = {{"A", "C"}, {"C", "D"}, {"I", "C"}, {"B", "C"}, {"I", "C"}, {"I", "Base"}};
+        for (int n = 1; n <= 6; ++n) {
+            final int index = n;
+            Class<?> moving = combinationType(n, n == 6 ? "Base" : "C");
+            Class<?> concrete = combinationType(n, n == 6 ? "Impl" : "C");
+            Class<?> parent = combinationType(n, "B");
+            Object old = concrete.getConstructor().newInstance();
+            String own = n == 6 ? "impl" : "c";
+            concrete.getField(own).setInt(old, 73);
+            if (n == 1) concrete.getField("a").setInt(old, 71);
+            if (n == 6) concrete.getField("base").setInt(old, 71);
+            Object oldParent = parent.getConstructor().newInstance();
+            if (n == 4) parent.getField("b").setInt(oldParent, 79);
+            Class<?>[] types = new Class<?>[names[n - 1].length];
+            String[] variants = new String[types.length];
+            String[] schemas = new String[types.length];
+            for (int k = 0; k < types.length; ++k) {
+                types[k] = combinationType(n, names[n - 1][k]);
+                variants[k] = "batch-combinations-next";
+                schemas[k] = memberSchema(types[k]);
+            }
+            if (n == 2) {
+                Object child = combinationType(n, "D").getConstructor().newInstance();
+                runScenario("batch-combination-s2", 66, scenario -> {
+                    scenario.expectRejectionBy(moving);
+                    scenario.redefine(types, variants);
+                    scenario.check("oldHierarchy", true, moving.getSuperclass() == combinationType(index, "A"));
+                    scenario.check("childHierarchy", true, child.getClass().getSuperclass() == moving);
+                    scenario.check("own", 73, concrete.getField(own).getInt(old));
+                    scenario.check("oldDispatch", 1, concrete.getMethod("id").invoke(old));
+                });
+                continue;
+            }
+            runScenario("batch-combination-s" + n + "-abort", 110, scenario -> {
+                scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(types, variants);
+                scenario.check("faultHit", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                for (int k = 0; k < types.length; ++k)
+                    scenario.check("unchangedDefinition" + k, schemas[k], memberSchema(types[k]));
+                scenario.check("oldHierarchy", true, moving.getSuperclass() == combinationType(index, "A"));
+                scenario.check("own", 73, concrete.getField(own).getInt(old));
+                scenario.check("newInstance", false, parent.isInstance(concrete.getConstructor().newInstance()));
+                if (index == 3 || index == 5 || index == 6) {
+                    Object receiver = index == 3 ? oldParent : old;
+                    scenario.check("oldDefault", 1, combinationType(index, "I").getMethod("i").invoke(receiver));
+                }
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.check("afterGc", 73, concrete.getField(own).getInt(old));
+            });
+            runScenario("batch-combination-s" + n, 0, scenario -> {
+                scenario.redefine(types, variants);
+                scenario.check("newHierarchy", true, moving.getSuperclass() == parent);
+                scenario.check("instanceOf", true, parent.isInstance(old));
+                scenario.check("parentDispatch", 24, concrete.getMethod("parentDispatch").invoke(old));
+                scenario.check("own", 73, concrete.getField(own).getInt(old));
+                scenario.check("newParentZero", 0, parent.getField("parentValue").getInt(old));
+                scenario.check("addedZero", 0, concrete.getField("addedValue").getInt(old));
+                scenario.check("addedMethod", 99, concrete.getMethod("extraValue").invoke(old));
+                if (index == 1) {
+                    scenario.check("oldAncestor", 71, concrete.getField("a").getInt(old));
+                    scenario.check("ancestorAddedZero", 0L, concrete.getField("added").getLong(old));
+                    scenario.check("ancestorAddedMethod", 99, concrete.getMethod("extra").invoke(old));
+                    scenario.check("newParentFieldZero", 0, parent.getField("b").getInt(old));
+                    scenario.check("oldParentOwn", 2, parent.getField("b").getInt(oldParent));
+                }
+                if (index == 6) scenario.check("oldAncestor", 71, concrete.getField("base").getInt(old));
+                if (index == 4) {
+                    scenario.check("movingParentHierarchy", true, parent.getSuperclass() == combinationType(index, "B2"));
+                    scenario.check("movingParentOwn", 79, parent.getField("b").getInt(oldParent));
+                    scenario.check("movingParentZero", 0, parent.getField("parentValue").getInt(oldParent));
+                    scenario.check("newParentFieldZero", 0, parent.getField("b").getInt(old));
+                }
+                Object fresh = concrete.getConstructor().newInstance();
+                scenario.check("newInstance", true, parent.isInstance(fresh));
+                scenario.check("newOwn", index == 6 ? 5 : 3, concrete.getField(own).getInt(fresh));
+                scenario.check("newParentField", 2, parent.getField("parentValue").getInt(fresh));
+                scenario.check("newAdded", 97, concrete.getField("addedValue").getInt(fresh));
+                if (index == 3 || index == 5 || index == 6) {
+                    Class<?> contract = combinationType(index, "I");
+                    int value = index == 3 ? 8 : index == 5 ? 6 : 10;
+                    scenario.check("interfaceInstanceOf", true, contract.isInstance(old));
+                    scenario.check("interfaceDefault", value, contract.getMethod("j").invoke(old));
+                    scenario.check("newInterfaceDefault", value, contract.getMethod("j").invoke(fresh));
+                }
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.check("afterGc", 73, concrete.getField(own).getInt(old));
+                scenario.check("dispatchAfterGc", 24, concrete.getMethod("parentDispatch").invoke(old));
+                scenario.check("newParentZeroAfterGc", 0, parent.getField("parentValue").getInt(old));
+                if (index == 3 || index == 5 || index == 6)
+                    scenario.check("interfaceDefaultAfterGc", index == 3 ? 8 : index == 5 ? 6 : 10,
+                            combinationType(index, "I").getMethod("j").invoke(old));
+            });
+        }
+    }
+
     private void runSuperBatchScenarios() throws Exception {
         SuperBatchFixture.Child child = new SuperBatchFixture.Child();
         child.childValue = 13; child.own = 17; child.baseValue = 19;
@@ -3888,17 +3986,16 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         mover.moverValue = 31;
         SuperChainFixture.DeepMover deepMover = new SuperChainFixture.DeepMover();
         deepMover.value = 37;
-        String schema = memberSchema(SuperChainFixture.Subject.class);
-        runScenario("super-chain-old-structural", 66, scenario -> {
-            scenario.expectRejectionBy(SuperChainFixture.Base.class);
+        runScenario("super-chain-old-structural", 0, scenario -> {
             scenario.redefine(new Class<?>[]{SuperChainFixture.Subject.class, SuperChainFixture.Base.class},
                     "super-chain-structural", "super-chain-structural");
-            scenario.check("rejectionReason", true,
-                    DcevmRuntime.capabilities().getString("lastRejection").contains("changes structurally"));
-            scenario.check("unchangedSubject", schema, memberSchema(SuperChainFixture.Subject.class));
-            scenario.check("superclassUnchanged", SuperChainFixture.Base.class.getName(),
+            scenario.check("newSuperclass", SuperChainFixture.Middle.class.getName(),
                     SuperChainFixture.Subject.class.getSuperclass().getName());
+            scenario.check("oldIsMiddle", true, SuperChainFixture.Middle.class.isInstance(subject));
+            scenario.check("newParentZero", 0, SuperChainFixture.Middle.class.getField("middleValue").getInt(subject));
+            scenario.check("addedMethod", 3, SuperChainFixture.Subject.class.getMethod("added").invoke(subject));
             scenario.check("base", 19, subject.base());
+            scenario.check("own", 17, subject.own);
         });
         runScenario("super-chain-body", 0, scenario -> {
             Class<?> middle = SuperChainFixture.Middle.class;

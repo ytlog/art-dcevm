@@ -84,7 +84,6 @@ struct RuntimeBackend final : Backend {
   const std::vector<jclass>* GroupTypes(jclass klass) override;
   bool IsTarget(abi::arm64::ClassRedefinitionPrefix* self) override;
   bool IsAffected(abi::arm64::ClassRedefinitionPrefix* self) override;
-  bool SharesImplementationGroup(abi::arm64::ClassRedefinitionPrefix* self) override;
   void* VerificationClass(void* linker, std::string_view descriptor, abi::arm64::Handle loader) noexcept override;
   bool CompleteInstances(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*,
                          bool (*)(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*)) noexcept override;
@@ -131,7 +130,7 @@ struct Group {
   Members extended;              // With ancestor subtrees; empty without ancestors.
   std::optional<bool> uses_extended;  // Fixed by the group's allocation.
   int32_t owner = -1;                 // Index into the chosen members' orderings.
-  bool allocating = false;            // Detects rebuilds that link each other.
+  jclass class_root = nullptr;        // Ordinary subtree candidate, selected by holder flags.
   // Before allocation chooses, the widest candidate membership.
   const Members& Current() const {
     return uses_extended ? (*uses_extended ? extended : core) : ancestors.empty() ? core : extended;
@@ -147,10 +146,8 @@ struct Group {
 // ART 13's named NO_INLINE error service reports this selected pair while
 // linking. Native metadata, rooted by the allocation attempt's class roots.
 struct NonPublicFailure { ArtMethod* implementation = nullptr; ArtMethod* declaration = nullptr; int32_t index = -1; };
-struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; NonPublicFailure non_public; };
+struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; NonPublicFailure non_public; bool allocated = false; };
 struct Linking {
-  const std::vector<Handle>* old_types;
-  Handle new_types;
   Handle private_cache;
   int32_t index;
 };
@@ -163,6 +160,7 @@ struct State final : transaction::Part {
     if (object_class) jni->DeleteLocalRef(object_class);
   }
   std::vector<Target> targets;
+  std::vector<Target> class_targets;
   std::vector<Group> groups;
   JNIEnv* jni;
   jvmtiEnv* env;
@@ -183,9 +181,6 @@ struct State final : transaction::Part {
   // ART's Run of this transaction, and the class it is linking for a group.
   Attempt* attempt = nullptr;
   const Linking* linking = nullptr;
-  // ART allocates a class that links rebuilt interfaces: its lookups of
-  // their old classes resolve to the allocated replacements.
-  bool external = false;
   Handle selection_cache{};
   const std::vector<Handle>* selection_types = nullptr;
 };
@@ -257,6 +252,7 @@ inline jvmtiError Reject(std::string* message, jvmtiError error, const char* why
 void Disable(const char*) noexcept;
 // Named services are prepared and no runtime probe disabled the backend.
 bool RuntimeAvailable();
+const char* SelectRuntime(Handle, const Target&);
 Handle ReplacementRoot(const Group&);
 // The group whose current membership contains `klass`.
 const Group* AffectedGroup(void*);

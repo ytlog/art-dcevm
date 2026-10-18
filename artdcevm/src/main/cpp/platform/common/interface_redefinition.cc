@@ -32,17 +32,9 @@ std::string RuntimeBackend::TakeRejection() {
 }
 bool RuntimeBackend::IsTarget(ClassRedefinitionPrefix* self) { return Available() && Find(process->mirror_class(self)); }
 bool RuntimeBackend::IsAffected(ClassRedefinitionPrefix* self) { return Available() && AffectedGroup(process->mirror_class(self)); }
-bool RuntimeBackend::SharesImplementationGroup(ClassRedefinitionPrefix* self) {
-  const State* state = CurrentState();
-  if (!state) return false;
-  for (const auto& group : state->groups)
-    for (jclass ancestor : group.ancestors)
-      if (Decode(ancestor) == process->mirror_class(self)) return true;
-  return false;
-}
 void* RuntimeBackend::VerificationClass(void* linker, std::string_view descriptor, Handle loader) noexcept try {
   const State* state = CurrentState();
-  if (!state || !state->attempt || state->targets.empty()) return nullptr;
+  if (!state || !state->attempt) return nullptr;
 ARTDCEVM_TEST(
   if (ARTDCEVM_FAULT(17)) throw std::bad_alloc{};
 )

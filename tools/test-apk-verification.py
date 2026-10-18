@@ -435,6 +435,30 @@ class ApkVerificationTests(unittest.TestCase):
             invalid["checks"] = [x for x in invalid["checks"] if x["name"] != "nativeFallbackReason"]
             with self.assertRaises(runner.RunFailure): runner.validate_report(report, scenario_group="retransform")
 
+    def test_batch_combinations_require_zero_parent_fields_and_abort_recovery(self):
+        report = complete_report()
+        runner.validate_report(report)
+        for number in (1, 3, 4, 5, 6):
+            name = f"batch-combination-s{number}"
+            for key in ("newParentZero", "own", "afterGc", "newAdded", "newParentZeroAfterGc"):
+                changed = copy.deepcopy(report)
+                scenario = next(s for s in changed["scenarios"] if s["name"] == name)
+                scenario["checks"] = [c for c in scenario["checks"] if c["name"] != key]
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(changed)
+            changed = copy.deepcopy(report)
+            abort = next(s for s in changed["scenarios"] if s["name"] == name + "-abort")
+            abort["checks"] = [c for c in abort["checks"] if c["name"] != "unchangedDefinition0"]
+            with self.assertRaises(runner.RunFailure):
+                runner.validate_report(changed)
+        for number in (1, 4):
+            changed = copy.deepcopy(report)
+            scenario = next(s for s in changed["scenarios"] if s["name"] == f"batch-combination-s{number}")
+            check = next(c for c in scenario["checks"] if c["name"] == "newParentFieldZero")
+            check.update(expected=3, actual=3, passed=True)
+            with self.assertRaises(runner.RunFailure):
+                runner.validate_report(changed)
+
     def test_abstract_group_requires_all_focused_scenarios(self):
         report = complete_report()
         report["scenarios"] = [item for item in report["scenarios"]

@@ -166,8 +166,19 @@ SCENARIOS = (
     ("interface-overlap-body", ["interface-overlap-body", "interface-overlap-body"], 0),
     ("interface-overlap-structural", ["interface-overlap-structural", "interface-overlap-structural"], 0),
     ("interface-overlap-recovery", ["interface-overlap-next"], 0),
-    ("interface-overlap-superclass", ["interface-overlap-superclass", "interface-overlap-superclass"], 66),
+    ("interface-overlap-superclass", ["interface-overlap-superclass", "interface-overlap-superclass"], 0),
     ("interface-overlap-uncovered", ["interface-overlap-uncovered", "interface-overlap-uncovered"], 0),
+    ("batch-combination-s1-abort", ["batch-combinations-next"] * 2, 110),
+    ("batch-combination-s1", ["batch-combinations-next"] * 2, 0),
+    ("batch-combination-s2", ["batch-combinations-next"] * 2, 66),
+    ("batch-combination-s3-abort", ["batch-combinations-next"] * 2, 110),
+    ("batch-combination-s3", ["batch-combinations-next"] * 2, 0),
+    ("batch-combination-s4-abort", ["batch-combinations-next"] * 2, 110),
+    ("batch-combination-s4", ["batch-combinations-next"] * 2, 0),
+    ("batch-combination-s5-abort", ["batch-combinations-next"] * 2, 110),
+    ("batch-combination-s5", ["batch-combinations-next"] * 2, 0),
+    ("batch-combination-s6-abort", ["batch-combinations-next"] * 2, 110),
+    ("batch-combination-s6", ["batch-combinations-next"] * 2, 0),
     ("multi-interface-unrelated", ["multi-interface-body", "multi-interface-body"], 0),
     ("multi-interface-unimplemented", ["multi-interface-next", "multi-interface-invalid"], 0),
     ("multi-interface-recovery", ["multi-interface-next", "multi-interface-next"], 0),
@@ -288,7 +299,7 @@ SCENARIOS = (
     ("super-narrow", ["super-original"], 66),
     ("super-batch-moving", ["super-batch-moving", "super-batch-moving"], 66),
     ("super-batch-child", ["super-batch-child", "super-batch-child"], 0),
-    ("super-chain-old-structural", ["super-chain-structural", "super-chain-structural"], 66),
+    ("super-chain-old-structural", ["super-chain-structural", "super-chain-structural"], 0),
     ("super-chain-body", ["super-chain-body", "super-chain-body", "super-chain-body"], 0),
     ("super-chain-rebuilt", ["super-chain-rebuilt", "super-chain-rebuilt", "super-chain-rebuilt"], 0),
     ("method-descriptive-flags", ["method-descriptive-flags"], 0),
@@ -558,14 +569,25 @@ REQUIRED_CHECKS = {
     "multi-interface-after-shared": {"left": 13, "rightUnchanged": 22, "sharedLeft": 13, "sharedRight": 22},
     "multi-interface-covered": {"leftOnly": 52, "bothLeft": 52, "bothRight": 62, "newBothRight": 62,
         "leftOnlyMarker": 47, "bothMarker": 53, "allocatedOnce": 4, "snapshotOnce": 4, "bothRightAfterGc": 62},
+    'batch-combination-s1-abort': {'armed': 0, 'faultHit': 1, 'oldHierarchy': True, 'own': 73, 'newInstance': False, 'afterGc': 73},
+    'batch-combination-s1': {'newHierarchy': True, 'instanceOf': True, 'parentDispatch': 24, 'own': 73, 'newParentZero': 0, 'addedZero': 0, 'addedMethod': 99, 'newInstance': True, 'newOwn': 3, 'newParentField': 2, 'newAdded': 97, 'afterGc': 73, 'dispatchAfterGc': 24, 'newParentZeroAfterGc': 0, 'oldAncestor': 71},
+    'batch-combination-s2': {'oldHierarchy': True, 'childHierarchy': True, 'own': 73, 'oldDispatch': 1},
+    'batch-combination-s3-abort': {'armed': 0, 'faultHit': 1, 'oldHierarchy': True, 'own': 73, 'newInstance': False, 'afterGc': 73, 'oldDefault': 1},
+    'batch-combination-s3': {'newHierarchy': True, 'instanceOf': True, 'parentDispatch': 24, 'own': 73, 'newParentZero': 0, 'addedZero': 0, 'addedMethod': 99, 'newInstance': True, 'newOwn': 3, 'newParentField': 2, 'newAdded': 97, 'afterGc': 73, 'dispatchAfterGc': 24, 'newParentZeroAfterGc': 0, 'interfaceInstanceOf': True, 'interfaceDefault': 8, 'newInterfaceDefault': 8},
+    'batch-combination-s4-abort': {'armed': 0, 'faultHit': 1, 'oldHierarchy': True, 'own': 73, 'newInstance': False, 'afterGc': 73},
+    'batch-combination-s4': {'newHierarchy': True, 'instanceOf': True, 'parentDispatch': 24, 'own': 73, 'newParentZero': 0, 'addedZero': 0, 'addedMethod': 99, 'newInstance': True, 'newOwn': 3, 'newParentField': 2, 'newAdded': 97, 'afterGc': 73, 'dispatchAfterGc': 24, 'newParentZeroAfterGc': 0, 'movingParentHierarchy': True, 'movingParentOwn': 79, 'newParentFieldZero': 0},
+    'batch-combination-s5-abort': {'armed': 0, 'faultHit': 1, 'oldHierarchy': True, 'own': 73, 'newInstance': False, 'afterGc': 73, 'oldDefault': 1},
+    'batch-combination-s5': {'newHierarchy': True, 'instanceOf': True, 'parentDispatch': 24, 'own': 73, 'newParentZero': 0, 'addedZero': 0, 'addedMethod': 99, 'newInstance': True, 'newOwn': 3, 'newParentField': 2, 'newAdded': 97, 'afterGc': 73, 'dispatchAfterGc': 24, 'newParentZeroAfterGc': 0, 'interfaceInstanceOf': True, 'interfaceDefault': 6, 'newInterfaceDefault': 6},
+    'batch-combination-s6-abort': {'armed': 0, 'faultHit': 1, 'oldHierarchy': True, 'own': 73, 'newInstance': False, 'afterGc': 73, 'oldDefault': 1},
+    'batch-combination-s6': {'newHierarchy': True, 'instanceOf': True, 'parentDispatch': 24, 'own': 73, 'newParentZero': 0, 'addedZero': 0, 'addedMethod': 99, 'newInstance': True, 'newOwn': 5, 'newParentField': 2, 'newAdded': 97, 'afterGc': 73, 'dispatchAfterGc': 24, 'newParentZeroAfterGc': 0, 'oldAncestor': 71, 'interfaceInstanceOf': True, 'interfaceDefault': 10, 'newInterfaceDefault': 10},
     "interface-overlap-body": {"interfaceAfter": 32, "parentAfter": 22, "newInterface": 32,
         "newParent": 22, "marker": 73},
     "interface-overlap-structural": {"parentChanged": True, "interfaceAfter": 33, "parentAfter": 23,
         "existingAdded": 0, "newAdded": 19, "newInterface": 33, "newParent": 23, "marker": 73,
         "allocatedOnce": 3, "interfaceAfterGc": 33},
     "interface-overlap-recovery": {"interfaceAfter": 34, "parentAfter": 23, "existingAdded": 0, "marker": 73},
-    "interface-overlap-superclass": {"rejectionReason": True, "superclassUnchanged": "java.lang.Object",
-        "interfaceUnchanged": 34, "parentUnchanged": 23, "marker": 73},
+    "interface-overlap-superclass": {"newSuperclass": "com.github.ytlog.artdcevm.fixture.InterfaceOverlapFixture$Base",
+        "oldIsBase": True, "interfaceAfter": 35, "parentAfter": 23, "marker": 73},
     "interface-overlap-uncovered": {"interfaceAfter": 36, "otherAfter": 36, "parentAfter": 23,
         "existingAnother": 0, "newAnother": 29, "plainAdded": 61, "plainAnother": 0, "plainValue": 23,
         "marker": 73, "plainAfterGc": 61},
@@ -739,8 +761,8 @@ REQUIRED_CHECKS = {
     "super-narrow": SUPER_WIDENED_CHECKS,
     "super-batch-moving": {"rejectionReason": True,
         "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperBatchFixture$Base", "base": 19, "childValue": 13},
-    "super-chain-old-structural": {"rejectionReason": True,
-        "superclassUnchanged": "com.github.ytlog.artdcevm.fixture.SuperChainFixture$Base", "base": 19},
+    "super-chain-old-structural": {"newSuperclass": "com.github.ytlog.artdcevm.fixture.SuperChainFixture$Middle",
+        "oldIsMiddle": True, "newParentZero": 0, "addedMethod": 3, "base": 19, "own": 17},
     "super-chain-rebuilt": {"moverIdentity": True, "deepMoverIdentity": True, "middleExtra": "int",
         "existingMover": 181, "newMover": 184, "existingDeepMover": 137, "newDeepMover": 142, "subjectChain": 87,
         "moverValue": 31, "existingMoverAfterGc": 181, "existingDeepMoverAfterGc": 137},
@@ -919,10 +941,10 @@ REQUIRED_CHECKS.update({
             for i in range(200) for kind in ("oldAdded", "newAdded", "oldDispatch", "oldMarker", "afterGc")}},
 })
 UNCHANGED_CHECKS = {
+    **{f"batch-combination-s{n}-abort": ("unchangedDefinition0", "unchangedDefinition1") for n in (1, 3, 4, 5, 6)},
     **{name: ("unchangedMembers",) for name in ("tool-retransform-structural", "tool-retransform-restore")},
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private']},
-    "interface-overlap-superclass": ("unchangedParent",),
-    **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
+    **{name: ("unchangedSubject",) for name in ("super-batch-moving",)},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
     "interface-batch-unrelated-invalid": ("unchangedInterface", "unchangedUnrelated"),
@@ -1313,9 +1335,17 @@ for _kind in ("c", "i", "a"):
         "oldNullCall": "java.lang.NullPointerException", "afterGc": False}
 MAPPED_SCENARIOS.update(name for name, _, code in CLASS_KIND_SCENARIOS if code == 0)
 
+REQUIRED_CHECKS["batch-combination-s1"].update(ancestorAddedZero=0, ancestorAddedMethod=99,
+    newParentFieldZero=0, oldParentOwn=2)
+REQUIRED_CHECKS["batch-combination-s4"].update(movingParentZero=0)
+for _combination, _default in ((3, 8), (5, 6), (6, 10)):
+    REQUIRED_CHECKS[f"batch-combination-s{_combination}"].update(interfaceDefaultAfterGc=_default)
+
 REQUIRED_CHECKS.update(INTERFACE_SELECTION_REQUIRED)
 
 def scenario_sequence(scenario_group, api=None, self_selection=None):
+    if scenario_group == "batch-combinations":
+        return [(name, variants, code) for name, variants, code in SCENARIOS if name.startswith("batch-combination-s")]
     if self_selection is not None:
         return tuple(item for item in scenario_sequence(scenario_group, api)
                      if not item[0].endswith("-retain") or
@@ -1592,7 +1622,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

@@ -287,12 +287,6 @@ template <typename Class, typename Method> struct Selector {
       void* parent = process->lookup_view ? process->lookup_view(linker, thread, descriptor, defining_loader)
           : process->lookup_chars(linker, thread, descriptor.c_str(), defining_loader);
       // Respect the current batch's replacement lookup, including another group.
-      if (const auto* state = CurrentState(); state->linking) {
-        const auto& linking = *state->linking;
-        for (size_t i = 0; i < linking.old_types->size(); ++i)
-          if ((*linking.old_types)[i].Get<void>() == parent)
-            parent = runtime_thread::Read(Thread(), linking.new_types.Get<abi::ObjectArray>()->elements[i]);
-      }
       bool pending = false;
       if (void* replacement = ReplacementFor(parent, &pending)) parent = replacement;
       if (!parent || pending) throw std::runtime_error("interface selection parent is not linked");

@@ -1,6 +1,7 @@
 #include "platform/common/interface_redefinition_internal.h"
 #include "platform/common/art_method_identity.h"
 #include "platform/common/interface_method_selection.h"
+#include "platform/common/batch_allocation_order.h"
 
 namespace artdcevm::interface_redefinition {
 using namespace detail;
@@ -69,7 +70,7 @@ class AttemptScope {
 jvmtiError Run(RedefinerPrefix* driver) noexcept {
   using Function = jvmtiError (*)(RedefinerPrefix*);
   State* state = CurrentState();
-  if (!state || state->targets.empty())
+  if (!state || state->groups.empty())
     return reinterpret_cast<Function>(process->original_run)(driver);
   if (!runtime_thread::Ready() || !state->runtime_verified) {
     driver->result = JVMTI_ERROR_NOT_AVAILABLE;
@@ -193,7 +194,7 @@ void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) noexcep
   if (state->selection_types && cache == state->selection_cache.Get<void>()) {
     return index.index < state->selection_types->size() ? (*state->selection_types)[index.index].Get<void>() : nullptr;
   }
-  if (linking ? cache != linking->private_cache.Get<void>() : !state->external) return nullptr;
+  if (!linking || cache != linking->private_cache.Get<void>()) return nullptr;
   const auto* dex = reinterpret_cast<const DexFilePrefix*>(static_cast<DexCache*>(cache)->dex_file);
 ARTDCEVM_TEST(
   if (ARTDCEVM_FAULT(11)) throw std::bad_alloc{};
@@ -207,14 +208,7 @@ ARTDCEVM_TEST(
                          : process->lookup_chars(linker, runtime_thread::Current(Thread()), type.c_str(), loader);
   bool pending = false;
   void* replacement = nullptr;
-  for (size_t i = 0; linking && i < linking->old_types->size(); ++i)
-    if ((*linking->old_types)[i].Get<void>() == old) {
-      replacement = runtime_thread::Read(Thread(), linking->new_types.Get<ObjectArray>()->elements[i]);
-      pending = !replacement;
-    }
-  // Another rebuild of the batch; a class linking a replacement allocated
-  // later would keep the old one, so that order fails the transaction.
-  if (!replacement && !pending) replacement = ReplacementFor(old, &pending);
+  replacement = ReplacementFor(old, &pending);
   if (pending && state->attempt) state->attempt->error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
   return replacement;
 } catch (...) {
@@ -228,7 +222,7 @@ void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) no
   return reinterpret_cast<LookupCache>(process->original_lookup_cache)(linker, index, cache, loader);
 }
 void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
-  if (const State* state = CurrentState(); state && (state->linking || state->external || state->selection_types)) {
+  if (const State* state = CurrentState(); state && (state->linking || state->selection_types)) {
     if (void* object = Redirect(linker, index, runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->dex_cache)),
                                runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->class_loader)))) return object;
   }
@@ -304,198 +298,11 @@ bool VerifyHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, Hol
   }
   return true;
 }
-// An ordinary batch selects no interface runtime: accept the one candidate
-// release whose holder declarations hold for this holder.
-bool VerifyOrdinaryHolder(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, HolderView* output) {
-  if (CurrentState()->runtime) return VerifyHolder(self, data, output);
-  int matches = 0;
-  for (int release : class_layout::CandidateReleases(true)) {
-    const InterfaceRuntime* candidate = RuntimeFor(release);
-    HolderView view;
-    if (candidate && !ViewHolder(*candidate, self, data, &view) && (!matches || view.begin != output->begin ||
-                                                                    view.runtime->redefinition_size != output->runtime->redefinition_size)) {
-      *output = view;
-      ++matches;
-    }
-  }
-  if (matches == 1) return true;
-  return FailAllocation(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                        "the holder declarations needed to allocate the new superclass chain first are unverified");
-}
-bool AllocateLinked(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, const HolderView& holder,
-                    const std::vector<jclass>& linked);
-bool AllocateInterface(Group& group, ClassRedefinitionPrefix* self, RedefinitionDataIter* data,
-                       const HolderView& holder) {
-  struct AllocationTimer {
-    std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
-    ~AllocationTimer() {
-      timing.allocation_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
-          std::chrono::steady_clock::now() - start).count();
-    }
-  } allocation_timer;
-  State* state = CurrentState();
-  const InterfaceRuntime& runtime = *state->runtime;
-  Attempt* attempt = state->attempt;
-  if (!attempt || attempt->driver != self->driver)
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface redefinition requires private array roots");
-  const auto reject_holder = [&](const char* reason) {
-    Disable(reason);
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, reason);
-  };
-ARTDCEVM_TEST(
-  if (ARTDCEVM_FAULT(15)) return reject_holder("interface holder probe rejected injected mismatch");
-)
-  auto& initialized = *holder.initialized;
-  auto& structural = *holder.structural;
-  auto& initial = *holder.initial;
-  if (initialized[data->index] || !structural[data->index] || !initial[data->index])
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface target requires an unallocated structural transaction");
-  process->verified_release.store(state->selected_release);
-  // Rebuilds that members of this one newly link are allocated first.
-  group.allocating = true;
-  for (jint j = 0; j < state->batch_size; ++j) {
-    auto* entry = holder.Definition(j);
-    const auto* requirements = transaction::Current()->Find(entry);
-    if (!requirements || requirements->linked_interfaces.empty() ||
-        AffectedGroup(process->mirror_class(entry)) != &group) continue;
-    RedefinitionDataIter item{j, data->holder};
-    if (!AllocateLinked(entry, &item, holder, requirements->linked_interfaces)) return false;
-  }
-  group.allocating = false;
-  const Members& members = group.Current();
-  const TypeSnapshot* snapshot = group.Allocated();
-  if (!snapshot) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface rebuild owner unavailable");
-  if (!members.arrays)
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface private arrays were not prepared while Native");
-  const auto& ordered = snapshot->types;
-  if (ordered.empty() || Decode(ordered.front()) != process->mirror_class(self))
-    return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot target is missing or not first");
-  for (jclass klass : ordered)
-    if (Status(Decode(klass)) < ClassStatus::kResolved)
-      return FailAllocation(self, JVMTI_ERROR_INVALID_CLASS, "interface snapshot contains an unresolved class");
-  constexpr int32_t kExtraRoots = 6;
-  if (ordered.size() > static_cast<size_t>(std::numeric_limits<int32_t>::max() - kExtraRoots))
-    return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition has too many types to root");
-  void* thread = self->driver->self;
-  if (thread != runtime_thread::Current(Thread()))
-    return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface transaction thread mismatch");
-  Roots roots(thread, ordered.size() + kExtraRoots);
-  std::vector<Handle> old_types;
-  for (jclass klass : ordered) old_types.push_back(roots.Add(Decode(klass)));
-  Handle old_array = roots.Add(members.arrays->Old(process->decode_global));
-  Handle new_array = roots.Add(members.arrays->New(process->decode_global));
-  if (!old_array.Get<void>() || !new_array.Get<void>())
-    return reject_holder("interface private array global reference decode failed");
-  Assign(ReplacementRoot(group), new_array.Get<void>());
-  for (Handle array : {old_array, new_array})
-    if (array.Get<ObjectArray>()->length != static_cast<int32_t>(ordered.size()))
-      return reject_holder("interface private array declaration mismatch");
-  Handle cache = roots.Add(nullptr), original_cache = roots.Add(nullptr), superclass = roots.Add(nullptr), loader = roots.Add(nullptr);
-  std::vector<int32_t> batch_indices(old_types.size(), -1);
-  for (size_t i = 0; i < old_types.size(); ++i) {
-    for (jint j = 0; j < state->batch_size; ++j) {
-      RedefinitionDataIter item{j, data->holder};
-      if (Slot(item, 4) != old_types[i].Get<void>()) continue;
-      if (initialized[j])
-        return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface group was allocated before its owner");
-      batch_indices[i] = j;
-      // ti_redefine.cc setup_single_redefinition: only the owner collects and
-      // commits the group's instances/mappings; child entries retain their DEX.
-      structural[j] = true;
-      initial[j] = j == data->index;
-    }
-  }
-  for (size_t i = 0; i < old_types.size(); ++i) {
-    void* old = old_types[i].Get<void>();
-    Store(old_array.Get<ObjectArray>(), static_cast<int32_t>(i), old);
-    void* super = runtime_thread::Read(Thread(), Field<uint32_t>(old, runtime.super_class));
-    const int32_t parent = snapshot->superclass[i];
-    if (parent >= 0) {
-      if (static_cast<size_t>(parent) >= i || old_types[parent].Get<void>() != super)
-        return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface snapshot superclass changed");
-      super = runtime_thread::Read(Thread(), new_array.Get<ObjectArray>()->elements[parent]);
-    }
-    Assign(superclass, super);
-    Assign(original_cache, runtime_thread::Read(Thread(), Field<uint32_t>(old, runtime.dex_cache)));
-    const int32_t batch_index = batch_indices[i];
-    RedefinitionDataIter item{batch_index, data->holder};
-    auto* allocator = batch_index >= 0 ? holder.Definition(batch_index) : self;
-    if (batch_index >= 0) {
-      Assign(cache, Slot(item, 3));  // Incoming DEX, rooted by ART's holder.
-    } else {
-      const auto* dex = reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
-      Assign(loader, runtime_thread::Read(Thread(), Field<uint32_t>(old, runtime.class_loader)));
-      // CreateNewDexCache reads only driver_ and dex_file_. This non-owning
-      // source prefix does not swap or destroy ART's owning DexFile pointer.
-      ClassRedefinitionPrefix context{self->driver, nullptr, dex};
-      Assign(cache, process->allocate_cache(&context, loader));
-    }
-    if (!cache.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition private DexCache allocation failed");
-    const DexFilePrefix* expected_dex = batch_index >= 0 ? allocator->dex_file
-        : reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
-    if (cache.Get<DexCache>()->dex_file != reinterpret_cast<uintptr_t>(expected_dex) ||
-        runtime_thread::Read(Thread(), cache.Get<DexCache>()->class_loader) != runtime_thread::Read(Thread(), Field<uint32_t>(old_types[i].Get<void>(), runtime.class_loader)) ||
-        cache.Get<void>() == original_cache.Get<void>())
-      return reject_holder("interface private DexCache declaration mismatch");
-    const Linking scope{&old_types, new_array, cache, static_cast<int32_t>(i)};
-    void* replacement;
-    {
-      LinkingScope active(state, &scope);
-      replacement = process->allocate_class(allocator, old_types[i], superclass, cache,
-          batch_index >= 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(old_types[i].Get<void>(), runtime.dex_class_def_index)));
-    }
-    if (attempt->error != JVMTI_ERROR_NONE)
-      return FailAllocation(self, attempt->error, "interface linking hook failed");
-    if (!replacement) {
-      // ART 13 links a non-public implementation of an interface method as an
-      // IllegalAccessError, where JBR links it and throws at the call.
-      const auto& failure = attempt->non_public;
-      if (failure.index == static_cast<int32_t>(i) &&
-          DescribeNonPublic(Thread(), self, failure, snapshot->descriptors[i], &transaction::Current()->rejection))
-        self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
-      return false;  // ART recorded its error and cleared the Java exception.
-    }
-    if (batch_index < 0) process->set_cache(replacement, original_cache.Get<void>());
-ARTDCEVM_TEST(
-    // Transfer failure after linking, now outside the callback and its locks.
-    if (ARTDCEVM_FAULT(12)) throw JniFailure{};
-)
-    Store(new_array.Get<ObjectArray>(), static_cast<int32_t>(i), replacement);
-ARTDCEVM_TEST(
-    fault_injection::Increment(fault_injection::Counter::kAllocatedTypes);
-)
-    Assign(attempt->pending, nullptr);
-    if (batch_index >= 0) {
-      SetSlot(item, RedefinitionDataIter::kSlotNewClassObject, replacement);
-      initialized[batch_index] = true;
-    }
-  }
-  SetSlot(*data, RedefinitionDataIter::kSlotOldClasses, old_array.Get<void>());
-  SetSlot(*data, RedefinitionDataIter::kSlotNewClasses, new_array.Get<void>());
-  initialized[data->index] = true;
-ARTDCEVM_TEST(
-  if (ARTDCEVM_FAULT(2)) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after interface allocation");
-  if (fault_injection::Increment(fault_injection::Counter::kAllocatedGroups) == 2 && ARTDCEVM_FAULT(18))
-    return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after multiple interface groups allocation");
-)
-  // Run owns cleanup for every subsequent failure, including verification,
-  // instance allocation, mapping probes and the subclass-load retry guard.
-  return true;
-}
-const Group* AffectedGroup(void* klass) {
-  const State* state = CurrentState();
-  if (!state) return nullptr;
-  for (const auto& group : state->groups)
-    for (jclass type : group.Current().snapshot.types)
-      if (Decode(type) == klass) return &group;
-  return nullptr;
-}
-// A structural ancestor joins the rebuild with its whole subtree; otherwise ART
-// keeps updating every ancestor in place. MarkStructuralChanges has already set
-// the holder flags from each entry's own decision, before any group allocation.
+// Ownership uses the old hierarchy, exactly as ART's instance scan does.
+// Allocation uses the final hierarchy and can interleave those owners.
 int32_t Entry(const HolderView& holder, jclass klass) {
   for (jint i = 0; i < CurrentState()->batch_size; ++i)
-    if (holder.Definition(i)->klass == klass) return i;
+    if (process->mirror_class(holder.Definition(i)) == Decode(klass)) return i;
   return -1;
 }
 void ChooseMembers(Group& group, const HolderView& holder) {
@@ -505,106 +312,233 @@ void ChooseMembers(Group& group, const HolderView& holder) {
     extended |= entry >= 0 && (*holder.structural)[entry];
   }
   group.uses_extended = extended;
-  // ART's initial structural entries are the ones it collects instances for.
   const auto& orderings = group.Current().orderings;
   for (size_t i = 0; group.owner < 0 && i < orderings.size(); ++i) {
     const int32_t entry = Entry(holder, orderings[i].owner);
-    if (entry >= 0 && (*holder.structural)[entry] && (*holder.initial)[entry] && !(*holder.initialized)[entry])
+    if (entry >= 0 && (*holder.structural)[entry] && (*holder.initial)[entry])
       group.owner = static_cast<int32_t>(i);
   }
 }
-// Allocates every rebuild that holds one of `linked` before the caller links it.
-bool AllocateLinked(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, const HolderView& holder,
-                    const std::vector<jclass>& linked) {
-  State* state = CurrentState();
-  for (jclass interface : linked) {
-    const Group* found = AffectedGroup(Decode(interface));
-    if (!found) continue;
-    Group& group = state->groups[found - state->groups.data()];
-    if (!group.uses_extended) ChooseMembers(group, holder);
-    if (group.owner < 0) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface rebuild has no structural owner entry");
-    const int32_t entry = Entry(holder, group.Current().orderings[group.owner].owner);
-    if ((*holder.initialized)[entry]) continue;
-    if (group.allocating)
-      return FailAllocation(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                            "interface rebuilds of the batch link each other");
-    RedefinitionDataIter owner_data{entry, data->holder};
-    if (!AllocateInterface(group, holder.Definition(entry), &owner_data, holder)) return false;
+const Group* AffectedGroup(void* klass) {
+  const State* state = CurrentState();
+  if (!state) return nullptr;
+  for (const auto& group : state->groups) {
+    if (group.class_root && group.owner < 0) continue;
+    for (jclass type : group.Current().snapshot.types)
+      if (Decode(type) == klass) return &group;
   }
+  return nullptr;
+}
+
+bool AllocateBatch(ClassRedefinitionPrefix* self, RedefinitionDataIter* data, const HolderView& holder) {
+  State* state = CurrentState();
+  Attempt* attempt = state->attempt;
+  const InterfaceRuntime& runtime = Runtime();
+  // First freeze interface membership; structural ordinary ancestors are
+  // absorbed before selecting any remaining ordinary initial roots.
+  for (auto& group : state->groups)
+    if (!group.class_root) ChooseMembers(group, holder);
+  for (auto& group : state->groups) {
+    if (!group.class_root) continue;
+    const int32_t entry = Entry(holder, group.class_root);
+    if (entry < 0 || !(*holder.structural)[entry] || !(*holder.initial)[entry]) continue;
+    bool covered = false;
+    for (const auto& other : state->groups) {
+      if (other.class_root || other.owner < 0) continue;
+      for (jclass type : other.Allocated()->types)
+        covered |= Decode(type) == Decode(group.class_root);
+    }
+    if (!covered) ChooseMembers(group, holder);
+  }
+  struct Node { size_t group, slot; int32_t entry; Handle old, parent; };
+  size_t count = 0;
+  for (const auto& group : state->groups)
+    if (const auto* types = group.Allocated()) count += types->types.size();
+  if (count > static_cast<size_t>(std::numeric_limits<int32_t>::max() / 2 - 8))
+    return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "batch has too many replacement classes");
+  Roots roots(self->driver->self, 2 * count + 2 * state->groups.size() + 4);
+  std::vector<Node> nodes;
+  std::vector<Handle> old_arrays(state->groups.size()), new_arrays(state->groups.size());
+  std::vector<int32_t> owners(state->groups.size(), -1);
+  for (size_t g = 0; g < state->groups.size(); ++g) {
+    auto& group = state->groups[g];
+    const auto* snapshot = group.Allocated();
+    if (!snapshot) continue;
+    owners[g] = Entry(holder, group.Current().orderings[group.owner].owner);
+    if (owners[g] < 0 || !group.Current().arrays)
+      return FailAllocation(self, JVMTI_ERROR_INTERNAL, "batch rebuild owner or private arrays unavailable");
+    old_arrays[g] = roots.Add(group.Current().arrays->Old(process->decode_global));
+    new_arrays[g] = roots.Add(group.Current().arrays->New(process->decode_global));
+    if (!old_arrays[g].Get<void>() || !new_arrays[g].Get<void>() ||
+        old_arrays[g].Get<ObjectArray>()->length != static_cast<int32_t>(snapshot->types.size()) ||
+        new_arrays[g].Get<ObjectArray>()->length != static_cast<int32_t>(snapshot->types.size()))
+      return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "batch private array declaration mismatch");
+    Assign(ReplacementRoot(group), new_arrays[g].Get<void>());
+    RedefinitionDataIter owner{owners[g], data->holder};
+    SetSlot(owner, RedefinitionDataIter::kSlotOldClasses, old_arrays[g].Get<void>());
+    SetSlot(owner, RedefinitionDataIter::kSlotNewClasses, new_arrays[g].Get<void>());
+    for (size_t i = 0; i < snapshot->types.size(); ++i) {
+      const auto type = snapshot->types[i];
+      Handle old = roots.Add(Decode(type));
+      if (Status(old.Get<void>()) < ClassStatus::kResolved)
+        return FailAllocation(self, JVMTI_ERROR_INVALID_CLASS, "batch contains an unresolved replacement class");
+      for (const auto& node : nodes)
+        if (node.old.Get<void>() == old.Get<void>())
+          return FailAllocation(self, JVMTI_ERROR_INTERNAL, "batch replacement class has multiple migration owners");
+      const int32_t entry = Entry(holder, type);
+      void* parent = runtime_thread::Read(Thread(), Field<uint32_t>(old.Get<void>(), runtime.super_class));
+      const auto* requirements = entry >= 0 ? transaction::Current()->Find(holder.Definition(entry)) : nullptr;
+      if (requirements && requirements->superclass) parent = Decode(requirements->superclass);
+      nodes.push_back({g, i, entry, old, roots.Add(parent)});
+      Store(old_arrays[g].Get<ObjectArray>(), static_cast<int32_t>(i), old.Get<void>());
+      if (entry >= 0) {
+        (*holder.structural)[entry] = true;
+        (*holder.initial)[entry] = entry == owners[g];
+      }
+    }
+  }
+  // Resolve direct interface identities through each class's own loader and
+  // final DEX. Only named LookupClass services read the published class table;
+  // no old DexCache is populated. All identities become roots before allocation.
+  std::vector<std::vector<size_t>> dependencies(nodes.size());
+  const auto depend = [&](size_t node, void* parent) {
+    for (size_t j = 0; j < nodes.size(); ++j)
+      if (nodes[j].old.Get<void>() == parent) dependencies[node].push_back(j);
+  };
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    const auto& node = nodes[i];
+    depend(i, node.parent.Get<void>());
+    if (node.entry >= 0) {
+      if (const auto* requirements = transaction::Current()->Find(holder.Definition(node.entry))) {
+        for (jclass chain : requirements->chain_rebuilds) depend(i, Decode(chain));
+        for (jclass interface : requirements->linked_interfaces) depend(i, Decode(interface));
+      }
+    }
+    auto* old_cache = static_cast<DexCache*>(runtime_thread::Read(Thread(), Field<uint32_t>(node.old.Get<void>(), runtime.dex_cache)));
+    const auto* dex = node.entry >= 0 ? holder.Definition(node.entry)->dex_file
+        : reinterpret_cast<const DexFilePrefix*>(old_cache->dex_file);
+    const uint32_t class_def = node.entry >= 0 ? 0 : Field<int32_t>(node.old.Get<void>(), runtime.dex_class_def_index);
+    std::vector<std::string> interfaces;
+    std::string error;
+    if (!dex || !evolution::ReadClassInterfaces(DexViewOf(*dex), class_def, &interfaces, &error))
+      return FailAllocation(self, JVMTI_ERROR_INVALID_CLASS_FORMAT, "batch final interface declarations unavailable");
+    void* loader = runtime_thread::Read(Thread(), Field<uint32_t>(node.old.Get<void>(), runtime.class_loader));
+    for (const auto& descriptor : interfaces) {
+      void* interface = process->lookup_view ? process->lookup_view(process->class_linker.load(), runtime_thread::Current(Thread()), descriptor, loader)
+          : process->lookup_chars(process->class_linker.load(), runtime_thread::Current(Thread()), descriptor.c_str(), loader);
+      if (!interface)
+        return FailAllocation(self, JVMTI_ERROR_FAILS_VERIFICATION, "batch final interface is not loaded");
+      depend(i, interface);
+    }
+  }
+  std::vector<size_t> order;
+  if (!batch_allocation::Order(dependencies, &order))
+    return FailAllocation(self, JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION, "batch final replacement hierarchy is cyclic");
+  Handle cache = roots.Add(nullptr), original_cache = roots.Add(nullptr), superclass = roots.Add(nullptr), loader = roots.Add(nullptr);
+  for (size_t position : order) {
+    const auto& node = nodes[position];
+    auto& group = state->groups[node.group];
+    RedefinitionDataIter item{node.entry, data->holder};
+    auto* allocator = node.entry >= 0 ? holder.Definition(node.entry) : holder.Definition(owners[node.group]);
+    void* parent = node.parent.Get<void>();
+    bool pending = false;
+    if (void* replacement = ReplacementFor(parent, &pending)) parent = replacement;
+    if (pending) return FailAllocation(self, JVMTI_ERROR_INTERNAL, "batch superclass dependency was not allocated");
+    Assign(superclass, parent);
+    Assign(original_cache, runtime_thread::Read(Thread(), Field<uint32_t>(node.old.Get<void>(), runtime.dex_cache)));
+    if (node.entry >= 0) {
+      Assign(cache, Slot(item, 3));
+    } else {
+      const auto* dex = reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
+      Assign(loader, runtime_thread::Read(Thread(), Field<uint32_t>(node.old.Get<void>(), runtime.class_loader)));
+      ClassRedefinitionPrefix context{self->driver, nullptr, dex};
+      Assign(cache, process->allocate_cache(&context, loader));
+    }
+    if (!cache.Get<void>()) return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "batch private DexCache allocation failed");
+    const auto* expected_dex = node.entry >= 0 ? allocator->dex_file
+        : reinterpret_cast<const DexFilePrefix*>(original_cache.Get<DexCache>()->dex_file);
+    if (cache.Get<DexCache>()->dex_file != reinterpret_cast<uintptr_t>(expected_dex) ||
+        runtime_thread::Read(Thread(), cache.Get<DexCache>()->class_loader) !=
+            runtime_thread::Read(Thread(), Field<uint32_t>(node.old.Get<void>(), runtime.class_loader)) ||
+        cache.Get<void>() == original_cache.Get<void>())
+      return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "batch private DexCache declaration mismatch");
+    const Linking scope{cache, static_cast<int32_t>(node.slot)};
+    void* replacement;
+    {
+      LinkingScope active(state, &scope);
+      replacement = process->allocate_class(allocator, node.old, superclass, cache,
+          node.entry >= 0 ? 0 : static_cast<uint16_t>(Field<int32_t>(node.old.Get<void>(), runtime.dex_class_def_index)));
+    }
+    if (attempt->error != JVMTI_ERROR_NONE) return FailAllocation(self, attempt->error, "batch linking hook failed");
+    if (!replacement) {
+      const auto& failure = attempt->non_public;
+      if (failure.index == static_cast<int32_t>(node.slot) &&
+          DescribeNonPublic(Thread(), allocator, failure, group.Allocated()->descriptors[node.slot], &transaction::Current()->rejection))
+        self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
+      return false;
+    }
+    if (node.entry < 0) process->set_cache(replacement, original_cache.Get<void>());
+ARTDCEVM_TEST(
+    if (ARTDCEVM_FAULT(12)) throw JniFailure{};
+)
+    Store(new_arrays[node.group].Get<ObjectArray>(), static_cast<int32_t>(node.slot), replacement);
+ARTDCEVM_TEST(
+    fault_injection::Increment(fault_injection::Counter::kAllocatedTypes);
+)
+    Assign(attempt->pending, nullptr);
+    if (node.entry >= 0) {
+      SetSlot(item, RedefinitionDataIter::kSlotNewClassObject, replacement);
+      (*holder.initialized)[node.entry] = true;
+    }
+  }
+  for (size_t g = 0; g < owners.size(); ++g) {
+    if (owners[g] < 0) continue;
+    RedefinitionDataIter owner{owners[g], data->holder};
+    SetSlot(owner, RedefinitionDataIter::kSlotOldClasses, old_arrays[g].Get<void>());
+    SetSlot(owner, RedefinitionDataIter::kSlotNewClasses, new_arrays[g].Get<void>());
+ARTDCEVM_TEST(
+    if (!state->groups[g].class_root) {
+      if (ARTDCEVM_FAULT(2)) return FailAllocation(holder.Definition(owners[g]), JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after interface allocation");
+      if (fault_injection::Increment(fault_injection::Counter::kAllocatedGroups) == 2 && ARTDCEVM_FAULT(18))
+        return FailAllocation(holder.Definition(owners[g]), JVMTI_ERROR_OUT_OF_MEMORY, "injected failure after multiple interface groups allocation");
+    }
+)
+  }
+  attempt->allocated = true;
   return true;
 }
-class ExternalScope {
- public:
-  explicit ExternalScope(State* state) : state_(state), previous_(std::exchange(state->external, true)) {}
-  ~ExternalScope() { state_->external = previous_; }
- private:
-  State* state_;
-  bool previous_;
-};
+
 bool Finish(ClassRedefinitionPrefix* self, RedefinitionDataHolderPrefix& storage,
             RedefinitionDataIter* data) noexcept {
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataHolderPrefix&, RedefinitionDataIter*);
   try {
-    void* klass = process->mirror_class(self);
-    const Group* affected = RuntimeAvailable() ? AffectedGroup(klass) : nullptr;
-    transaction::Context* context = transaction::Current();
-    const transaction::Requirements* requirements = context ? context->Find(self) : nullptr;
+    State* state = CurrentState();
+    auto* context = transaction::Current();
     if (context) context->holder = data->holder;
-    if (requirements && requirements->superclass && !requirements->chain_rebuilds.empty() && CurrentState()) {
-      // ART sorts entries by depth, not by the new superclass chain: allocate
-      // the chain's structural rebuilds first so the target links under the
-      // replacement of its new superclass.
-      HolderView holder;
-      if (!VerifyOrdinaryHolder(self, data, &holder)) return false;
-      if ((*holder.initialized)[data->index]) return true;
-      for (jclass chain : requirements->chain_rebuilds) {
-        const int32_t entry = Entry(holder, chain);
-        // A chain class below another structural chain class is allocated
-        // with that class's rebuild (ART checks it is initial otherwise).
-        if (entry < 0 || !(*holder.structural)[entry] || !(*holder.initial)[entry] ||
-            (*holder.initialized)[entry])
-          continue;
-        RedefinitionDataIter chain_data{entry, data->holder};
-        if (!Finish(holder.Definition(entry), storage, &chain_data)) return false;
-      }
-    }
-    if (!affected && RuntimeAvailable() && requirements && !requirements->linked_interfaces.empty() &&
-        CurrentState() && CurrentState()->attempt) {
-      // ART allocates this class and its subclasses; they link the rebuilt
-      // interfaces it newly implements.
-      HolderView holder;
-      if (!VerifyHolder(self, data, &holder)) return false;
-      if ((*holder.initialized)[data->index]) return true;
-      if (!AllocateLinked(self, data, holder, requirements->linked_interfaces)) return false;
-      State* state = CurrentState();
-      bool allocated;
-      {
-        ExternalScope scope(state);
-        allocated = reinterpret_cast<Function>(process->original_finish)(self, storage, data);
-      }
-      if (allocated && state->attempt->error != JVMTI_ERROR_NONE)
-        return FailAllocation(self, state->attempt->error, "a linked interface rebuild was not allocated first");
-      return allocated;
-    }
-    if (!affected) return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
+    if (!state || !state->attempt) return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
     HolderView holder;
     if (!VerifyHolder(self, data, &holder)) return false;
-    if ((*holder.initialized)[data->index]) return true;
-    State* state = CurrentState();
-    Group& group = state->groups[affected - state->groups.data()];
-    if (!group.uses_extended) ChooseMembers(group, holder);
-    if (AffectedGroup(klass) != &group)
-      return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
-    if (group.owner < 0)
-      return FailAllocation(self, JVMTI_ERROR_INTERNAL, "interface rebuild has no structural owner entry");
-    // ART sorts by superclass depth, not interface dependencies. The first
-    // affected entry delegates the complete group to its owner.
-    const int32_t entry = Entry(holder, group.Current().orderings[group.owner].owner);
 ARTDCEVM_TEST(
-    fault_injection::Set(fault_injection::Counter::kAllocationOrder, data->index < entry ? 1 : 0);
+    if (ARTDCEVM_FAULT(15)) {
+      Disable("interface holder probe rejected injected mismatch");
+      return FailAllocation(self, JVMTI_ERROR_NOT_AVAILABLE, "interface holder probe rejected injected mismatch");
+    }
 )
-    RedefinitionDataIter owner_data{entry, data->holder};
-    return AllocateInterface(group, holder.Definition(entry), &owner_data, holder);
+    if (!state->attempt->allocated) {
+      const auto start = std::chrono::steady_clock::now();
+      if (!AllocateBatch(self, data, holder)) return false;
+      timing.allocation_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - start).count();
+      process->verified_release.store(state->selected_release);
+ARTDCEVM_TEST(
+      for (const auto& group : state->groups)
+        if (!group.class_root && group.owner >= 0) {
+          const int32_t owner = Entry(holder, group.Current().orderings[group.owner].owner);
+          if (data->index < owner) fault_injection::Set(fault_injection::Counter::kAllocationOrder, 1);
+        }
+)
+    }
+    if ((*holder.initialized)[data->index]) return true;
+    return reinterpret_cast<Function>(process->original_finish)(self, storage, data);
   } catch (const std::bad_alloc&) {
     return FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface redefinition native allocation failed");
   } catch (...) {

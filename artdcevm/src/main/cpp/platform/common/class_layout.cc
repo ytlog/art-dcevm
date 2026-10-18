@@ -352,7 +352,9 @@ int VerifyReplacements(const VerifiedThread& thread, ClassRedefinitionPrefix* se
 
 bool SuperclassMatches(const VerifiedThread& thread, ClassRedefinitionPrefix* self,
                        const RedefinitionDataIter& data, jclass superclass, int selected) {
-  void* replacement = data.Classes(false) ? Element<void>(thread, data.Classes(false), 0) : nullptr;
+  // A batched child can be owned by an ancestor/interface group's arrays.
+  // Its own replacement always lives in slot 8, even without owner arrays.
+  void* replacement = Heap<void>(thread, data.Reference(RedefinitionDataIter::kSlotNewClassObject));
   void* expected = DecodeClass(art.mirror_class, self, superclass);
   if (void* rebuilt = expected ? Rebuilt(thread, data.holder, expected) : nullptr) expected = rebuilt;
   return replacement && expected && kProbes[selected].superclass(replacement) == Reference(expected);

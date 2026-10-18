@@ -20,7 +20,11 @@ ARTDCEVM_TEST(
     jint access = 0, status = 0;
     jobject loader = nullptr;
     jclass klass = definitions[i].klass;
-    if (!klass || env->GetClassModifiers(klass, &access) != JVMTI_ERROR_NONE || !(access & evolution::kAccInterface)) continue;
+    if (!klass || env->GetClassModifiers(klass, &access) != JVMTI_ERROR_NONE) continue;
+    if (!(access & evolution::kAccInterface)) {
+      next->class_targets.push_back({klass, false, 0, {}, 0});
+      continue;
+    }
     if (env->GetClassLoader(klass, &loader) != JVMTI_ERROR_NONE) continue;
     const auto status_result = env->GetClassStatus(klass, &status);
     const bool boot = !loader;
@@ -28,7 +32,11 @@ ARTDCEVM_TEST(
     if (status_result != JVMTI_ERROR_NONE) continue;
     next->targets.push_back({klass, boot, status, {}, 0});
   }
-  if (!next->targets.empty() && jni->EnsureLocalCapacity(8) == JNI_OK) {
+  bool has_class_dex = false;
+  for (jint i = 0; i < count; ++i)
+    has_class_dex |= definitions[i].class_bytes && definitions[i].class_byte_count > 0;
+  if ((!next->targets.empty() || (RuntimeAvailable() && count > 1 && has_class_dex)) &&
+      jni->EnsureLocalCapacity(8) == JNI_OK) {
     if (jni->GetJavaVM(&next->vm) == JNI_OK)
       next->class_class = jni->FindClass("java/lang/Class");
     if (next->vm) next->object_class = jni->FindClass("java/lang/Object");
@@ -49,8 +57,9 @@ const std::vector<jclass>* RuntimeBackend::GroupTypes(jclass klass) {
 void RuntimeBackend::Describe(jclass klass, const evolution::ClassSchema& live) {
   State* next = CurrentState();
   if (!next) return;
-  for (auto& target : next->targets)
-    if (next->jni->IsSameObject(target.klass, klass)) target.live = live;
+  for (auto* targets : {&next->targets, &next->class_targets})
+    for (auto& target : *targets)
+      if (next->jni->IsSameObject(target.klass, klass)) target.live = live;
 }
 // A fresh app_process can use plain pointer IDs without ClassExt markers.
 // Probe one existing member ID while Native; an indexed ID establishes the
@@ -312,13 +321,44 @@ ARTDCEVM_TEST(
     }
     timing.types += group.core.snapshot.types.size();
   }
+  // Ordinary structural roots use the same private arrays and ownership as
+  // interface rebuilds. The holder later selects only initial structural roots
+  // not already absorbed by a selected interface group.
+  bool changed_hierarchy = !next->targets.empty();
+  for (const auto& target : next->class_targets) {
+    for (jint i = 0; i < next->batch_size; ++i) {
+      if (!jni->IsSameObject(target.klass, next->definitions[i].klass)) continue;
+      const auto& definition = next->definitions[i];
+      if (!definition.class_bytes || definition.class_byte_count <= 0) continue;
+      evolution::ClassSchema incoming;
+      std::string ignored;
+      const auto size = static_cast<size_t>(definition.class_byte_count);
+      if (evolution::ReadClassDeclarations({definition.class_bytes, size, definition.class_bytes, size},
+                                           &incoming, &ignored))
+        changed_hierarchy |= incoming.superclass != target.live.superclass ||
+                             incoming.interfaces != target.live.interfaces;
+    }
+  }
+  if (RuntimeAvailable() && next->batch_size > 1 && changed_hierarchy) for (const Target& target : next->class_targets) {
+    Group group{};
+    group.class_root = target.klass;
+    std::vector<jint> subtree;
+    jvmtiError result = SelectTypes(jni, next->env, target.klass, count, loaded, &subtree, error);
+    if (result == JVMTI_ERROR_NONE)
+      result = OrderTypes(jni, next->env, target.klass, loaded, subtree, &group.core.snapshot, error);
+    if (result == JVMTI_ERROR_NONE)
+      result = BuildOrderings(jni, next->env, loaded, subtree, {target.klass}, false, &group.core, error);
+    if (result != JVMTI_ERROR_NONE) return result;
+    next->groups.push_back(std::move(group));
+  }
   if (!next->groups.empty() && jni->EnsureLocalCapacity(8) != JNI_OK) {
     if (jni->ExceptionCheck()) jni->ExceptionClear();
     *error = "interface snapshot local reference reservation failed";
     return JVMTI_ERROR_OUT_OF_MEMORY;
   }
   for (auto& group : next->groups) {
-    const std::string& descriptor = next->targets[group.leader].live.descriptor;
+    const std::string descriptor = group.class_root ? group.core.snapshot.descriptors.front()
+                                                       : next->targets[group.leader].live.descriptor;
     for (Members* members : {&group.core, &group.extended}) {
       if (members->snapshot.types.empty()) continue;
       if (!next->vm || !next->class_class) {
@@ -336,6 +376,16 @@ ARTDCEVM_TEST(
         return JVMTI_ERROR_OUT_OF_MEMORY;
       }
     }
+  }
+  // RetransformClasses can reach Redefiner::Run without ART's earlier normal
+  // admission. Probe through public JVMTI while still Native: its fixed ART
+  // implementation supplies the genuine StackHandleScope<1> to Admit, before
+  // Run needs transaction-lived roots. Never synthesize an unverified scope.
+  if (!next->runtime && !next->groups.empty() && !next->class_targets.empty()) {
+    jboolean modifiable = JNI_FALSE;
+    const auto result = next->env->IsModifiableClass(next->class_targets.front().klass, &modifiable);
+    if (result != JVMTI_ERROR_NONE) { *error = "batch root admission probe failed"; return result; }
+    if (!next->runtime_verified) { *error = "batch root declarations were not verified by admission"; return JVMTI_ERROR_NOT_AVAILABLE; }
   }
   if (!next->groups.empty())
     timing.snapshot_ns = loaded_ns + std::chrono::duration_cast<std::chrono::nanoseconds>(

@@ -325,31 +325,19 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
         if (!jni->IsSameObject(klass, other) && jni->IsAssignableFrom(added, other))
           snapshot.hierarchy.added_interface_in_batch = descriptor;
   }
-  // ART recreates a target's subclasses under its new class, allocating a
-  // batched subclass from its own DEX. That subclass may evolve with the
-  // target unless it moves too. A supertype of the target, whose rebuild would
-  // recreate the target too, and an interface of the new chain link as the
-  // Class published before the batch, which a non-structural redefinition
-  // keeps; CheckClass rejects a structural one. A structural ordinary class of
-  // the new chain below the old superclass is allocated before the target.
+  // Preserve JBR's rejection of two moving classes in one old subtree.
+  // All other new-chain dependencies are resolved by the batch allocator.
   for (auto& [klass, snapshot] : batch.classes) {
     if (!snapshot.hierarchy.new_superclass) continue;
     for (auto& [other, other_snapshot] : batch.classes) {
       if (jni->IsSameObject(klass, other)) continue;
       const bool subclass = jni->IsAssignableFrom(other, klass);
       if (subclass && other_snapshot.hierarchy.new_superclass)
-        snapshot.hierarchy.new_superclass->related_in_batch = true;
+        snapshot.hierarchy.new_superclass->moving_subclass_in_batch = true;
       else if (subclass)
         other_snapshot.moved_ancestor = true;
-      else if (jni->IsAssignableFrom(klass, other))
-        other_snapshot.anchored_by = snapshot.live.descriptor;
-      else if (jni->IsAssignableFrom(snapshot.superclass_class, other) &&
-               (other_snapshot.live.access & evolution::kAccInterface))
-        other_snapshot.anchored_by = snapshot.live.descriptor;
-      else if (jni->IsAssignableFrom(snapshot.superclass_class, other)) {
-        other_snapshot.chain_of = snapshot.live.descriptor;
+      else if (jni->IsAssignableFrom(snapshot.superclass_class, other))
         snapshot.chain_in_batch.push_back(other);
-      }
     }
   }
   // A subclass prepared from here on is missing from the snapshot and may be

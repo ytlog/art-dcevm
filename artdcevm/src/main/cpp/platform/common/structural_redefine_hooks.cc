@@ -157,31 +157,20 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     // Even a body edit must relink copied default methods in implementation classes.
     decision.methods_structural = true;
   }
-  // A structural ancestor of an interface group's subtypes joins that group's
-  // rebuild, which links every member under its unchanged superclass.
-  if (decision.error == JVMTI_ERROR_NONE && decision.superclass_changed &&
-      (interfaces && interfaces->SharesImplementationGroup(self))) {
-    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-    decision.reason = "superclass change overlaps the interface implementation group";
-  }
-  if (decision.error == JVMTI_ERROR_NONE && !snapshot.anchored_by.empty() &&
-      (decision.fields_structural || decision.methods_structural || decision.superclass_changed ||
-       !snapshot.hierarchy.added_interfaces.empty() || (interfaces && interfaces->IsAffected(self)))) {
-    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-    decision.reason = snapshot.anchored_by + " changes its superclass and links the published version of " +
-                      incoming.descriptor + ", which this batch changes structurally";
-  }
-  // A structural class of a target's new chain is allocated before the target
-  // through the interface module's allocation hook; one that moves too, or
-  // belongs to an interface rebuild, would be linked by another order.
-  if (decision.error == JVMTI_ERROR_NONE && !snapshot.chain_of.empty() &&
-      (decision.fields_structural || decision.methods_structural || decision.superclass_changed ||
-       !snapshot.hierarchy.added_interfaces.empty()) &&
-      (decision.superclass_changed || !interfaces || !interfaces->Available() || interfaces->IsAffected(self))) {
-    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-    decision.reason = snapshot.chain_of + " changes its superclass to a chain through " + incoming.descriptor +
-                      (decision.superclass_changed ? ", which changes its superclass too"
-                                                   : ", whose rebuild cannot be allocated first");
+
+
+  // Without the source-probed batch allocator, a structural dependency of a
+  // moving class must not fall back to ART's old per-entry allocation order.
+  // Body-only dependencies keep their Class identity and need no new order.
+  if (decision.error == JVMTI_ERROR_NONE && (!interfaces || !interfaces->Available()) &&
+      (decision.fields_structural || decision.methods_structural || decision.superclass_changed)) {
+    for (const auto& [klass, moving] : batch->classes) {
+      if (std::find(moving.chain_in_batch.begin(), moving.chain_in_batch.end(), self->klass) ==
+          moving.chain_in_batch.end()) continue;
+      decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+      decision.reason = "structural dependency of a superclass change requires verified batch allocation";
+      break;
+    }
   }
 
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
@@ -252,8 +241,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       !(interfaces && interfaces->IsAffected(self));
   if (decision.requires_no_instances) batch->no_instances.insert(self);
   else batch->no_instances.erase(self);
-  // The policy rejects a superclass change related to another batch target,
-  // so an interface group member never also changes its superclass.
+  // The batch allocator resolves this root against the final replacement graph.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
   requirements.linked_interfaces.clear();
   if (snapshot.hierarchy.added_interface_in_batch)
@@ -310,7 +298,7 @@ void* AllocateNewClassObject(ClassRedefinitionPrefix* self, abi::arm64::Handle o
       old_class.Get<void>() == process->layout_services.mirror_class(self)) {
     if (void* superclass = class_layout::DecodeClass(process->layout_services.mirror_class, self, target->superclass)) {
       // A structural class of the new chain was rebuilt first: link under its replacement.
-      if (!target->chain_rebuilds.empty() && context->holder)
+      if (context->holder)
         if (const auto thread = runtime_thread::Ready())
           if (void* rebuilt = class_layout::Rebuilt(*thread, context->holder, superclass)) superclass = rebuilt;
       *const_cast<uint32_t*>(super_class.reference) = class_layout::Reference(superclass);

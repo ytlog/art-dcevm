@@ -13,14 +13,6 @@ struct Snapshot {
   std::map<std::string, jclass> interface_classes;
   // A superclass of this target changes its own superclass in the batch.
   bool moved_ancestor = false;
-  // A batched target whose superclass changes links this supertype or class
-  // on its new superclass chain as published: this change must stay
-  // non-structural. Names that target in the rejection.
-  std::string anchored_by;
-  // An ordinary class on a batched target's new superclass chain, below its
-  // old superclass: names that target. Its structural rebuild is allocated
-  // before the target, which links under the replacement.
-  std::string chain_of;
   // That target's view: the batch's classes on its new chain (batch keys).
   std::vector<jclass> chain_in_batch;
   // The submitted definition changes a method's invoke kind (static <->
