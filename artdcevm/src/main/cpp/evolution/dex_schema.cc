@@ -66,6 +66,11 @@ class Reader {
     return result;
   }
 
+  std::vector<std::string> ClassInterfaces(uint32_t index) {
+    Header(true);
+    return TypeList(U32(Item(classes_, index) + 12));
+  }
+
   Member FieldIdentity(uint32_t index) {
     Header(true);
     const size_t item = Item(fields_, index);
@@ -413,6 +418,17 @@ class Reader {
   uint32_t class_type_ = 0;
 };
 }  // namespace
+
+bool ReadClassInterfaces(const DexView& dex, uint32_t class_def, std::vector<std::string>* output, std::string* error) {
+  try {
+    *output = Reader(dex).ClassInterfaces(class_def);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
 
 bool ReadFieldIdentity(const DexView& dex, uint32_t index, Member* output, std::string* error) {
   try {

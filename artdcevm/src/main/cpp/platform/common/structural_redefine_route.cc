@@ -348,6 +348,30 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       return result;
     }
   }
+  // JBR marks the entire affected hierarchy as redefining, even when ART
+  // keeps a body-only target's Class. Capture that identity set while Native.
+  for (jclass candidate : index.affected) {
+    jobject root = jni->NewGlobalRef(candidate);
+    if (!root) {
+      if (jni->ExceptionCheck()) jni->ExceptionClear();
+      return JVMTI_ERROR_OUT_OF_MEMORY;
+    }
+    batch.type_roots.push_back(root);
+    transaction::AffectedType type{root, {}};
+    jint count_interfaces = 0;
+    jclass* direct = nullptr;
+    result = process->snapshot_env->GetImplementedInterfaces(candidate, &count_interfaces, &direct);
+    // An unprepared type has no live instances and is retained separately for
+    // ART's late-subclass safety, but cannot be a FieldCopier value class yet.
+    if (result == JVMTI_ERROR_CLASS_NOT_PREPARED) continue;
+    if (result != JVMTI_ERROR_NONE) return result;
+    for (jint i = 0; i < count_interfaces; ++i) {
+      type.interfaces.push_back(Signature(direct[i]));
+      jni->DeleteLocalRef(direct[i]);
+    }
+    process->snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(direct));
+    context->affected_types.push_back(std::move(type));
+  }
   if (process->capabilities.retirement) {
     // Build the permanent roots while Native, before ART's no-failure point.
     // Root all affected loaded subclasses: each replacement ClassExt retains

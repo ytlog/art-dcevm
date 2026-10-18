@@ -56,6 +56,7 @@ using class_layout::Pointer;
 // ART services, resolved by name in Prepare.
 ArtField* (*find_static_field)(void*, std::string_view, std::string_view) = nullptr;
 ArtField* (*find_declared_instance_field)(void*, std::string_view, std::string_view) = nullptr;
+void* (*mirror_class)(ClassRedefinitionPrefix*) = nullptr;
 void* original_mapping = nullptr;
 void* original_update = nullptr;
 void* original_visit = nullptr;
@@ -77,13 +78,24 @@ struct FieldArraySwap {
   std::vector<uint32_t> kept;  // LengthPrefixedArray<ArtField>: length, then 4 words each.
 };
 // A retired reference field with a same-named new field of another reference
-// type: a compatible old value moves to the new field (JBR's FieldCopier).
+// type in an instance: a compatible old value moves to the new field.
+// Static values use the separately planned JBR FieldCopier rules below.
 struct RetypedField {
   int32_t class_index;
   ArtField* old_field;
   ArtField* new_field;
   bool is_static;
   jobject type;  // The new field type, a global reference owned by the batch.
+};
+// JBR FieldCopier checks only redefined instance classes, against the new
+// signature of the class, its parents and their directly declared interfaces.
+// The compatible Class roots are resolved while failure is still possible.
+struct StaticFieldPlan {
+  int32_t class_index;
+  ArtField* old_field;
+  ArtField* new_field;
+  bool retyped;
+  std::vector<jobject> compatible;
 };
 struct MappingPlan {
   // The target's new class links under a new superclass that extends the old
@@ -99,6 +111,9 @@ struct MappingPlan {
   std::vector<RetiredField> retired_fields;
   std::vector<FieldArraySwap> field_swaps;
   std::vector<RetypedField> retyped;
+  std::vector<StaticFieldPlan> statics;
+  std::set<std::string> removed_interfaces;
+  std::map<std::string, std::vector<jobject>> static_compatibility;
   std::vector<MethodMapping> methods;
   // "class: method" that a re-linked class newly links as a default conflict.
   // Not a probe failure: the transaction must be rejected.
@@ -113,7 +128,7 @@ struct PlanOps {
   uint64_t* (*field_slot)(void* klass, size_t slot);
   uint32_t* (*superclass)(void* klass);
   void (*copy_retyped)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, const MappingPlan& plan);
-  void (*clear_narrowed)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data);
+  void (*clear_narrowed)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, const MappingPlan& plan);
 };
 // Named JavaVMExt::DecodeGlobal and the runtime's JavaVM; without them a
 // retyped field starts from null like any retired field.
@@ -128,7 +143,8 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
   // storage, as in ART's mapping. A field without one was accepted for
   // retirement by the policy: it keeps its real old ArtField, and ART's copy
   // phase sees a field array without it.
-  static bool PlanFields(const runtime_thread::VerifiedThread& thread, int32_t class_index, Class* old_class, Class* new_class,
+  static bool PlanFields(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                         int32_t class_index, Class* old_class, Class* new_class,
                          MappingPlan* plan, std::string* why) {
     const DexFilePrefix* dex = DexOf(thread, old_class->dex_cache);
     if (!dex || !dex->begin) return Fail(why, "old class has no DexFile");
@@ -148,6 +164,8 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
         ArtField* replacement = (is_static ? find_static_field : find_declared_instance_field)(
             new_class, identity.name, identity.descriptor);
         if (replacement) {
+          if (is_static && identity.descriptor.front() == 'L' && plan->removed_interfaces.count(identity.descriptor))
+            if (!PlanStatic(thread, data, class_index, field, replacement, identity.descriptor, false, plan, why)) return false;
           plan->fields.emplace_back(field, replacement);
           const auto* words = reinterpret_cast<const uint32_t*>(field);
           swap.kept.insert(swap.kept.end(), words, words + sizeof(ArtField) / sizeof(uint32_t));
@@ -161,7 +179,23 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
         plan->fields.emplace_back(field, field);
         plan->retired_fields.push_back(RetiredField::Of(field, identity.descriptor, is_static));
         retires = true;
-        if (const auto* retyped = FindRetyped(thread, *old_class, identity.name, is_static); retyped && decode_global) {
+        if (is_static && identity.descriptor.front() == 'L') {
+          const DexFilePrefix* new_dex = DexOf(thread, new_class->dex_cache);
+          if (!new_dex) return Fail(why, "new static class has no DEX");
+          for (uint64_t members : FieldArrays(*new_class)) {
+            auto* candidates = Members<ArtField>(members);
+            for (uint32_t j = 0; candidates && j < candidates->length; ++j) {
+              ArtField* next = candidates->At(j);
+              if (!(next->access_flags & evolution::kAccStatic)) continue;
+              evolution::Member incoming;
+              if (!evolution::ReadFieldIdentity(DexViewOf(*new_dex), next->dex_field_index, &incoming, why)) return false;
+              if (incoming.name == identity.name && incoming.descriptor.front() == 'L')
+                if (!PlanStatic(thread, data, class_index, field, next, incoming.descriptor, true, plan, why)) return false;
+            }
+          }
+        }
+        if (const auto* retyped = is_static ? nullptr : FindRetyped(thread, *old_class, identity.name, false);
+            retyped && decode_global) {
           ArtField* next = (is_static ? find_static_field : find_declared_instance_field)(
               new_class, identity.name, retyped->descriptor);
           if (next) plan->retyped.push_back({class_index, field, next, is_static, retyped->type});
@@ -255,10 +289,11 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     auto* old_classes = data.Classes(true);
     auto* new_classes = data.Classes(false);
     if (!old_classes || !new_classes) return true;  // Non-structural: ART keeps the class.
+    if (!RemovedInterfaces(thread, data, &plan->removed_interfaces, why)) return false;
     for (int32_t i = 0; i < old_classes->length; ++i) {
       auto* old_class = class_layout::Element<Class>(thread, old_classes, i);
       auto* new_class = class_layout::Element<Class>(thread, new_classes, i);
-      if (!PlanFields(thread, i, old_class, new_class, plan, why)) return false;
+      if (!PlanFields(thread, data, i, old_class, new_class, plan, why)) return false;
       if (!PlanMethods(thread, old_class, new_class, plan, why)) return false;
     }
     return true;
@@ -269,9 +304,9 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
                                                      const std::string& name, bool is_static) {
     const transaction::Context* context = transaction::Current();
     if (!context) return nullptr;
-    const std::string descriptor = class_layout::ClassDescriptor(thread, old_class);
+    (void)thread;
     for (const auto& [target, requirements] : context->targets) {
-      if (requirements.descriptor != descriptor) continue;
+      if (mirror_class(target) != &old_class) continue;
       for (const auto& retyped : requirements.retyped_fields)
         if (retyped.name == name && retyped.is_static == is_static) return &retyped;
     }
@@ -297,6 +332,7 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     auto* new_classes = data.Classes(false);
     auto* olds = data.OldInstances();
     auto* news = data.Slot(RedefinitionDataIter::kSlotNewInstanceObjects);
+    CopyStatics(thread, data, plan);
     for (const auto& retyped : plan.retyped) {
       auto* type = static_cast<Class*>(decode_global(runtime_vm, retyped.type));
       if (!type) continue;
@@ -317,26 +353,117 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
       }
     }
   }
-  // Commit, after ART's UpdateClassStructurally replaced old objects with
-  // their replacements: a static of the target declared with an interface it
-  // stopped implementing keeps only a value that still implements it (JBR
-  // clears the rest). The value's class is already the replacement class.
-  static void ClearNarrowed(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data) {
-    const transaction::Context* context = transaction::Current();
-    auto* new_classes = data.Classes(false);
-    if (!context || !new_classes || !decode_global) return;
-    auto* target = class_layout::Element<Class>(thread, new_classes, 0);
-    const std::string descriptor = class_layout::ClassDescriptor(thread, *target);
-    for (const auto& [self, requirements] : context->targets) {
-      if (requirements.descriptor != descriptor) continue;
-      for (const auto& field : requirements.narrowed_statics) {
-        auto* type = static_cast<Class*>(decode_global(runtime_vm, field.type));
-        ArtField* storage = find_static_field(target, field.name, field.descriptor);
-        if (!type || !storage) continue;
-        auto* slot = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(target) + storage->offset);
-        auto* value = static_cast<abi::Object*>(runtime_thread::Read(thread, *slot));
-        if (value && !Assignable(thread, class_layout::Heap<Class>(thread, value->klass), type, false)) *slot = 0;
+  static Class* Replacement(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data, Class* klass) {
+    auto* holder = data.holder->array.Get<abi::ObjectArray>();
+    for (int32_t owner = 0; holder && owner < holder->length / RedefinitionDataIter::kNumSlots; ++owner) {
+      RedefinitionDataIter item{owner, data.holder};
+      auto* olds = item.Classes(true);
+      auto* news = item.Classes(false);
+      for (int32_t i = 0; olds && news && i < olds->length; ++i)
+        if (class_layout::Element<Class>(thread, olds, i) == klass)
+          return class_layout::Element<Class>(thread, news, i);
+    }
+    return klass;
+  }
+  static bool RemovedInterfaces(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                                std::set<std::string>* removed, std::string*) {
+    auto* holder = data.holder->array.Get<abi::ObjectArray>();
+    for (int32_t owner = 0; holder && owner < holder->length / RedefinitionDataIter::kNumSlots; ++owner) {
+      RedefinitionDataIter item{owner, data.holder};
+      auto* olds = item.Classes(true);
+      auto* news = item.Classes(false);
+      for (int32_t i = 0; olds && news && i < olds->length; ++i) {
+        auto* old_class = class_layout::Element<Class>(thread, olds, i);
+        auto* new_class = class_layout::Element<Class>(thread, news, i);
+        auto* before = class_layout::Heap<abi::ObjectArray>(thread, old_class->iftable);
+        auto* after = class_layout::Heap<abi::ObjectArray>(thread, new_class->iftable);
+        for (int32_t j = 0; before && j + 1 < before->length; j += 2) {
+          Class* prior = class_layout::Element<Class>(thread, before, j);
+          Class* final = Replacement(thread, data, prior);
+          bool kept = false;
+          for (int32_t k = 0; after && k + 1 < after->length; k += 2)
+            kept |= Replacement(thread, data, class_layout::Element<Class>(thread, after, k)) == final;
+          if (!kept) removed->insert(class_layout::ClassDescriptor(thread, *prior));
+        }
       }
+    }
+    return true;
+  }
+  static bool StaticCompatible(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                               Class* value, const std::string& signature, bool* compatible, std::string* why) {
+    *compatible = false;
+    for (Class* c = value; c; c = Replacement(thread, data, class_layout::Heap<Class>(thread, c->super_class))) {
+      if (class_layout::ClassDescriptor(thread, *c) == signature) { *compatible = true; return true; }
+      const DexFilePrefix* dex = DexOf(thread, c->dex_cache);
+      std::vector<std::string> interfaces;
+      if (dex) {
+        if (!evolution::ReadClassInterfaces(DexViewOf(*dex), c->dex_class_def_index, &interfaces, why)) return false;
+      } else {
+        // Proxy classes have no DEX. Their direct interfaces were read using
+        // public JVMTI while Native, before any ART callback.
+        bool captured = false;
+        for (const auto& type : transaction::Current()->affected_types) {
+          auto* original = static_cast<Class*>(decode_global(runtime_vm, type.klass));
+          if (c != original && c != Replacement(thread, data, original)) continue;
+          interfaces = type.interfaces;
+          captured = true;
+          break;
+        }
+        if (!captured) return Fail(why, "static compatibility class has no interface snapshot");
+      }
+      for (const auto& direct : interfaces)
+        if (direct == signature) { *compatible = true; return true; }
+    }
+    return true;
+  }
+  static bool PlanStatic(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                         int32_t index, ArtField* old_field, ArtField* new_field, const std::string& signature,
+                         bool retyped, MappingPlan* plan, std::string* why) {
+    auto found = plan->static_compatibility.find(signature);
+    if (found == plan->static_compatibility.end()) {
+      if (!decode_global) return Fail(why, "static compatibility root decoding unavailable");
+      std::vector<jobject> compatible;
+      for (const auto& type : transaction::Current()->affected_types) {
+        auto* original = static_cast<Class*>(decode_global(runtime_vm, type.klass));
+        if (!original) return Fail(why, "static compatibility class root unavailable");
+        bool accepted = false;
+        if (!StaticCompatible(thread, data, Replacement(thread, data, original), signature, &accepted, why)) return false;
+        if (accepted) compatible.push_back(type.klass);
+      }
+      found = plan->static_compatibility.emplace(signature, std::move(compatible)).first;
+    }
+    plan->statics.push_back({index, old_field, new_field, retyped, found->second});
+    return true;
+  }
+  static bool AcceptsStatic(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                            const StaticFieldPlan& field, abi::Object* value) {
+    auto* klass = class_layout::Heap<Class>(thread, value->klass);
+    (void)data;
+    for (jobject root : field.compatible)
+      if (klass == decode_global(runtime_vm, root)) return true;
+    return false;
+  }
+  static void CopyStatics(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                          const MappingPlan& plan) {
+    for (const auto& field : plan.statics) {
+      if (!field.retyped) continue;
+      auto* old_class = class_layout::Element<Class>(thread, data.Classes(true), field.class_index);
+      auto* new_class = class_layout::Element<Class>(thread, data.Classes(false), field.class_index);
+      auto* source = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(old_class) + field.old_field->offset);
+      auto* value = static_cast<abi::Object*>(runtime_thread::Read(thread, *source));
+      if (!value || !AcceptsStatic(thread, data, field, value)) continue;
+      *reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(new_class) + field.new_field->offset) = class_layout::Reference(value);
+    }
+  }
+  // No-failure commit: only planned field offsets and rooted Class identities.
+  static void ClearNarrowed(const runtime_thread::VerifiedThread& thread, const RedefinitionDataIter& data,
+                            const MappingPlan& plan) {
+    for (const auto& field : plan.statics) {
+      if (field.retyped) continue;
+      auto* target = class_layout::Element<Class>(thread, data.Classes(false), field.class_index);
+      auto* slot = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(target) + field.new_field->offset);
+      auto* value = static_cast<abi::Object*>(runtime_thread::Read(thread, *slot));
+      if (value && !AcceptsStatic(thread, data, field, value)) *slot = 0;
     }
   }
   static constexpr PlanOps Make(int) {
@@ -439,14 +566,14 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
       swapped_superclasses.emplace_back(slot, *slot);
       *slot = *layout->superclass(data.Classes(true)->Get<void>(0));
     }
-    if (!plan->retyped.empty())
+    if (!plan->retyped.empty() || !plan->statics.empty())
       if (const auto thread = runtime_thread::Ready()) layout->copy_retyped(*thread, data, *plan);
   }
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   reinterpret_cast<Function>(original_update)(self, data);
   RestoreFieldArrays();
   if (plan && class_layout::Selected() >= 0)
-    if (const auto thread = runtime_thread::Ready()) kPlanners[class_layout::Selected()].clear_narrowed(*thread, data);
+    if (const auto thread = runtime_thread::Ready()) kPlanners[class_layout::Selected()].clear_narrowed(*thread, data, *plan);
   // ART has replaced the interface's references, proxy IfTables included.
   proxy_relink::Apply(self, data);
   // ART's ClearFields skipped the retired statics; drop their references so
@@ -478,6 +605,7 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
   find_static_field = services.find_static_field;
   find_declared_instance_field = services.find_declared_instance_field;
   runtime_vm = services.vm;
+  mirror_class = services.mirror_class;
   decode_global = reinterpret_cast<DecodeGlobal>(symbols::Find(symbols::interface_redefinition::kDecodeGlobal));
   using namespace symbols::structural;
   struct Required { symbols::NamedSymbol symbol; void* replacement; void** original; };

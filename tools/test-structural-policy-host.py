@@ -904,6 +904,15 @@ int main(int argc, char** argv) {
         Require(evolution::ReadReferencedClasses(view, &classes, &error) &&
                 classes == std::vector<std::string>{"LA;", "LB;", "LC;"},
                 "referenced classes not read");
+        std::vector<std::string> interfaces;
+        Require(evolution::ReadClassInterfaces(view, 0, &interfaces, &error) &&
+                interfaces == std::vector<std::string>{"LB;"}, "direct interface declarations not read");
+        Require(evolution::ReadClassInterfaces(view, 1, &interfaces, &error) && interfaces.empty(),
+                "interface declarations leaked between ClassDefs");
+        interfaces = {"unchanged"};
+        Require(!evolution::ReadClassInterfaces(view, 2, &interfaces, &error) &&
+                interfaces == std::vector<std::string>{"unchanged"} && !error.empty(),
+                "out-of-range ClassDef interface read was not atomic");
         ClassSchema schema;
         Require(!evolution::ReadClassDeclarations(view, &schema, &error),
                 "multi-class or compact DEX accepted as a redefinition class");
@@ -1005,6 +1014,9 @@ def identity_case(compact=False):
     struct.pack_into('<HHI', main, method_ids, 3, 0, 5)
     put(main, class_defs, 2)
     put(main, class_defs + 32, 3)
+    interfaces = len(data)
+    data.extend(struct.pack('<IH', 1, 3) + bytes(2))
+    put(main, class_defs + 12, interfaces)
     put(main, 0x20, len(main))
     return main, (data if compact else None)
 

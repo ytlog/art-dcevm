@@ -42,7 +42,8 @@ struct Entry {
   jobject proxy = nullptr;      // Global references, released with the transaction.
   jobject interface = nullptr;
   jobject methods = nullptr;    // long[]: the new IfTable method array.
-  int32_t index = -1;            // The interface's redefinition, once planned.
+  int32_t index = -1;            // The structural owner that commits this group.
+  int32_t class_index = -1;      // This interface in the owner's class arrays.
   int32_t iftable_slot = -1;     // IfTable pair index of the interface.
   std::vector<std::pair<void*, void*>> prototypes;  // Proxy method, new interface method.
 };
@@ -89,8 +90,8 @@ template <typename Class, typename Method> struct Relinker {
 
   static bool Plan(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
                    const abi::RedefinitionDataIter& data, State& state, Entry& entry, std::string* why) {
-    auto* old_interface = static_cast<Class*>(services.mirror_class(self));
-    auto* new_interface = static_cast<Class*>(data.NewClassObject());
+    auto* old_interface = class_layout::Element<Class>(thread, data.Classes(true), entry.class_index);
+    auto* new_interface = class_layout::Element<Class>(thread, data.Classes(false), entry.class_index);
     auto* proxy = static_cast<Class*>(services.decode_global(state.vm, entry.proxy));
     auto* array = static_cast<abi::PointerArray*>(services.decode_global(state.vm, entry.methods));
     if (!old_interface || !new_interface || !proxy || !array) return Fail(why, "proxy relink input missing");
@@ -254,11 +255,18 @@ bool Plan(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
           const abi::RedefinitionDataIter& data, int selected, std::string* why) {
   State* state = CurrentState();
   if (!state) return true;
-  void* target = services.mirror_class(self);
+  auto* old_classes = data.Classes(true);
+  auto* new_classes = data.Classes(false);
+  if (!old_classes || !new_classes) return true;
+  if (old_classes->length != new_classes->length) return Fail(why, "proxy class arrays differ");
   for (Entry& entry : state->entries) {
-    if (class_layout::DecodeClass(services.mirror_class, self, static_cast<jclass>(entry.interface)) != target)
-      continue;
-    if (!kRelinkers[selected].plan(thread, self, data, *state, entry, why)) return false;
+    void* target = class_layout::DecodeClass(services.mirror_class, self, static_cast<jclass>(entry.interface));
+    for (int32_t i = 0; i < old_classes->length; ++i) {
+      if (class_layout::Element<void>(thread, old_classes, i) != target) continue;
+      entry.class_index = i;
+      if (!kRelinkers[selected].plan(thread, self, data, *state, entry, why)) return false;
+      break;
+    }
   }
   return true;
 }
@@ -271,7 +279,8 @@ void Apply(abi::ClassRedefinitionPrefix* self, const abi::RedefinitionDataIter& 
   bool applied = false;
   for (Entry& entry : state->entries) {
     if (entry.index != data.index) continue;
-    kRelinkers[selected].apply(*thread, *state, entry, data.NewClassObject());
+    kRelinkers[selected].apply(*thread, *state, entry,
+        class_layout::Element<void>(*thread, data.Classes(false), entry.class_index));
     applied = true;
   }
   if (!applied) return;

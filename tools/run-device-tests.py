@@ -172,6 +172,11 @@ SCENARIOS = (
     ('interface-stress-add', ['interface-stress-add'], 0),
     ("interface-removal-batched", ["interface-remove", "interface-remove"], 0),
     ("interface-removal-batched-restore", ["interface-remove-original", "interface-remove-original"], 0),
+    ("proxy-interface-group-abort", ["proxy-group-add", "proxy-group-add", "proxy-group-add"], 110),
+    ("proxy-interface-group-pure", ["proxy-group-add", "proxy-group-add", "proxy-group-add"], 0),
+    ("proxy-interface-group-restore", ["proxy-group-original", "proxy-group-original", "proxy-group-original"], 0),
+    ("proxy-interface-group-shared", ["proxy-group-add", "proxy-group-add", "proxy-group-add"], 0),
+    ("proxy-interface-group-final", ["proxy-group-original", "proxy-group-original", "proxy-group-original"], 0),
     ("proxy-interface", ["proxy-api-add"], 0),
     ("proxy-interface-restore", ["proxy-api-original"], 0),
     ("interface-drop-parent", ["parent-remove"], 0),
@@ -221,6 +226,14 @@ SCENARIOS = (
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
 # flags of an added interface.
+SCENARIOS += (
+    ("static-narrow-abort", ["static-narrow-remove"] * 5, 110),
+    ("static-narrow-remove", ["static-narrow-remove"] * 5, 0),
+    ("static-narrow-restore", ["static-narrow-original"] * 5, 0),
+    ("static-narrow-hook", ["static-narrow-remove"] * 5, 0),
+    ("static-narrow-loaders", ["static-narrow-remove"] * 5 + ["static-narrow-struct"] * 5, 0),
+)
+
 MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
                     "multi-interface-family", "multi-interface-shared", "multi-interface-after-shared", "multi-interface-covered",
                     "interface-overlap-uncovered","interface-overlap-body", "interface-overlap-structural", "interface-overlap-recovery","interface-implementation-body", "interface-implementation-add",
@@ -248,6 +261,8 @@ MAPPED_SCENARIOS.update({"interface-removal-batched", "interface-removal-batched
                          "abstract-removal-repeat", "abstract-removal-group", "abstract-removal-restore", "interface-remove", "interface-removal", "interface-removal-restore",
                          "proxy-interface", "proxy-interface-restore",
                          "interface-drop-parent", "interface-drop-parent-restore"})
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
+                        if code == 0 and (name.startswith("proxy-interface-group-") or name.startswith("static-narrow-")))
 VAR_HANDLE_API = 33
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
@@ -586,13 +601,13 @@ REQUIRED_CHECKS = {
         **field_retired_checks("Restored")},
     "field-retype": {
         "textType": "java.lang.CharSequence", "keep": 41, "childOwn": 17,
-        **{name: True for name in ("textKept", "numberKept", "mismatchCleared", "interfaceKept", "staticKept",
+        **{name: True for name in ("textKept", "numberKept", "mismatchCleared", "interfaceKept", "staticCleared",
                                    "staticMismatchCleared", "childTextKept", "childInterfaceKept",
                                    "textKeptAfterGc", "childInterfaceKeptAfterGc")}},
     "field-retype-restore": {
         "textType": "java.lang.String",
         **{name: True for name in ("builderCleared", "childTextKept", "numberKept", "interfaceKept",
-                                   "staticKept", "mismatchNull", "staticMismatchNull")}},
+                                   "staticCleared", "mismatchNull", "staticMismatchNull")}},
 }
 # Interface direct targets retain exact old reflection objects, handles and
 # JNI IDs, and old bytecode wrappers still name the removed declarations.
@@ -923,6 +938,25 @@ REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': 
                                       'cachedBytecode': 12,
                                       'cachedJni': 12}})
 
+for _name, _, _code in SCENARIOS:
+    if _name.startswith("proxy-interface-group-"):
+        REQUIRED_CHECKS[_name] = {"base": 21, "child": 22, "side": 23}
+        if _name in ("proxy-interface-group-pure", "proxy-interface-group-shared"):
+            REQUIRED_CHECKS[_name].update(extraBase=31, extraChild=32, extraSide=33)
+REQUIRED_CHECKS["static-narrow-abort"] = {"armed": 0, "self": True, "holderSelf": True, "retyped": True,
+    "oldType": "java.lang.Object"}
+REQUIRED_CHECKS["static-narrow-restore"] = {"selfStillNull": None, "compatibleKept": True}
+REQUIRED_CHECKS["static-narrow-hook"] = {"hookInstalled": 0, "hookDeletedField": "java.lang.NoSuchFieldException",
+    "hookRestoredType": "java.lang.Object", "hookRestoredValue": True, "hookSelfCleared": None}
+REQUIRED_CHECKS["static-narrow-remove"] = {
+    "selfCleared": None, "retypedCleared": None, "holderSelfCleared": None,
+    "compatibleKept": True, "holderCompatibleKept": True, "afterGc": True,
+    **{owner + "Array-" + name: True for owner in ("owner", "holder")
+       for name in ("array", "objectArray", "cloneableArray", "serializableArray")}}
+REQUIRED_CHECKS["static-narrow-loaders"] = {
+    "distinctClasses": False, **{name + str(i): value for i in range(2)
+        for name, value in (("selfCleared", None), ("compatibleKept", True), ("retypedKept", True), ("ownLoader", True))}}
+
 def scenario_sequence(scenario_group):
     if scenario_group == "full":
         return SCENARIOS
@@ -930,6 +964,10 @@ def scenario_sequence(scenario_group):
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
     if scenario_group == "thread-subclass":
         return tuple(item for item in SCENARIOS if item[0] == "thread-subclass")
+    if scenario_group == "field-retype":
+        return tuple(item for item in SCENARIOS if item[0].startswith("field-retype"))
+    if scenario_group == "static-narrow":
+        return tuple(item for item in SCENARIOS if item[0].startswith("static-narrow-"))
     if scenario_group == "proxy-interface":
         return tuple(item for item in SCENARIOS if item[0].startswith("proxy-interface"))
     if scenario_group == "interface-drop-parent":
@@ -940,7 +978,9 @@ def scenario_sequence(scenario_group):
         # Match the contiguous interface-target block in runScenarios. Ordinary
         # classes adding interfaces remain part of the ordinary suite.
         names = [item[0] for item in SCENARIOS]
-        return SCENARIOS[:names.index("interface-method-bodies")] + SCENARIOS[names.index("interface-hidden"):]
+        return tuple(item for item in SCENARIOS[:names.index("interface-method-bodies")]
+                     + SCENARIOS[names.index("interface-hidden"):]
+                     if not item[0].startswith("static-narrow-"))
     raise RunFailure("Unsupported scenario group")
 
 
@@ -1110,7 +1150,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "proxy-interface", "interface-drop-parent"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")

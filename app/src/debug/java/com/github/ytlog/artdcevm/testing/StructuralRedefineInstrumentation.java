@@ -58,6 +58,8 @@ import com.github.ytlog.artdcevm.fixture.ThreadSubclassFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.ProxyFixture;
+import com.github.ytlog.artdcevm.fixture.ProxyGroupFixture;
+import com.github.ytlog.artdcevm.fixture.StaticNarrowingFixture;
 import com.github.ytlog.artdcevm.fixture.ParentRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.ToolHost;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
@@ -165,6 +167,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             }
             else if ("proxy-interface".equals(isolated)) runProxyScenarios();
             else if ("interface-drop-parent".equals(isolated)) runParentRemovalScenarios();
+            else if ("static-narrow".equals(isolated)) runStaticNarrowingScenarios();
+            else if ("field-retype".equals(isolated)) runRetypeScenarios();
             else if (isolated.startsWith("interface-abstract-reject-"))
                 runAbstractRejectionScenario(isolated.substring("interface-abstract-reject-".length()));
             else throw new IllegalArgumentException("Unsupported isolated scenario");
@@ -349,12 +353,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runRetypeScenarios();
         runThreadSubclassScenario();
         runInterfaceRemovalScenarios();
+        if (!ordinaryOnly) runStaticNarrowingScenarios();
     }
 
     // A Proxy implementation of a redefined interface stays: kept methods still
     // reach the handler, now as methods of the new interface; a new abstract
     // method throws AbstractMethodError and a new default runs its body.
     private void runProxyScenarios() throws Exception {
+        runProxyGroupScenarios();
         final int times = 200_000;
         ProxyFixture.Api api = ProxyFixture.create();
         Class<?>[] batch = {ProxyFixture.Api.class};
@@ -390,6 +396,189 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("twice", 77, api.twice());
             scenario.check("sum", 5 * times, ProxyFixture.sum(api, times));
         });
+    }
+
+    private void runStaticNarrowingScenarios() throws Exception {
+        StaticNarrowingFixture.Shared shared =
+                new StaticNarrowingFixture.Shared();
+        StaticNarrowingFixture.Compatible compatible =
+                new StaticNarrowingFixture.Compatible();
+        Class<?> owner = StaticNarrowingFixture.Shared.class;
+        Class<?> holder = StaticNarrowingFixture.Holder.class;
+        Class<?>[] batch = {StaticNarrowingFixture.Child.class,
+                StaticNarrowingFixture.Side.class, owner, holder, StaticNarrowingFixture.Compatible.class};
+        String[] array = {"kept"};
+        for (String name : new String[]{"array", "objectArray", "cloneableArray", "serializableArray"}) {
+            owner.getField(name).set(null, array);
+            holder.getField(name).set(null, array);
+        }
+        StaticNarrowingFixture.Shared[] narrowedArray = {shared};
+        StaticNarrowingFixture.Shared[][] narrowedMatrix = {narrowedArray};
+        for (Class<?> storage : new Class<?>[]{owner, holder}) {
+            storage.getField("covariant").set(null, narrowedArray);
+            storage.getField("matrix").set(null, narrowedMatrix);
+            storage.getField("retypedArray").set(null, narrowedArray);
+            storage.getField("unsubmitted").set(null, new StaticNarrowingFixture.Unsubmitted());
+        }
+        owner.getField("self").set(null, shared);
+        owner.getField("compatible").set(null, compatible);
+        owner.getField("retyped").set(null, shared);
+        holder.getField("self").set(null, shared);
+        holder.getField("compatible").set(null, compatible);
+        runScenario("static-narrow-abort", 110, scenario -> {
+            scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+            scenario.redefine(batch, "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove");
+            scenario.check("self", true, owner.getField("self").get(null) == shared);
+            scenario.check("holderSelf", true, holder.getField("self").get(null) == shared);
+            scenario.check("retyped", true, owner.getField("retyped").get(null) == shared);
+            scenario.check("oldType", Object.class.getName(), owner.getField("retyped").getType().getName());
+        });
+        runScenario("static-narrow-remove", 0, scenario -> {
+            scenario.redefine(batch, "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove");
+            for (String name : new String[]{"array", "objectArray", "cloneableArray", "serializableArray"}) {
+                scenario.check("ownerArray-" + name, true, owner.getField(name).get(null) == array);
+                scenario.check("holderArray-" + name, true, holder.getField(name).get(null) == array);
+            }
+            for (Class<?> storage : new Class<?>[]{owner, holder}) {
+                String label = storage == owner ? "owner" : "holder";
+                scenario.check(label + "CovariantKept", true, storage.getField("covariant").get(null) == narrowedArray);
+                scenario.check(label + "MatrixKept", true, storage.getField("matrix").get(null) == narrowedMatrix);
+                scenario.check(label + "ArrayRetypeNull", null, storage.getField("retypedArray").get(null));
+                scenario.check(label + "UnsubmittedNull", null, storage.getField("unsubmitted").get(null));
+            }
+            scenario.check("bodyOnlyCompatible", 22, compatible.value());
+            scenario.check("selfCleared", null, owner.getField("self").get(null));
+            scenario.check("compatibleKept", true, owner.getField("compatible").get(null) == compatible);
+            scenario.check("retypedCleared", null, owner.getField("retyped").get(null));
+            scenario.check("holderSelfCleared", null, holder.getField("self").get(null));
+            scenario.check("holderCompatibleKept", true, holder.getField("compatible").get(null) == compatible);
+            scenario.check("newType", StaticNarrowingFixture.Base.class.getName(),
+                    owner.getField("retyped").getType().getName());
+            Runtime.getRuntime().gc();
+            scenario.check("marker", 7, shared.marker);
+            scenario.check("afterGc", true, owner.getField("compatible").get(null) == compatible);
+        });
+        runScenario("static-narrow-restore", 0, scenario -> {
+            scenario.redefine(batch, "static-narrow-original", "static-narrow-original", "static-narrow-original", "static-narrow-original", "static-narrow-original");
+            scenario.check("selfStillNull", null, owner.getField("self").get(null));
+            scenario.check("compatibleKept", true, owner.getField("compatible").get(null) == compatible);
+        });
+        owner.getField("self").set(null, shared);
+        owner.getField("retyped").set(null, shared);
+        runScenario("static-narrow-hook", 0, scenario -> {
+            scenario.check("hookInstalled", 0, StandardJvmtiClient.setClassFileReplacement(
+                    owner.getName().replace('.', '/'), readAsset("static-narrow-hook/"
+                            + owner.getName().replace('.', '/') + ".dex")));
+            try {
+                scenario.redefine(batch, "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove");
+            } finally {
+                StandardJvmtiClient.setClassFileReplacement(null, null);
+            }
+            scenario.expectError("hookDeletedField", NoSuchFieldException.class, () -> owner.getField("objectArray"));
+            scenario.check("hookRestoredType", Object.class.getName(), owner.getField("retyped").getType().getName());
+            scenario.check("hookRestoredValue", true, owner.getField("retyped").get(null) == shared);
+            scenario.check("hookSelfCleared", null, owner.getField("self").get(null));
+        });
+        runStaticNarrowingLoaders();
+    }
+
+    private void runStaticNarrowingLoaders() throws Exception {
+        String prefix = "com.github.ytlog.artdcevm.fixture.StaticNarrowingFixture";
+        String[] suffixes = {"", "$Base", "$Child", "$Side", "$Shared", "$Compatible", "$CompatibleChild", "$Unsubmitted", "$Holder"};
+        java.nio.ByteBuffer[] dexes = new java.nio.ByteBuffer[suffixes.length];
+        for (int i = 0; i < suffixes.length; ++i)
+            dexes[i] = java.nio.ByteBuffer.wrap(readAsset("static-narrow-original/"
+                    + (prefix + suffixes[i]).replace('.', '/') + ".dex"));
+        ClassLoader[] loaders = new ClassLoader[2];
+        Class<?>[] batch = new Class<?>[10];
+        Class<?>[] owners = new Class<?>[2];
+        Object[] values = new Object[2];
+        Object[] selves = new Object[2];
+        for (int i = 0; i < 2; ++i) {
+            loaders[i] = new dalvik.system.InMemoryDexClassLoader(dexes, context.getClassLoader().getParent());
+            String[] targets = i == 0 ? new String[]{"$Child", "$Side", "$Shared", "$Holder", "$Compatible"}
+                    : new String[]{"$Compatible", "$Holder", "$Shared", "$Side", "$Child"};
+            for (int j = 0; j < targets.length; ++j)
+                batch[i * 5 + j] = Class.forName(prefix + targets[j], true, loaders[i]);
+            owners[i] = Class.forName(prefix + "$Shared", true, loaders[i]);
+            selves[i] = owners[i].getConstructor().newInstance();
+            values[i] = Class.forName(prefix + (i == 0 ? "$Compatible" : "$CompatibleChild"), true, loaders[i]).getConstructor().newInstance();
+            owners[i].getField("self").set(null, selves[i]);
+            owners[i].getField("compatible").set(null, values[i]);
+            owners[i].getField("retyped").set(null, values[i]);
+        }
+        runScenario("static-narrow-loaders", 0, scenario -> {
+            scenario.check("distinctClasses", false, owners[0] == owners[1]);
+            scenario.redefine(batch, "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove", "static-narrow-remove",
+                    "static-narrow-struct", "static-narrow-struct", "static-narrow-struct", "static-narrow-struct", "static-narrow-struct");
+            Runtime.getRuntime().gc();
+            for (int i = 0; i < owners.length; ++i) {
+                scenario.check("selfCleared" + i, null, owners[i].getField("self").get(null));
+                scenario.check("compatibleKept" + i, true, owners[i].getField("compatible").get(null) == values[i]);
+                scenario.check("retypedKept" + i, true, owners[i].getField("retyped").get(null) == values[i]);
+                scenario.check("ownLoader" + i, true, owners[i].getField("retyped").getType().getClassLoader() == loaders[i]);
+            }
+        });
+    }
+
+    private void runProxyGroupScenarios() throws Exception {
+        Object proxy = ProxyGroupFixture.create();
+        Class<?> base = ProxyGroupFixture.Base.class;
+        Class<?> child = ProxyGroupFixture.Child.class;
+        Class<?> side = ProxyGroupFixture.Side.class;
+        Class<?>[] forward = {base, child, side};
+        Class<?>[] reverse = {side, child, base};
+        runScenario("proxy-interface-group-abort", 110, scenario -> {
+            scenario.check("pureProxy", false, StandardJvmtiClient.isLoaded(
+                    "Lcom/github/ytlog/artdcevm/fixture/ProxyGroupFixture$Shared;"));
+            scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+            scenario.redefine(forward, "proxy-group-add", "proxy-group-add", "proxy-group-add");
+            scenario.check("base", 21, base.getMethod("base").invoke(proxy));
+            scenario.check("child", 22, child.getMethod("child").invoke(proxy));
+            scenario.check("side", 23, side.getMethod("side").invoke(proxy));
+            scenario.expectError("unpublishedBase", NoSuchMethodException.class, () -> base.getMethod("extraBase"));
+            scenario.expectError("unpublishedChild", NoSuchMethodException.class, () -> child.getMethod("extraChild"));
+            scenario.expectError("unpublishedSide", NoSuchMethodException.class, () -> side.getMethod("extraSide"));
+        });
+        runScenario("proxy-interface-group-pure", 0, scenario -> {
+            scenario.redefine(forward, "proxy-group-add", "proxy-group-add", "proxy-group-add");
+            checkProxyGroup(scenario, proxy, true);
+        });
+        // Loading the common ordinary implementation joins the parent/child
+        // and unrelated interface targets into one owner with multiple entries.
+        Object shared = Class.forName("com.github.ytlog.artdcevm.fixture.ProxyGroupFixture$Shared")
+                .getConstructor().newInstance();
+        runScenario("proxy-interface-group-restore", 0, scenario -> {
+            scenario.redefine(reverse, "proxy-group-original", "proxy-group-original", "proxy-group-original");
+            checkProxyGroup(scenario, proxy, false);
+            scenario.check("shared", 7, shared.getClass().getField("marker").getInt(shared));
+        });
+        runScenario("proxy-interface-group-shared", 0, scenario -> {
+            scenario.redefine(reverse, "proxy-group-add", "proxy-group-add", "proxy-group-add");
+            Runtime.getRuntime().gc();
+            checkProxyGroup(scenario, proxy, true);
+            scenario.check("shared", 7, shared.getClass().getField("marker").getInt(shared));
+            scenario.check("sharedBase", 31, ProxyGroupFixture.Base.class
+                    .getMethod("extraBase").invoke(shared));
+        });
+        runScenario("proxy-interface-group-final", 0, scenario -> {
+            scenario.redefine(forward, "proxy-group-original", "proxy-group-original", "proxy-group-original");
+            checkProxyGroup(scenario, proxy, false);
+        });
+    }
+
+    private void checkProxyGroup(Scenario scenario, Object proxy, boolean added) throws Exception {
+        Class<?> base = ProxyGroupFixture.Base.class;
+        Class<?> child = ProxyGroupFixture.Child.class;
+        Class<?> side = ProxyGroupFixture.Side.class;
+        scenario.check("base", 21, base.getMethod("base").invoke(proxy));
+        scenario.check("child", 22, child.getMethod("child").invoke(proxy));
+        scenario.check("side", 23, side.getMethod("side").invoke(proxy));
+        if (added) {
+            scenario.check("extraBase", 31, base.getMethod("extraBase").invoke(proxy));
+            scenario.check("extraChild", 32, child.getMethod("extraChild").invoke(proxy));
+            scenario.check("extraSide", 33, side.getMethod("extraSide").invoke(proxy));
+        }
     }
 
     // Child drops its parent Base: Impl, which implements Child, stops being a
@@ -609,7 +798,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private void runRetypeScenarios() throws Exception {
         RetypeFixture.Subject subject = new RetypeFixture.Subject();
         RetypeFixture.Child child = new RetypeFixture.Child();
-        String text = subject.text, label = RetypeFixture.Subject.label;
+        String text = subject.text;
         Object number = subject.number, task = subject.task, childTask = child.task;
         Class<?> type = RetypeFixture.Subject.class;
         runScenario("field-retype", 0, scenario -> {
@@ -619,7 +808,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("numberKept", true, type.getField("number").get(subject) == number);
             scenario.check("mismatchCleared", true, type.getField("mismatch").get(subject) == null);
             scenario.check("interfaceKept", true, type.getField("task").get(subject) == task);
-            scenario.check("staticKept", true, type.getField("label").get(null) == label);
+            scenario.check("staticCleared", true, type.getField("label").get(null) == null);
             scenario.check("staticMismatchCleared", true, type.getField("staticMismatch").get(null) == null);
             scenario.check("childTextKept", true, type.getField("text").get(child) == text);
             scenario.check("childInterfaceKept", true, type.getField("task").get(child) == childTask);
@@ -638,7 +827,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("childTextKept", true, child.text == text);
             scenario.check("numberKept", true, subject.number == number);
             scenario.check("interfaceKept", true, subject.task == task);
-            scenario.check("staticKept", true, RetypeFixture.Subject.label == label);
+            scenario.check("staticCleared", true, RetypeFixture.Subject.label == null);
             scenario.check("mismatchNull", true, subject.mismatch == null);
             scenario.check("staticMismatchNull", true, RetypeFixture.Subject.staticMismatch == null);
         });

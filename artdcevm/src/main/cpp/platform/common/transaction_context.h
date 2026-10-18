@@ -50,8 +50,13 @@ struct Requirements {
   // (global references): their structural rebuilds are allocated first, and
   // the target links under the replacement of its new superclass.
   std::vector<jclass> chain_rebuilds;
-  // Statics typed with an interface the target stops implementing (imt_sealing.h).
-  std::vector<RetypedType> narrowed_statics;
+};
+
+// Native roots for JBR's affected-class set, including body-only targets and
+// their loaded subtypes. Direct interface names also describe no-DEX Proxies.
+struct AffectedType {
+  jobject klass;
+  std::vector<std::string> interfaces;
 };
 
 struct Context {
@@ -71,6 +76,7 @@ struct Context {
   uint32_t layouts = ~uint32_t{0};
   bool probed = false;
   std::map<abi::arm64::ClassRedefinitionPrefix*, Requirements> targets;
+  std::vector<AffectedType> affected_types;  // Global roots owned by the engine batch.
   // A rejection decided after ART allocated the new classes, taken once.
   std::string rejection;
   // ART's holder while it allocates the new classes, for finding a class's

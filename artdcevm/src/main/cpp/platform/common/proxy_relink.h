@@ -34,8 +34,8 @@ bool Available();
 // would need entries it does not have.
 jvmtiError Prepare(JNIEnv* jni, const std::vector<jclass>& proxies, const std::vector<Interface>& interfaces,
                    std::string* error);
-// Before ART's no-failure point, in an interface target's own redefinition:
-// fill its proxies' arrays and build their sealed IMTs.
+// Before ART's no-failure point, match each interface by Class identity in
+// the structural owner's class arrays, fill its Proxy arrays and build IMTs.
 bool Plan(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
           const abi::arm64::RedefinitionDataIter& data, int selected, std::string* why);
 // At commit, after ART replaced the interface's references: install the

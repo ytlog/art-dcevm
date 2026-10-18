@@ -66,8 +66,8 @@ jvmtiEnv env{&tooling};
 void Require(bool value, const char* why) { if (!value) throw std::runtime_error(why); }
 jvmtiError JNICALL Structural(jvmtiEnv*, jint count, const jvmtiClassDefinition*) {
   if (count == 2) {
-    Require(global_refs[child_type] == 1,
-            "Nested preload invalidation dropped an original target's descendant retention root");
+    Require(global_refs[child_type] == 2,
+            "Nested preload invalidation lost retirement or static-compatibility roots");
     ++outer_routes;
   }
   return JVMTI_ERROR_NONE;

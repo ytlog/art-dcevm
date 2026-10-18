@@ -420,7 +420,7 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
   // A reference field whose type changes keeps a compatible old value: the
   // commit needs the new type's class, resolved here without initializing it.
   for (const auto& old : snapshot->live.fields) {
-    if (old.descriptor.front() != 'L') continue;
+    if (old.IsStatic() || old.descriptor.front() != 'L') continue;
     for (const auto& next : incoming.fields) {
       if (next.name != old.name || next.IsStatic() != old.IsStatic() || next.descriptor == old.descriptor ||
           next.descriptor.front() != 'L') continue;
@@ -429,17 +429,6 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
       jvmtiError result = resolver->Resolve(next.descriptor, snapshot->live.descriptor, roots, &type, &same_package, error);
       if (result != JVMTI_ERROR_NONE) return result;
       if (type) snapshot->retyped_fields.push_back({next.name, next.IsStatic(), next.descriptor, type});
-    }
-  }
-  for (const auto& removed : snapshot->live.interfaces) {
-    if (std::find(incoming.interfaces.begin(), incoming.interfaces.end(), removed) != incoming.interfaces.end()) continue;
-    for (const auto& field : incoming.fields) {
-      if (!field.IsStatic() || field.descriptor != removed) continue;
-      jclass type = nullptr;
-      bool same_package = false;
-      jvmtiError result = resolver->Resolve(removed, snapshot->live.descriptor, roots, &type, &same_package, error);
-      if (result != JVMTI_ERROR_NONE) return result;
-      if (type) snapshot->narrowed_statics.push_back({field.name, true, field.descriptor, type});
     }
   }
   const auto& before = snapshot->live.interfaces;

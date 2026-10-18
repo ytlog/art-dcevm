@@ -32,10 +32,6 @@ struct Snapshot {
   // target's loader (a global reference in the caller's roots).
   struct RetypedField { std::string name; bool is_static; std::string descriptor; jclass type; };
   std::vector<RetypedField> retyped_fields;
-  // Static fields declared with an interface the class stops implementing,
-  // with that interface resolved: a value that no longer implements it is
-  // cleared at commit, as JBR does for the redefined class's statics.
-  std::vector<RetypedField> narrowed_statics;
   // Ordinary targets: loaded subtypes, including the target, borrowed from the
   // standard entry's index for the transaction.
   const std::vector<struct LoadedType>* subtypes = nullptr;
