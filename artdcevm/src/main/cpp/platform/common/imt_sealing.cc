@@ -9,6 +9,7 @@
 #include "evolution/class_schema.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/common/class_layout_table.h"
+#include "platform/common/fault_injection.h"
 #include "platform/symbols/imt_sealing_symbols.h"
 
 namespace artdcevm::imt_sealing {
@@ -39,9 +40,50 @@ struct Services {
 std::mutex state_mutex;
 Services services;
 std::atomic<bool> ready{false}, installed{false};
-std::atomic<void*> protected_conflict{nullptr};
+std::atomic<void*> canonical_conflict{nullptr};
+std::atomic<bool> protecting{false};
+std::atomic<const char*> captured_from{nullptr};
 using Link = bool (*)(void*, void*, abi::Handle, abi::Handle, bool*, void**);
 void* original_link_methods = nullptr;
+void* original_fill_super = nullptr;
+struct Boundary { void* target = nullptr; const char* name = nullptr; bool legacy = false; };
+Boundary boundary;
+std::atomic<void*> verified_boundary{nullptr};
+thread_local bool priming = false;
+thread_local uint32_t probe_links = 0, probe_super_fills = 0;
+
+void Capture(void* conflict, const char* source) noexcept {
+  if (!conflict) return;
+  void* empty = nullptr;
+  if (canonical_conflict.compare_exchange_strong(empty, conflict, std::memory_order_release))
+    captured_from.store(source, std::memory_order_release);
+}
+void Protect(bool* new_conflict, void** imt) noexcept {
+  if (!protecting.load(std::memory_order_acquire)) return;
+  if (void* conflict = canonical_conflict.load(std::memory_order_acquire)) {
+    std::fill_n(imt, kImtSize, conflict);
+    *new_conflict = true;
+  }
+}
+// Fixed Android 11/12 declaration. LinkInterfaceMethods invokes this for
+// every concrete class with a superclass before any per-method IMT inserts.
+// SetIMTRef recognizes the canonical runtime method and cannot turn these
+// slots back into direct entries; ART still owns the final table publication.
+void FillSuper(void* self, abi::Handle klass, void* unimplemented, void* conflict,
+               bool* new_conflict, void** imt) noexcept {
+  if (priming) ++probe_super_fills;
+  Capture(conflict, "FillImtFromSuperClass");
+  using Fill = void (*)(void*, abi::Handle, void*, void*, bool*, void**);
+  reinterpret_cast<Fill>(original_fill_super)(self, klass, unimplemented, conflict, new_conflict, imt);
+  Protect(new_conflict, imt);
+}
+void* Canonical(void* runtime) {
+  if (services.conflict_method) {
+    void* result = services.conflict_method(runtime);
+    Capture(result, "Runtime::GetImtConflictMethod");
+  }
+  return canonical_conflict.load(std::memory_order_acquire);
+}
 
 // Both ClassLinker::LinkMethods (11--17) and the 13--17 k64 helper have
 // these explicit arguments. No ART object or thread field is read here.
@@ -50,12 +92,23 @@ void* original_link_methods = nullptr;
 // from sharing an ancestor's IMT/cache even when every slot initially matches.
 bool LinkMethods(void* self, void* thread, abi::Handle klass, abi::Handle interfaces,
                  bool* new_conflict, void** imt) noexcept {
+  if (priming) ++probe_links;
+  const bool had_conflict = *new_conflict;
   if (!reinterpret_cast<Link>(original_link_methods)(self, thread, klass, interfaces, new_conflict, imt))
     return false;
-  if (void* conflict = protected_conflict.load(std::memory_order_acquire)) {
-    std::fill_n(imt, kImtSize, conflict);
-    *new_conflict = true;
-  }
+  // Fixed ART 13--17 LinkClass initializes new_conflict=false. The modern
+  // LinkMethods helper only copies the superclass IMT or writes through
+  // SetIMTRef (FinalizeIfTable and FillIMTFromIfTable with create_tables=false).
+  // Each false->true transition writes the canonical conflict method into a
+  // slot. Further SetIMTRef writes to that runtime slot stay canonical. Thus
+  // true at return guarantees at least one canonical slot remains. If all 43
+  // nonnull outputs are identical, that sole value is necessarily canonical.
+  // This runs only in Prime's thread window, before our own Protect modifies
+  // outputs. No Class/Runtime layout or arbitrary published IMT is inspected.
+  if (priming && !had_conflict && *new_conflict && imt[0] &&
+      std::all_of(imt + 1, imt + kImtSize, [first = imt[0]](void* slot) { return slot == first; }))
+    Capture(imt[0], "LinkMethods saturated probe");
+  Protect(new_conflict, imt);
   return true;
 }
 std::string state = "unavailable: not prepared";
@@ -133,7 +186,7 @@ template <typename Class, typename Method> struct Sealer {
     if (!linear_alloc) return false;
     auto** slots = static_cast<void**>(AllocTable(linear_alloc, self->driver->self));
     if (!slots) return Fail(why, "cannot allocate an IMT");
-    void* conflict = services.conflict_method(self->driver->runtime);
+    void* conflict = Canonical(self->driver->runtime);
     if (!conflict) return Fail(why, "ART has no canonical IMT conflict method");
     std::fill_n(slots, kImtSize, conflict);
     *table = slots;
@@ -154,7 +207,8 @@ bool Prepare(const class_layout::Services& layout, std::vector<Hook>* hooks, std
   std::lock_guard<std::mutex> lock(state_mutex);
   ready.store(false);
   Services found;
-  found.conflict_method =
+  const int fault_mode = ARTDCEVM_IMT_FALLBACK_MODE();
+  found.conflict_method = (fault_mode & 1) ? nullptr :
       reinterpret_cast<GetConflictMethod>(symbols::Find(symbols::imt_sealing::kGetImtConflictMethod));
   found.alloc = reinterpret_cast<Alloc>(symbols::Find(symbols::imt_sealing::kLinearAllocAlloc));
   found.alloc_kind = reinterpret_cast<AllocKind>(symbols::Find(symbols::imt_sealing::kLinearAllocAllocKind));
@@ -162,22 +216,31 @@ bool Prepare(const class_layout::Services& layout, std::vector<Hook>* hooks, std
   std::string reason;
   if (!found.alloc == !found.alloc_kind) reason = "expected exactly one LinearAlloc::Alloc";
   else if (!found.find_instance_field) reason = "no instance field lookup";
-  else if (!found.conflict_method) reason = std::string("missing ") + symbols::imt_sealing::kGetImtConflictMethod.name;
   const auto* link_symbol = &symbols::imt_sealing::kLinkMethods64;
-  void* link = symbols::Find(*link_symbol);
-  if (!link) {
+  void* link = (fault_mode & 2) ? nullptr : symbols::Find(*link_symbol);
+  // A legacy LinkMethods wrapper can also have a name while its callers
+  // inline it. The distinctive legacy FillSuper is the explicit-argument
+  // pre-publication boundary on those runtimes.
+  void* fill_super = link ? nullptr : symbols::Find(symbols::imt_sealing::kFillImtFromSuperClass);
+  if (!link && !fill_super) {
     link_symbol = &symbols::imt_sealing::kLinkMethods;
-    link = symbols::Find(*link_symbol);
+    link = (fault_mode & 2) ? nullptr : symbols::Find(*link_symbol);
   }
-  if (reason.empty() && !link) reason = "missing pre-publication ClassLinker::LinkMethods service";
+  if (reason.empty() && !link && !fill_super) reason = "missing pre-publication LinkMethods or FillImtFromSuperClass service";
   if (!reason.empty()) {
     state = "unavailable: " + reason;
     *failure = reason;
     return false;
   }
-  // Always append the hook, including a retry after the engine rolled back
-  // an earlier installation. Resolved services alone never enable removal.
-  hooks->push_back({link, HookAddress(LinkMethods), &original_link_methods, link_symbol->name});
+  // Always append on retry: all earlier tokens may have been rolled back.
+  if (link) {
+    hooks->push_back({link, HookAddress(LinkMethods), &original_link_methods, link_symbol->name});
+    boundary = {link, link_symbol == &symbols::imt_sealing::kLinkMethods64 ? "LinkMethodsHelper" : "LinkMethods", false};
+  } else {
+    hooks->push_back({fill_super, HookAddress(FillSuper), &original_fill_super,
+                      symbols::imt_sealing::kFillImtFromSuperClass.name});
+    boundary = {fill_super, "FillImtFromSuperClass", true};
+  }
   services = found;
   state = "available";
   ready.store(true);
@@ -185,19 +248,54 @@ bool Prepare(const class_layout::Services& layout, std::vector<Hook>* hooks, std
 }
 
 void Installed(bool value) { installed.store(value, std::memory_order_release); }
-bool Available() { return ready.load() && installed.load(std::memory_order_acquire); }
+bool Available() {
+  return ready.load() && installed.load(std::memory_order_acquire) &&
+      (verified_boundary.load(std::memory_order_acquire) == boundary.target) &&
+      (services.conflict_method || canonical_conflict.load(std::memory_order_acquire));
+}
+bool Prime(JNIEnv* jni, std::string* why) {
+  if (!ready.load() || !installed.load()) return Fail(why, "linking protection is not installed");
+  if ((verified_boundary.load(std::memory_order_acquire) == boundary.target) &&
+      (services.conflict_method || canonical_conflict.load(std::memory_order_acquire))) return true;
+  probe_links = 0;
+  probe_super_fills = 0;
+  priming = true;
+  jclass probe = jni ? jni->FindClass("com/github/ytlog/artdcevm/internal/ImtLinkProbe") : nullptr;
+  priming = false;
+  if (probe) jni->DeleteLocalRef(probe);
+  const bool exception = jni && jni->ExceptionCheck();
+  if (exception) jni->ExceptionClear();
+  const bool reached = boundary.legacy ? probe_super_fills != 0
+                                        : probe_links != 0;
+  if (!exception && probe && reached && (services.conflict_method || canonical_conflict.load(std::memory_order_acquire))) {
+    verified_boundary.store(boundary.target, std::memory_order_release);
+    return true;
+  }
+  std::lock_guard<std::mutex> lock(state_mutex);
+  state = exception ? "unavailable: Java exception linking canonical conflict probe"
+      : !probe ? "unavailable: canonical conflict probe class was not found"
+      : !reached ? "unavailable: selected pre-publication probe callback was not reached"
+      : "unavailable: canonical conflict probe was not saturated; LinkMethods calls=" +
+          std::to_string(probe_links);
+  ready.store(false);
+  return Fail(why, state);
+}
 bool Enable(abi::ClassRedefinitionPrefix* self, std::string* why) {
   if (!Available()) return Fail(why, State());
-  void* conflict = services.conflict_method(self->driver->runtime);
+  void* conflict = Canonical(self->driver->runtime);
   if (!conflict) return Fail(why, "ART has no canonical IMT conflict method");
-  protected_conflict.store(conflict, std::memory_order_release);
+  protecting.store(true, std::memory_order_release);
   return true;
 }
-bool Protecting() { return protected_conflict.load(std::memory_order_acquire) != nullptr; }
+bool Protecting() { return protecting.load(std::memory_order_acquire); }
 
 std::string State() {
   std::lock_guard<std::mutex> lock(state_mutex);
   if (ready.load() && !installed.load()) return "unavailable: pre-publication linking protection is not installed";
+  if (ready.load() && installed.load()) {
+    const char* source = services.conflict_method ? "Runtime::GetImtConflictMethod" : captured_from.load(std::memory_order_acquire);
+    return std::string("available: ") + boundary.name + "; canonical=" + (source ? source : "awaiting capture");
+  }
   return state;
 }
 

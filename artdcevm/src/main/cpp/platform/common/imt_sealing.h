@@ -21,6 +21,10 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
 // Prepare only resolves services. Availability additionally requires the
 // engine to have installed the pre-publication linking hook; rollback clears it.
 void Installed(bool installed);
+// Native, after hooks install: link the private probe to verify the selected
+// protection callback, and capture the canonical method if the getter is absent.
+// A failed probe disables sealing before capabilities publish.
+bool Prime(JNIEnv* jni, std::string* why);
 // Monotonic, process-wide protection after the first accepted interface
 // narrowing. Abort may leave protection on, but changes no published class.
 bool Enable(abi::arm64::ClassRedefinitionPrefix* self, std::string* why);

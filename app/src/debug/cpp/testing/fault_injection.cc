@@ -9,6 +9,7 @@
 namespace artdcevm::fault_injection {
 namespace {
 bool interface_prepared = false;
+int imt_fallback_mode = 0;
 thread_local int failure_stage = 0, failure_hits = 0;
 thread_local std::array<int, 5> counters{};
 thread_local bool reject_next_probe = false;
@@ -21,6 +22,7 @@ void SnapshotFinished(std::chrono::steady_clock::time_point start, int targets, 
                       targets, loaded, static_cast<long long>(nanos));
 }
 void InterfacePrepared(bool prepared) { interface_prepared = prepared; }
+int ImtFallbackMode() { return imt_fallback_mode; }
 bool Inject(int stage) {
   if (failure_stage != stage) return false;
   failure_stage = 0;
@@ -40,6 +42,13 @@ void CorruptHolder(const abi::arm64::RedefinitionDataIter& data) {
 void ReferenceRead(bool marking) { ++reads; if (marking) ++marking_reads; }
 int Increment(Counter counter) { return ++counters[static_cast<int>(counter)]; }
 void Set(Counter counter, int value) { counters[static_cast<int>(counter)] = value; }
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureImtFallback(
+    JNIEnv*, jclass, jint mode) {
+  if (mode < 0 || mode > 1) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+  imt_fallback_mode = mode;
+  return JVMTI_ERROR_NONE;
+}
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCheckJni(
     JNIEnv* jni, jclass, jboolean enabled) {

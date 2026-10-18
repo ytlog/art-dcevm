@@ -12,6 +12,9 @@ inline constexpr NamedSymbol kGetImtConflictMethod{Library::kArt, "_ZN3art7Runti
 // the same explicit arguments and is preferred when present.
 inline constexpr NamedSymbol kLinkMethods{Library::kArt, "_ZN3art11ClassLinker11LinkMethodsEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEENS3_INS4_11ObjectArrayIS5_EEEEPbPPNS_9ArtMethodE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kLinkMethods64{Library::kArt, "_ZN3art11ClassLinker17LinkMethodsHelperILNS_11PointerSizeE8EE11LinkMethodsEPNS_6ThreadENS_6HandleINS_6mirror5ClassEEENS6_INS7_11ObjectArrayIS8_EEEEPbPPNS_9ArtMethodE", SymbolTable::kAnyNamed};
+// class_linker.h, Android 11/12: this whole-table pre-publication path
+// receives the canonical conflict method as an explicit argument.
+inline constexpr NamedSymbol kFillImtFromSuperClass{Library::kArt, "_ZN3art11ClassLinker21FillImtFromSuperClassENS_6HandleINS_6mirror5ClassEEEPNS_9ArtMethodES6_PbPS6_", SymbolTable::kAnyNamed};
 // LinearAlloc::Alloc. Runtimes from ART 14 take a LinearAllocKind; a runtime
 // has exactly one of the two.
 inline constexpr NamedSymbol kLinearAllocAlloc{

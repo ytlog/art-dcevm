@@ -132,6 +132,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   class_layout::Prepare({});
   std::string retirement_note, interface_note, sealing_note, failure;
   bool sealing_prepared = false;
+  size_t sealing_hook_begin = 0, sealing_hook_end = 0;
   JNIEnv* jni = nullptr;
   vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
   std::vector<Hook> retirement_hooks;
@@ -163,7 +164,9 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     prepared.instance_check = true;
     prepared.superclass_change = verification_redirect::ResolvesClasses();
     // Optional: without it an ordinary class cannot drop an interface.
+    sealing_hook_begin = retirement_hooks.size();
     sealing_prepared = imt_sealing::Prepare(process->layout_services, &retirement_hooks, &failure);
+    sealing_hook_end = retirement_hooks.size();
     if (!sealing_prepared)
       sealing_note = "interface removal unavailable: " + failure;
     else if (!proxy_relink::Install(process->layout_services, &failure))
@@ -197,6 +200,23 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       RollBack(&failure);
       Diagnose(failure);
       return JVMTI_ERROR_INTERNAL;
+    }
+  }
+  imt_sealing::Installed(prepared.retirement && sealing_prepared);
+  if (sealing_prepared && !imt_sealing::Prime(jni, &failure)) {
+    // The optional probe runs before irreversible JNI-table publication. Drop
+    // every sealing hook together; member retirement and base routing remain.
+    imt_sealing::Installed(false);
+    sealing_prepared = false;
+    sealing_note = "interface removal unavailable: " + failure;
+    for (size_t i = sealing_hook_end; i-- > sealing_hook_begin;) {
+      if (shadowhook_unhook(process->hook_tokens[i]) != 0) {
+        std::string reason = "canonical conflict probe rollback failed";
+        RollBack(&reason);
+        Diagnose(reason);
+        return JVMTI_ERROR_INTERNAL;
+      }
+      process->hook_tokens[i] = nullptr;
     }
   }
   // This process override cannot be undone; no later inline hook may fail.

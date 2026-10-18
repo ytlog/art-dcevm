@@ -12,6 +12,7 @@ from pathlib import Path
 import hashlib
 import json
 import runpy
+import re
 import shutil
 import subprocess
 import tempfile
@@ -43,6 +44,8 @@ int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 bool route_hooked = false;
 int sealing_hooks = 0;
 bool failed_sealing_hook = false;
+int probe_loads = 0;
+std::set<void*> sealing_tokens;
 interface_redefinition::Backend* prepared_interface = nullptr;
 using Route = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Route routed = nullptr;
@@ -64,6 +67,35 @@ JNIEnv jni{&functions};
 JavaVM vm{&invocation};
 jvmtiEnv env{&tooling};
 void Require(bool value, const char* why) { if (!value) throw std::runtime_error(why); }
+int conflict_token = 0, direct_token = 0, unimplemented_token = 0, cache_token = 0;
+using FillSuperFn = void (*)(void*, abi::arm64::Handle, void*, void*, bool*, void**);
+using LinkFn = bool (*)(void*, void*, abi::arm64::Handle, abi::arm64::Handle, bool*, void**);
+FillSuperFn hooked_fill_super = nullptr;
+LinkFn hooked_link = nullptr;
+void* Conflict(void*) { return &conflict_token; }
+bool probe_running = false;
+bool LinkOriginal(void*, void*, abi::arm64::Handle, abi::arm64::Handle, bool* fresh, void** imt) {
+  std::fill_n(imt, 43, &direct_token);
+  if (probe_running) {
+    if (mode == 10 || mode == 13 || mode == 14) {
+      // All unimplemented, inherited cache, and direct outputs without any
+      // new conflict cannot establish the canonical method.
+      std::fill_n(imt, 43, mode == 10 ? &unimplemented_token : mode == 13 ? &cache_token : &direct_token);
+      return true;
+    }
+    std::fill_n(imt, 43, mode == 17 ? nullptr : &conflict_token);
+    *fresh = true;
+    if (mode == 16) imt[0] = &direct_token;
+  }
+  return true;
+}
+void FillSuperOriginal(void*, abi::arm64::Handle, void*, void*, bool*, void** imt) {
+  std::fill_n(imt, 43, &direct_token);
+}
+void SetRefOriginal(void*, void*, void* conflict, void* method, bool* fresh, void** slot) {
+  if (*slot == conflict) *fresh = true;
+  else *slot = method;
+}
 jvmtiError JNICALL Structural(jvmtiEnv*, jint count, const jvmtiClassDefinition*) {
   if (count == 2) {
     Require(global_refs[child_type] == 2,
@@ -89,9 +121,12 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (key == symbols::runtime_thread::kUseReadBarrier.name) return nullptr;
   if (mode == 3 && key == symbols::structural::kCollectNewFieldAndMethodMappings.name) return nullptr;
   if (mode >= 6 && key == symbols::imt_sealing::kLinearAllocAllocKind.name) return nullptr;
-  if (mode == 6 && key == symbols::imt_sealing::kGetImtConflictMethod.name) return nullptr;
-  if (mode == 7 && (key == symbols::imt_sealing::kLinkMethods.name ||
-                    key == symbols::imt_sealing::kLinkMethods64.name)) return nullptr;
+  if ((mode == 6 || mode == 10 || mode == 11 || mode == 12 || mode == 13 || mode == 14 || mode >= 16) &&
+      key == symbols::imt_sealing::kGetImtConflictMethod.name) return nullptr;
+  if ((mode == 7 || mode == 12 || mode == 15) &&
+      (key == symbols::imt_sealing::kLinkMethods.name || key == symbols::imt_sealing::kLinkMethods64.name)) return nullptr;
+  if (mode == 15 && key == symbols::imt_sealing::kFillImtFromSuperClass.name) return nullptr;
+  if (key == symbols::imt_sealing::kGetImtConflictMethod.name) return reinterpret_cast<void*>(Conflict);
   // No field placeholders are needed to exercise method-guard installation.
   if (key.find("EncodeFieldId") != std::string::npos) return nullptr;
   return &addresses[key];
@@ -112,26 +147,46 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
     }
     Require(found, "Hook target was not resolved by name");
   }
-  if (target == &addresses[symbols::imt_sealing::kLinkMethods64.name]) {
+  if (target == &addresses[symbols::imt_sealing::kLinkMethods64.name] ||
+      target == &addresses[symbols::imt_sealing::kFillImtFromSuperClass.name]) {
     ++sealing_hooks;
     if (mode == 8 && !failed_sealing_hook) { failed_sealing_hook = true; return nullptr; }
   }
   if (mode == 1 && hook_calls == 2) return nullptr;
   *original = target;
+  if (target == &addresses[symbols::imt_sealing::kLinkMethods64.name]) {
+    *original = reinterpret_cast<void*>(LinkOriginal); hooked_link = reinterpret_cast<LinkFn>(replacement);
+  } else if (target == &addresses[symbols::imt_sealing::kFillImtFromSuperClass.name]) {
+    *original = reinterpret_cast<void*>(FillSuperOriginal); hooked_fill_super = reinterpret_cast<FillSuperFn>(replacement);
+
+
+  }
   if (target == reinterpret_cast<void*>(Redefine)) {
     route_hooked = true; routed = reinterpret_cast<Route>(replacement);
   }
   auto token = reinterpret_cast<void*>(static_cast<uintptr_t>(hook_calls));
   active.insert(token);
+  if (target == &addresses[symbols::imt_sealing::kLinkMethods64.name] ||
+      target == &addresses[symbols::imt_sealing::kFillImtFromSuperClass.name]) sealing_tokens.insert(token);
   return token;
 }
 extern "C" int shadowhook_unhook(void* token) {
   std::cout << "UNHOOK " << reinterpret_cast<uintptr_t>(token) << '\n';
   Require(active.erase(token) == 1, "Rollback used an unknown token");
+  sealing_tokens.erase(token);
   return 0;
 }
 jint JNICALL GetEnv(JavaVM*, void** out, jint) { *out = &jni; return JNI_OK; }
 jclass JNICALL FindClass(JNIEnv*, const char* name) {
+  if (std::string(name) == "com/github/ytlog/artdcevm/internal/ImtLinkProbe") {
+    ++probe_loads;
+    if (mode == 11) return nullptr;
+    bool fresh = mode == 18; void* imt[43] = {};
+    probe_running = true;
+    if (hooked_link) hooked_link(nullptr, nullptr, {}, {}, &fresh, imt);
+    if (hooked_fill_super) hooked_fill_super(nullptr, {}, nullptr, &conflict_token, &fresh, imt);
+    probe_running = false;
+  }
   return std::string(name) == "java/lang/Object" ? root_type : reinterpret_cast<jclass>(0x1000);
 }
 jobject JNICALL NewGlobalRef(JNIEnv*, jobject object) { ++global_refs[object]; return object; }
@@ -266,6 +321,28 @@ int main(int argc, char** argv) {
         Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE &&
                 sealing_hooks == 2 && imt_sealing::Available(),
                 "Retry skipped the prepared pre-publication linking hook");
+      } else if (mode == 6 || mode == 7 || mode == 12) {
+        Require(result == JVMTI_ERROR_NONE && imt_sealing::Available(), "Named IMT fallback was not installed");
+        {
+          Require(probe_loads == 1, "Missing getter did not perform a real linking probe");
+          std::string reason;
+          imt_sealing::Installed(false);
+          Require(!imt_sealing::Available(), "Rollback retained published availability");
+          imt_sealing::Installed(true);
+          Require(imt_sealing::Prime(&jni, &reason) && probe_loads == 1,
+                  "Retry required relinking an already loaded probe or lost the captured canonical method");
+        }
+        abi::arm64::RedefinerPrefix driver{};
+        abi::arm64::ClassRedefinitionPrefix target{&driver, nullptr, nullptr};
+        std::string reason;
+        Require(imt_sealing::Enable(&target, &reason), "Named fallback could not enable protection");
+        bool fresh = false; void* imt[43] = {};
+        if (mode == 7 || mode == 12) hooked_fill_super(nullptr, {}, nullptr, &conflict_token, &fresh, imt);
+        else Require(hooked_link(nullptr, nullptr, {}, {}, &fresh, imt), "Link callback lost original success");
+        Require(fresh && std::all_of(std::begin(imt), std::end(imt), [](void* slot) { return slot == &conflict_token; }),
+                "Pre-publication fallback left a direct slot or a shared-table indication");
+        SetRefOriginal(nullptr, nullptr, &conflict_token, &direct_token, &fresh, imt);
+        Require(imt[0] == &conflict_token, "A later per-method insert unsealed the legacy table");
       } else {
         Require(result == JVMTI_ERROR_NONE, "Missing optional sealing service broke initialization");
         Require(!imt_sealing::Available(), "Unavailable or rolled-back sealing hook enabled removal");
@@ -276,6 +353,8 @@ int main(int argc, char** argv) {
                 "Sealing failure changed unrelated member capabilities");
         if (mode == 9) Require(sealing_hooks == 1 && active.size() == 4,
                 "JNI fallback retained the optional pre-publication linking hook");
+        else if (mode == 10 || mode == 11 || mode == 13 || mode == 14 || mode >= 16) Require(sealing_hooks == 1 && sealing_tokens.empty(),
+                "Probe failure left part of the optional hook group installed");
         else Require(sealing_hooks == 0, "Incomplete sealing services installed a linking hook");
       }
     } else {
@@ -327,7 +406,31 @@ int main(int argc, char** argv) {
 '''
 
 
+def verify_probe():
+    """Ensure shrink-safe probe members saturate the fixed ART 13--17 hash."""
+    probe = ROOT / 'artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/ImtLinkProbe.java'
+    source = probe.read_text()
+    concrete = re.findall(r'@Override public void (probe[0-9]+)\(\) \{\}', source)
+    declared = re.findall(r'^    void (probe[0-9]+)\(\);', source, re.MULTILINE)
+    assert len(concrete) == len(set(concrete)) == 86 and sorted(concrete) == sorted(declared)
+    def utf_hash(value):
+        result = 0
+        for char in value:
+            result = (31 * result + ord(char)) & 0xffffffff
+        return result
+    descriptor = 'Lcom/github/ytlog/artdcevm/internal/ImtLinkProbeMethods;'
+    counts = [0] * 43
+    for name in declared:
+        mixed = (427 * utf_hash(descriptor) + 16 * utf_hash(name) + 14 * utf_hash('V')) & 0xffffffff
+        counts[mixed % 43] += 1
+    assert counts == [2] * 43, 'Probe must have distinct concrete implementations in every slot'
+    rules = (ROOT / 'artdcevm/consumer-rules.pro').read_text()
+    for name in ('ImtLinkProbe', 'ImtLinkProbeMethods'):
+        assert f'-keep class com.github.ytlog.artdcevm.internal.{name} {{ *; }}' in rules
+
+
 def main():
+    verify_probe()
     helper = runpy.run_path(str(ROOT / 'tools/test-structural-policy-host.py'))
     include = helper['java_home'](None) / 'include'
     platform = 'darwin' if (include / 'darwin').is_dir() else 'linux'
@@ -373,7 +476,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(10):
+        for case in range(19):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:

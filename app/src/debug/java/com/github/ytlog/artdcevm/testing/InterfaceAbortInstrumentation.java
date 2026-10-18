@@ -34,6 +34,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     static native int allocatedTypes();
     private static native int primePointerId(Class<?> klass, int kind);
     private static native int configureCheckJni(boolean enabled);
+    private static native int configureImtFallback(int mode);
     static native int validatedInterfaceGroups();
     static int armMappingPlanFailure() { return armFailure(22); }
     static int armDispatchFailure() { return armFailure(21); }
@@ -245,11 +246,20 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     // Debuggable applications may start with CheckJNI even when debug.checkjni
     // is zero. Switch before the engine captures and guards the JNI table.
     static void configureRuntime(Bundle arguments) {
-        if (arguments == null || !arguments.containsKey("checkjni")) return;
-        System.loadLibrary("artdcevm");
-        boolean enabled = Boolean.parseBoolean(arguments.getString("checkjni"));
-        int code = configureCheckJni(enabled);
-        if (code != 0) throw new AssertionError("Cannot select JNI checking mode: " + code);
+        if (arguments == null) return;
+        if (arguments.containsKey("checkjni")) {
+            System.loadLibrary("artdcevm");
+            boolean enabled = Boolean.parseBoolean(arguments.getString("checkjni"));
+            int code = configureCheckJni(enabled);
+            if (code != 0) throw new AssertionError("Cannot select JNI checking mode: " + code);
+        }
+        if (arguments.containsKey("imtFallback")) {
+            System.loadLibrary("artdcevm");
+            String mode = arguments.getString("imtFallback");
+            int bits = "no-getter".equals(mode) ? 1 : -1;
+            int code = configureImtFallback(bits);
+            if (code != 0) throw new AssertionError("Cannot select IMT fallback mode: " + code);
+        }
     }
 
     @Override public void onCreate(Bundle arguments) { super.onCreate(arguments); this.arguments = arguments; start(); }

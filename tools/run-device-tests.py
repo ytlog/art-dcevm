@@ -1152,6 +1152,8 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
     parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
+    parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
+                        help="Debug-only canonical IMT capture path to verify before engine initialization")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/runs",
@@ -1219,6 +1221,7 @@ def main(argv=None):
         try:
             mode_args = ["-e", "checkjni", "true" if args.checkjni_mode == "checkjni" else "false"] if args.checkjni_mode else []
             if args.scenario_group != "full": mode_args += ["-e", "scenario", args.scenario_group]
+            if args.imt_fallback_mode: mode_args += ["-e", "imtFallback", args.imt_fallback_mode]
             test = adb("instrumentation", "shell", "am", "instrument", "-w", "-r", *mode_args, COMPONENT,
                        timeout=args.timeout)
             meta["instrumentationExitCode"] = test.returncode
@@ -1249,6 +1252,15 @@ def main(argv=None):
         except (ValueError, TypeError) as error:
             raise RunFailure("The device report is not valid JSON") from error
         validate_report(result, scenario_group=args.scenario_group)
+        if args.imt_fallback_mode:
+            sealing = result["initialization"]["capabilities"].get("interfaceDispatchSealing", "")
+            expected = "LinkMethods saturated probe"
+            if not sealing.startswith("available:") or "canonical=Runtime::GetImtConflictMethod" in sealing:
+                raise RunFailure("The selected IMT fallback did not capture the canonical method")
+            if expected and ("canonical=" + expected) not in sealing:
+                raise RunFailure("The selected named IMT capture callback did not run")
+            meta["imtFallbackMode"] = args.imt_fallback_mode
+            meta["imtFallbackState"] = sealing
         meta["device"] = result["device"]
         meta["scenarioCount"] = len(result["scenarios"])
         meta["passed"] = True
