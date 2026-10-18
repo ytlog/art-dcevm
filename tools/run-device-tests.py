@@ -11,6 +11,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 
 from apk_verification import base_apk_path, require_install_success, verified_apk_sha256
 from evidence_paths import new_evidence_directory
@@ -1252,6 +1253,27 @@ def require_instrumentation_success(result):
         raise RunFailure("Android did not report successful instrumentation completion")
 
 
+def report_performance(report):
+    """Optional timings for modern APKs; correctness checks stay unconditional."""
+    scenarios = report.get("scenarios", [])
+    if not any("elapsedNanos" in item or "jvmtiNanos" in item for item in scenarios):
+        return None
+    for item in scenarios:
+        elapsed, native = item.get("elapsedNanos"), item.get("jvmtiNanos")
+        if type(elapsed) is not int or type(native) is not int or not 0 <= native <= elapsed:
+            raise RunFailure("The device report has incomplete or invalid scenario timings")
+    for key in ("reportNanos", "reportWrites"):
+        if type(report.get(key)) is not int or report[key] < 0:
+            raise RunFailure("The device report has invalid checkpoint timings")
+    return {"scenarioSeconds": round(sum(s["elapsedNanos"] for s in scenarios) / 1e9, 3),
+            "jvmtiSeconds": round(sum(s["jvmtiNanos"] for s in scenarios) / 1e9, 3),
+            "checkpointSeconds": round(report["reportNanos"] / 1e9, 3),
+            "checkpointWrites": report["reportWrites"],
+            "slowestScenarios": [{"name": s["name"], "seconds": round(s["elapsedNanos"] / 1e9, 3),
+                                   "jvmtiSeconds": round(s["jvmtiNanos"] / 1e9, 3)}
+                                  for s in sorted(scenarios, key=lambda s: s["elapsedNanos"], reverse=True)[:5]]}
+
+
 def find_adb():
     executable = shutil.which("adb")
     if executable:
@@ -1289,6 +1311,7 @@ def safe_report(value, serial):
 
 
 def main(argv=None):
+    started = time.perf_counter()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--serial", required=True, help="ADB device selector (kept only in raw evidence)")
     parser.add_argument("--adb", default=find_adb())
@@ -1322,6 +1345,7 @@ def main(argv=None):
         "apk": args.apk.name}, indent=2))
 
     def adb(label, *command, timeout=120):
+        command_started = time.perf_counter()
         try:
             result = subprocess.run([args.adb, "-s", args.serial, *command], capture_output=True,
                                     text=True, timeout=timeout)
@@ -1332,6 +1356,8 @@ def main(argv=None):
         except OSError as error:
             (out / (label + ".txt")).write_text(safe_console(str(error), args.serial))
             raise RunFailure("The " + label + " command could not start") from error
+        finally:
+            meta.setdefault("commandSeconds", {})[label] = round(time.perf_counter() - command_started, 3)
         (out / (label + ".txt")).write_text(safe_console(result.stdout + result.stderr, args.serial))
         (out / (label + ".json")).write_text(json.dumps({"returncode": result.returncode}))
         return result
@@ -1408,11 +1434,15 @@ def main(argv=None):
             meta["imtFallbackState"] = sealing
         meta["device"] = result["device"]
         meta["scenarioCount"] = len(result["scenarios"])
+        performance = report_performance(result)
+        if performance is not None:
+            meta["performance"] = performance
         meta["passed"] = True
         meta["status"] = "structural_redefinition_passed"
     except RunFailure as error:
         meta["status"] = "failed_or_incomplete"
         meta["error"] = str(error)
+    meta["totalSeconds"] = round(time.perf_counter() - started, 3)
     (out / "run.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2))
     print(safe_console(json.dumps(meta, ensure_ascii=False, indent=2), args.serial))
     print("Evidence: " + str(out.relative_to(ROOT)))

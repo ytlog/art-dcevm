@@ -111,6 +111,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private final List<byte[]> completedScenarioJson = new ArrayList<>();
     private Context context;
     private int failures;
+    private long reportNanos;
+    private int reportWrites;
     private Bundle arguments;
 
     @Override public void onCreate(Bundle arguments) {
@@ -4061,6 +4063,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void runScenario(String name, int expectedCode, ScenarioBody body) throws Exception {
+        long started = System.nanoTime();
         Scenario scenario = new Scenario(name, expectedCode);
         scenarios.put(scenario.result);
         writeReport(false);
@@ -4071,7 +4074,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.result.put("error", error.toString());
         }
         scenario.result.put("completed", true).put("passed", scenario.passed)
-                .put("capabilities", DcevmRuntime.capabilities());
+                .put("capabilities", DcevmRuntime.capabilities())
+                .put("elapsedNanos", System.nanoTime() - started)
+                .put("jvmtiNanos", scenario.jvmtiNanos);
         if (!scenario.passed) failures++;
         writeReport(false);
     }
@@ -4081,6 +4086,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         final JSONArray checks = new JSONArray();
         final int expectedCode;
         Class<?> rejectedClass;
+        long jvmtiNanos;
         boolean passed = true;
 
         Scenario(String name, int code) throws Exception {
@@ -4100,7 +4106,13 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             }
             result.put("variants", names);
             writeReport(false);
-            int actualCode = StandardJvmtiClient.redefine(classes, dexes);
+            int actualCode;
+            long started = System.nanoTime();
+            try {
+                actualCode = StandardJvmtiClient.redefine(classes, dexes);
+            } finally {
+                jvmtiNanos += System.nanoTime() - started;
+            }
             result.put("actualCode", actualCode);
             check("returnCode", expectedCode, actualCode);
             checkRejectionReason(classes);
@@ -4119,7 +4131,13 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                     klass.getName().replace('.', '/'), dex));
             long replacements = StandardJvmtiClient.classFileReplacements();
             try {
-                int actualCode = StandardJvmtiClient.retransform(requested);
+                int actualCode;
+                long started = System.nanoTime();
+                try {
+                    actualCode = StandardJvmtiClient.retransform(requested);
+                } finally {
+                    jvmtiNanos += System.nanoTime() - started;
+                }
                 result.put("actualCode", actualCode);
                 check("returnCode", expectedCode, actualCode);
                 checkRejectionReason(new Class<?>[]{klass});
@@ -4197,7 +4215,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void writeReport(boolean completed) throws Exception {
-        report.put("completed", completed).put("failures", failures);
+        long started = System.nanoTime();
+        report.put("completed", completed).put("failures", failures)
+                .put("reportNanos", reportNanos).put("reportWrites", reportWrites);
         File temporary = new File(context.getFilesDir(), REPORT_FILE + ".tmp");
         JSONObject metadata = new JSONObject();
         for (Iterator<String> keys = report.keys(); keys.hasNext();) {
@@ -4217,8 +4237,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 } else {
                     JSONObject scenario = scenarios.getJSONObject(index);
                     json = scenario.toString().getBytes(StandardCharsets.UTF_8);
-                    if (index == completedScenarioJson.size() && scenario.optBoolean("completed"))
+                    if (index == completedScenarioJson.size() && scenario.optBoolean("completed")) {
                         completedScenarioJson.add(json);
+                        // Keep the complete UTF-8 result, release the reference-heavy
+                        // JSON tree before ART's later whole-heap reference walks.
+                        scenarios.put(index, JSONObject.NULL);
+                    }
                 }
                 buffered.write(json);
             }
@@ -4230,5 +4254,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!temporary.renameTo(new File(context.getFilesDir(), REPORT_FILE))) {
             throw new IOException("Cannot publish instrumentation report");
         }
+        reportNanos += System.nanoTime() - started;
+        reportWrites++;
     }
 }

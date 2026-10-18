@@ -5,6 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shlex
 import subprocess
 import sys
 import zipfile
@@ -23,6 +24,25 @@ def ndk_bin():
                       if '=' in line and not line.startswith('#'))
     prebuilt = Path(properties['sdk.dir']) / 'ndk/27.2.12479018/toolchains/llvm/prebuilt'
     return next(path / 'bin' for path in prebuilt.iterdir() if (path / 'bin/llvm-nm').is_file())
+
+
+def verify_test_compile_flags(commands):
+    """Keep conformance optimized while retaining Debug assertions and hooks."""
+    checked = 0
+    for entry in commands:
+        flags = entry.get('arguments') or shlex.split(entry['command'])
+        if not any('CMakeFiles/artdcevm.dir/' in flag for flag in flags):
+            continue
+        optimization = next((f for f in reversed(flags) if re.fullmatch(r'-O(?:[0-3sgz]|fast)', f)), None)
+        debug = next((f for f in reversed(flags) if re.fullmatch(r'-g[0-3]?', f)), None)
+        if (optimization not in ('-O2', '-O3') or debug in (None, '-g0')
+                or any(f.startswith('-DNDEBUG') for f in flags)
+                or '-DARTDCEVM_INTERFACE_ABORT_TESTS' not in flags):
+            raise ValueError('The lab engine must retain optimization, debug symbols, assertions and abort hooks')
+        checked += 1
+    if not checked:
+        raise ValueError('No app-owned engine compilation commands found')
+    return checked
 
 
 def main():
@@ -75,6 +95,11 @@ def main():
         dynamic = capture(name + '-dynamic', 'llvm-nm', '-D', '--defined-only', '--demangle', binary)
         symbols = capture(name + '-unstripped', 'llvm-nm', '--defined-only', '--demangle', unstripped)
         if tests:
+            configuration = unstripped.parents[2].name
+            commands_path = ROOT / 'app/.cxx/Debug' / configuration / 'arm64-v8a/compile_commands.json'
+            commands = json.loads(commands_path.read_text())
+            (out / 'app-engine-compile-commands-raw.json').write_text(json.dumps(commands, indent=2))
+            verify_test_compile_flags(commands)
             if not all('InterfaceAbortInstrumentation_' + export in dynamic for export in EXPORTS):
                 raise ValueError('The lab APK is missing required test JNI exports')
             if not all(token in symbols for token in TOKENS):

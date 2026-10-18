@@ -19,6 +19,9 @@ RUNNER = ROOT / "tools/run-device-tests.py"
 spec = importlib.util.spec_from_file_location("device_runner", RUNNER)
 runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
+spec = importlib.util.spec_from_file_location("abort_isolation", ROOT / "tools/check-interface-abort-isolation.py")
+isolation = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(isolation)
 
 
 def complete_report(api=36, self_selection=None):
@@ -226,6 +229,38 @@ class ApkVerificationTests(unittest.TestCase):
         del report["initialization"]["capabilities"]["privateSelfSelection"]
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(report)
+
+    def test_optimized_lab_flags_keep_symbols_assertions_and_faults(self):
+        def command(extra="", flags=None):
+            arguments = flags or ["clang++", "-g", "-O2", "-DARTDCEVM_INTERFACE_ABORT_TESTS",
+                                  "-o", "test-engine/CMakeFiles/artdcevm.dir/agent.cc.o"]
+            return [{"command": " ".join(arguments) + " " + extra}]
+        self.assertEqual(isolation.verify_test_compile_flags(command()), 1)
+        for extra in ("-O0", "-g0", "-DNDEBUG", "-DNDEBUG=0"):
+            with self.subTest(extra=extra), self.assertRaises(ValueError):
+                isolation.verify_test_compile_flags(command(extra))
+        with self.assertRaises(ValueError):
+            isolation.verify_test_compile_flags(command(flags=["clang++", "-g", "-O2", "-o",
+                                                               "test-engine/CMakeFiles/artdcevm.dir/agent.cc.o"]))
+        with self.assertRaises(ValueError):
+            isolation.verify_test_compile_flags([])
+
+    def test_performance_summary_requires_complete_consistent_timings(self):
+        report = complete_report()
+        self.assertIsNone(runner.report_performance(report))
+        report.update(reportNanos=50, reportWrites=2)
+        for index, scenario in enumerate(report["scenarios"]):
+            scenario.update(elapsedNanos=100 + index, jvmtiNanos=50)
+        summary = runner.report_performance(report)
+        self.assertEqual(summary["slowestScenarios"][0]["name"], report["scenarios"][-1]["name"])
+        for elapsed, native in ((-1, 0), (1, 2), (True, 0), (1, None)):
+            broken = copy.deepcopy(report)
+            broken["scenarios"][0].update(elapsedNanos=elapsed, jvmtiNanos=native)
+            with self.subTest(elapsed=elapsed, native=native), self.assertRaises(runner.RunFailure):
+                runner.report_performance(broken)
+        del report["scenarios"][0]["jvmtiNanos"]
+        with self.assertRaises(runner.RunFailure):
+            runner.report_performance(report)
 
     def test_tool_group_requires_append_and_later_redefinition(self):
         names = {item[0] for item in runner.scenario_sequence("tool")}

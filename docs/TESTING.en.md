@@ -26,6 +26,10 @@ Host substitutes execute no ART objects, real hooks or collector and cannot repl
 
 The `tool` group also includes `tool-retransform-structural` and `tool-retransform-restore` on arm64 Android 13–17. An independent agent calls standard RetransformClasses while ClassFileLoadHook supplies addition/restoration DEX. Checks cover return codes, empty lastRejection, retransformRouted, zero added fields on old instances and 7 on new ones, method bodies, reflection, retired members and GC. Exactly one replacement callback proves the route does not repeat the hook. Android 11/12 retain ART rules and these two enhanced scenarios do not apply. Installer host cases additionally cover service/public-table matching, hook order, rollback, exceptions and nested request restoration; host substitutes do not validate device ABI.
 
+The app-owned test engine uses `-O2` while retaining Debug symbols, assertions and fault injection; standalone AAR build configurations are unaffected. `check-interface-abort-isolation.py` verifies these compiler settings. Completed scenarios retain UTF-8 JSON and release their original object trees so later ART whole-heap reference walks do not repeatedly scan report objects. Reports keep every scenario and check, with atomic `fsync`/rename publication.
+
+The device runner records `totalSeconds` and per-command `commandSeconds` in `run.json`. New APKs also report scenario/JVMTI time, checkpoint time and the five slowest scenarios. Scenario time includes its checkpoints and JVMTI time; checkpoint totals stop before the current publication, so these measurements must not be added together. Use the relevant `--scenario-group` during iteration and run the applicable complete matrix before committing. Timing does not change return codes, assertions, scenario counts or the 30,000-call warm-up coverage.
+
 ## JBR comparisons
 
 `tools/compare-jbr-interface-removal.py` compiles the shared Java fixtures to ClassFile and runs them on fixed JBR `21.0.11+10-b1163.116`, using source revision `cf1f197170a0f04c6559feb873e362583be021d1`. A mismatched runtime is rejected as evidence for that reference:

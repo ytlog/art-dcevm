@@ -23,5 +23,8 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../../../artdcevm/src/main/cpp"
                  "${CMAKE_CURRENT_BINARY_DIR}/test-engine")
 
 if(ARTDCEVM_INTERFACE_ABORT_TESTS)
+  # Exercise optimized engine code without dropping Debug symbols, assertions,
+  # or fault injection. Unoptimized STL/DEX walks dominate full conformance.
+  target_compile_options(artdcevm PRIVATE -O2)
   target_sources(artdcevm PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/testing/fault_injection.cc")
 endif()

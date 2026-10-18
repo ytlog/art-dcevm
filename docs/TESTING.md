@@ -26,6 +26,10 @@ done
 
 `tool` 组还包含 `tool-retransform-structural` 与 `tool-retransform-restore`（arm64 Android 13–17）。独立 agent 调用标准 RetransformClasses，经 ClassFileLoadHook 换入新增字段/方法与恢复 DEX，核对返回码、空 lastRejection、retransformRouted、旧实例新增字段为 0、新实例为 7、方法体和反射调用、退役成员及 GC 后行为；精确一次替换回调证明不重复调用 Hook。Android 11/12 保持 ART 原生规则，不适用这两个增强场景。安装主机测试另查服务与公开表匹配、Hook 顺序、回滚、异常与嵌套请求恢复；主机替身不替代真机 ABI 验证。
 
+测试 APK 的 app 自有引擎使用 `-O2`，保留 Debug 符号、断言和故障注入；独立 AAR 的构建配置不受影响。`check-interface-abort-isolation.py` 同时核对这些编译条件。已完成场景保存为 UTF-8 JSON 后释放原对象树，避免后续 ART 整堆引用遍历反复扫描报告对象；报告仍包含全部场景与检查，保留原子 `fsync`／rename 发布。
+
+设备 runner 的 `run.json` 记录 `totalSeconds`、各 ADB 阶段的 `commandSeconds`，新 APK 还记录场景与 JVMTI 耗时、检查点耗时及最慢五个场景。场景时间包含场景内检查点，JVMTI 时间是其子集；检查点累计值截止本次发布前，不能将这些值相加。日常先用对应 `--scenario-group` 定向验证，提交前执行适用的完整矩阵。计时不改变返回码、断言、场景数或 30,000 次热调用覆盖。
+
 ## JBR 对照
 
 `tools/compare-jbr-interface-removal.py` 将同一组 Java 夹具编译为 ClassFile，在固定 JBR `21.0.11+10-b1163.116` 上执行。源码基准为 `cf1f197170a0f04c6559feb873e362583be021d1`，运行时不匹配时拒绝把结果记为该基准的对齐证据：
