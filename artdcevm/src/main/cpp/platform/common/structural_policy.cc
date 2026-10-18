@@ -44,14 +44,11 @@ bool Initializer(const std::string& name) { return name == "<init>" || name == "
 // Static and private methods never occupy a vtable or iftable slot.
 bool Virtual(uint32_t modifiers) { return !(modifiers & (acc::kAccStatic | acc::kAccPrivate)); }
 
-// Verified code resolves a method by name and signature without checking that
-// it still has the invoke kind it was verified against, then calls it as that
-// kind: a static method with a receiver argument or an instance method
-// without one, or a private method through the vtable index it lacks. A
-// method identity therefore keeps being static or not, and once virtual stays
-// virtual. A private method may become virtual: only the class's own code
-// invokes it directly, which stays valid.
-// Constructors and initializers are always invoked directly.
+// Verified callers skip kind checks: static/instance switches change the
+// receiver convention, and virtual-to-private removes the dispatch slot.
+// These transitions require caller protection before admission. Private-to-
+// virtual keeps old own-class invoke-direct calls valid, so needs no caller
+// scan. Constructors and initializers always retain their direct convention.
 bool BreaksVerifiedCallers(const std::string& name, uint32_t before, uint32_t after) {
   if (Initializer(name)) return false;
   return ((before ^ after) & acc::kAccStatic) || (Virtual(before) && !Virtual(after));
@@ -239,6 +236,11 @@ Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarch
 Decision CheckInterfaceKindChange(const MemberKey& key, uint32_t before, uint32_t after,
                                   const LoadedHierarchy& hierarchy, bool supported) {
   const std::string method = key.first + key.second;
+  // Restoring a private instance declaration as public gives implementations
+  // a default or miranda again. Reuse addition's visibility/shadow checks;
+  // old invoke-direct self calls remain valid without a caller scan.
+  if (supported && (before & acc::kAccPrivate) && !(before & acc::kAccStatic) && Virtual(after))
+    return CheckInterfaceAddition(key, after, hierarchy, supported);
   if (!supported || (before ^ after) != acc::kAccAbstract || !Virtual(before) || !(before & acc::kAccPublic))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                   "interface redefinition does not support method modifier changes: " + method);

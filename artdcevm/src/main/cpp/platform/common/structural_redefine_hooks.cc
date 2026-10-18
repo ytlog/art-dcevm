@@ -14,9 +14,9 @@
 
 namespace artdcevm::structural_redefine::detail {
 namespace {
-// Plan compiler restrictions for callers protected by invocation checks. Other
-// invoke-kind changes still require callers in the batch. Boot code cannot
-// name application classes; newly prepared classes invalidate the snapshot.
+// Plan compiler restrictions for callers protected by invocation checks.
+// Without the named guards, require updated callers in the batch. Boot code
+// cannot name application classes; newly prepared classes invalidate the snapshot.
 std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
                         const Snapshot& snapshot, const evolution::ClassSchema& incoming, Batch& batch,
                         const std::vector<std::pair<structural_policy::MemberKey, uint32_t>>& changes) {
@@ -37,11 +37,17 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
   for (const auto& [klass, ignored] : batch.classes)
     submitted.insert(class_layout::DecodeClass(process->layout_services.mirror_class, self, klass));
   for (const auto& [key, access] : changes) {
-    bool protected_change = false;
-    for (const auto& next : incoming.methods)
-      if (next.name == key.first && next.descriptor == key.second)
-        protected_change = bool(access & evolution::kAccStatic) != next.IsStatic() && invoke_kind::Enable();
-    if (batch.active_frame && !protected_change)
+    bool protected_change = false, private_change = false;
+    for (const auto& next : incoming.methods) {
+      if (next.name != key.first || next.descriptor != key.second) continue;
+      private_change = !(access & (evolution::kAccStatic | evolution::kAccPrivate)) &&
+          !next.IsStatic() && (next.access & evolution::kAccPrivate);
+      protected_change = (bool(access & evolution::kAccStatic) != next.IsStatic() || private_change) &&
+          invoke_kind::Enable();
+    }
+    // ART still indexes old self invokes through the vtable/IMT. A target's
+    // obsolete self frame cannot directly select the new private declaration.
+    if (batch.active_frame && (!protected_change || private_change))
       return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
     transaction::Current()->protect_invocations |= protected_change;
     std::map<const abi::arm64::DexFilePrefix*, std::vector<uint32_t>> ids;
@@ -213,7 +219,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   requirements.retyped_fields.clear();
   for (const auto& field : snapshot.retyped_fields)
     requirements.retyped_fields.push_back({field.name, field.is_static, field.descriptor, field.type});
-  requirements.redirect_verification = decision.superclass_changed || snapshot.moved_ancestor ||
+  requirements.redirect_verification = decision.methods_structural || decision.superclass_changed || snapshot.moved_ancestor ||
       !requirements.linked_interfaces.empty() || (interfaces && interfaces->IsAffected(self));
   if (!decision.retired_methods.empty() || !decision.retired_fields.empty())
     batch->retires_members = true;

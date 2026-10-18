@@ -32,12 +32,6 @@ using abi::arm64::RedefinitionDataIter;
 
 struct State final : transaction::Part {
   const Verification* verifying = nullptr;
-  // Holder entries of superclass-changed targets, recorded as ART verifies
-  // them. ART sorts supertypes first, so before any of their batched subclasses.
-  std::vector<int32_t> moved;
-  // Holder entries of structural classes on a moved target's new superclass
-  // chain: their old classes resolve to the replacements the target links to.
-  std::vector<int32_t> chains;
 };
 State* CurrentState() {
   return transaction::PartOf<State>(transaction::Current(), &transaction::Context::verification);
@@ -65,13 +59,6 @@ bool CheckVerification(ClassRedefinitionPrefix* self, const RedefinitionDataIter
     self->driver->result = JVMTI_ERROR_INTERNAL;
     return false;
   }
-  if (target->superclass) state->moved.push_back(data.index);
-  if (!target->chain_rebuilds.empty()) {
-    const auto thread = runtime_thread::Ready();
-    for (jclass chain : target->chain_rebuilds)
-      if (const int32_t entry = thread ? class_layout::HolderEntry(*thread, self, data.holder, chain) : -1; entry >= 0)
-        state->chains.push_back(entry);
-  }
   interface_redefinition::Backend* backend = interfaces.load(std::memory_order_acquire);
   const bool member = backend && backend->IsAffected(self);
   const Verification scope{&data, target->descriptor,
@@ -97,22 +84,17 @@ void* VerifiedClass(void* linker, std::string_view descriptor, Handle loader) {
     return verifying->interface_group->VerificationClass(linker, descriptor, loader);
   return nullptr;
 }
-// While a batched subclass verifies, a superclass-changed target resolves,
-// through its loader as usual, to the old class: show the verifier its new
-// class instead, matched by identity rather than by name.
-void* MovedClass(void* found) {
+// A replacement's self type and its already allocated subtypes must share
+// one identity graph. Reuse ART's rooted old/new class arrays, including
+// implicitly rebuilt subclasses such as tool-appended classes. A descriptor
+// lookup alone would mix a replacement parent with an old child.
+void* RebuiltClass(void* found) {
   const State* state = CurrentState();
   const Verification* verifying = state ? state->verifying : nullptr;
-  if (!found || !verifying || verifying->interface_group || state->moved.empty()) return found;
+  if (!found || !verifying || verifying->interface_group) return found;
   const auto thread = runtime_thread::Ready();
-  if (!thread) return found;
-  for (int32_t index : state->moved) {
-    const RedefinitionDataIter moved{index, verifying->data->holder};
-    if (runtime_thread::Read(*thread, moved.Reference(RedefinitionDataIter::kSlotMirrorClass)) == found)
-      return runtime_thread::Read(*thread, moved.Reference(RedefinitionDataIter::kSlotNewClassObject));
-  }
-  if (!state->chains.empty())
-    if (void* rebuilt = class_layout::Rebuilt(*thread, verifying->data->holder, found, state->chains)) return rebuilt;
+  if (thread)
+    if (void* rebuilt = class_layout::Rebuilt(*thread, verifying->data->holder, found)) return rebuilt;
   return found;
 }
 void* FindClass(void* linker, void* thread, const char* descriptor, Handle loader) noexcept {
@@ -120,7 +102,7 @@ void* FindClass(void* linker, void* thread, const char* descriptor, Handle loade
   if (auto* backend = interfaces.load(std::memory_order_acquire)) backend->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, descriptor, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, Handle);
-  return MovedClass(reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader));
+  return RebuiltClass(reinterpret_cast<Function>(original_find_class)(linker, thread, descriptor, loader));
 }
 void* FindClassWithLength(void* linker, void* thread, const char* descriptor, size_t length,
                           Handle loader) noexcept {
@@ -128,7 +110,7 @@ void* FindClassWithLength(void* linker, void* thread, const char* descriptor, si
   if (auto* backend = interfaces.load(std::memory_order_acquire)) backend->ObserveClassLinker(linker);
   if (void* klass = descriptor ? VerifiedClass(linker, {descriptor, length}, loader) : nullptr) return klass;
   using Function = void* (*)(void*, void*, const char*, size_t, Handle);
-  return MovedClass(reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
+  return RebuiltClass(reinterpret_cast<Function>(original_find_class_with_length)(linker, thread, descriptor,
                                                                                 length, loader));
 }
 }  // namespace

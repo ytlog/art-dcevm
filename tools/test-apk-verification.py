@@ -163,7 +163,8 @@ class ApkVerificationTests(unittest.TestCase):
 
     def test_invoke_kind_groups_require_both_directions(self):
         for group, reverse in (("invoke-kind", "invoke-kind-instance"),
-                               ("invoke-interface-kind", "interface-kind-instance-legacy")):
+                               ("invoke-interface-kind", "interface-kind-instance-legacy"),
+                               ("method-private", "method-private")):
             with self.subTest(group=group):
                 names = {item[0] for item in runner.scenario_sequence(group)}
                 self.assertIn(reverse, names)
@@ -172,13 +173,23 @@ class ApkVerificationTests(unittest.TestCase):
                 runner.validate_report(report, scenario_group=group)
                 changed = next(item for item in report["scenarios"] if item["name"] == reverse)
                 error = next(check for check in changed["checks"]
-                             if check["actual"] == "java.lang.IncompatibleClassChangeError")
+                             if check["actual"] in ("java.lang.IncompatibleClassChangeError", "java.lang.IllegalAccessError"))
                 error.update(expected="java.lang.NoSuchMethodError", actual="java.lang.NoSuchMethodError")
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group=group)
                 report["scenarios"].remove(changed)
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group=group)
+
+    def test_tool_group_requires_append_and_later_redefinition(self):
+        names = {item[0] for item in runner.scenario_sequence("tool")}
+        self.assertEqual(names, {"tool-add-classes", "tool-redefine-added"})
+        report = complete_report()
+        report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+        runner.validate_report(report, scenario_group="tool")
+        report["scenarios"].pop()
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group="tool")
 
     def test_abstract_group_requires_all_focused_scenarios(self):
         report = complete_report()

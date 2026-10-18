@@ -26,11 +26,12 @@ void* linker = reinterpret_cast<void*>(0x1000);
 void* self = reinterpret_cast<void*>(0x2000);
 void* referrer = reinterpret_cast<void*>(0x3000);
 bool missing_method = false;
+const char* expected_type = "Ljava/lang/IncompatibleClassChangeError;";
 void Require(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); }
 void* Current() { return self; }
 void Throw(void* thread, const char* type, const char*) {
   Require(thread == self, "incorrect Thread ABI");
-  Require(std::strcmp(type, "Ljava/lang/IncompatibleClassChangeError;") == 0, "wrong exception");
+  Require(std::strcmp(type, expected_type) == 0, "wrong exception");
   exceptions++;
 }
 void* Resolve(void* l, uint32_t index, void* caller) {
@@ -109,7 +110,17 @@ int main(int argc, char** argv) {
           }
           instructions[0] = 0x6e;
           Require(call(self,referrer,instructions) == 42, "valid instance rejected");
-          method.access_flags.store(8);
+          method.access_flags.store(2); expected_type = "Ljava/lang/IllegalAccessError;";
+          for (uint16_t opcode : {0x6e,0x6f,0x72,0x74,0x75,0x78}) {
+            instructions[0] = opcode; int before = original_calls;
+            Require(call(self,referrer,instructions) == 0 && original_calls == before,
+                    "private method reached virtual/super/interface cache fill");
+          }
+          for (uint16_t opcode : {0x70,0x76}) {
+            instructions[0] = opcode;
+            Require(call(self,referrer,instructions) == 42, "legal private direct call rejected");
+          }
+          expected_type = "Ljava/lang/IncompatibleClassChangeError;"; method.access_flags.store(8);
           missing_method = true; instructions[0] = 0x6e; int before = exceptions;
           Require(call(self,referrer,instructions) == 0 && exceptions == before, "replaced existing resolver failure");
           missing_method = false;
@@ -120,7 +131,10 @@ int main(int argc, char** argv) {
           method.access_flags.store(0);
           Require(call(linker,self,9,referrer,2) == &method, "valid virtual caller rejected");
           Require(call(linker,self,9,referrer,0) == nullptr, "cached static mismatch accepted");
-          method.access_flags.store(8);
+          method.access_flags.store(2); expected_type = "Ljava/lang/IllegalAccessError;";
+          for (int type : {2,3,4}) Require(call(linker,self,9,referrer,type) == nullptr, "cached private mismatch accepted");
+          Require(call(linker,self,9,referrer,1) == &method, "legal private caller rejected");
+          expected_type = "Ljava/lang/IncompatibleClassChangeError;"; method.access_flags.store(8);
         } else {
           auto call = reinterpret_cast<decltype(&Cache)>(hook.replacement);
           Require(call(linker,9,{}, {},referrer,2) == nullptr, "cold virtual mismatch accepted");
@@ -128,7 +142,10 @@ int main(int argc, char** argv) {
           method.access_flags.store(0);
           Require(call(linker,9,{}, {},referrer,0) == nullptr, "cold static mismatch accepted");
           Require(call(linker,9,{}, {},referrer,2) == &method, "valid cold instance rejected");
-          method.access_flags.store(8);
+          method.access_flags.store(2); expected_type = "Ljava/lang/IllegalAccessError;";
+          for (int type : {2,3,4}) Require(call(linker,9,{}, {},referrer,type) == nullptr, "cold private mismatch accepted");
+          Require(call(linker,9,{}, {},referrer,1) == &method, "legal cold private call rejected");
+          expected_type = "Ljava/lang/IncompatibleClassChangeError;"; method.access_flags.store(8);
         }
       }
       Require(exceptions > 0, "no invocation mismatch tested");

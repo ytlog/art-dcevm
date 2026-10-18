@@ -287,6 +287,12 @@ int main(int argc, char** argv) {
       const auto abstracted = policy::Evaluate(made_static, made_abstract, {}, kinds);
       Require(abstracted.error == JVMTI_ERROR_NONE && abstracted.kind_changes.size() == 1,
               "interface static made abstract must be accepted like an added abstract, with a caller scan");
+      const auto private_restored = policy::Evaluate(made_private, contract, {}, kinds);
+      Require(private_restored.error == JVMTI_ERROR_NONE && private_restored.methods_structural &&
+                  private_restored.requires_member_mapping && private_restored.kind_changes.empty(),
+              "private interface method restored as default must relink without a caller scan");
+      Require(policy::Evaluate(made_private, made_abstract, {}, kinds).error == JVMTI_ERROR_NONE,
+              "private interface method restored as abstract must relink a miranda");
       policy::LoadedHierarchy inherited;
       inherited.inherited_interface = {{"value", "()I"}};
       Require(policy::Evaluate(contract, made_static, inherited, kinds).error ==
@@ -297,7 +303,13 @@ int main(int argc, char** argv) {
       Require(policy::Evaluate(made_static, contract, shadowed, kinds).error ==
                   JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
               "interface static made default must not shadow a subtype method");
+      Require(policy::Evaluate(made_private, contract, shadowed, kinds).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
+              "private interface method restored as default must check subtype shadows");
       kinds.interface_members = false;
+      Require(policy::Evaluate(made_private, contract, {}, kinds).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
+              "private interface restoration needs interface member mapping");
       Require(policy::Evaluate(contract, made_static, {}, kinds).error ==
                   JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
               "interface invoke-kind change needs interface member mapping");

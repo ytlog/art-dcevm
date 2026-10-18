@@ -24,11 +24,21 @@ std::atomic<bool> installed{false}, enabled{false};
 
 void* Check(void* self, void* resolved, int type) {
   if (resolved && enabled.load(std::memory_order_acquire)) {
-    const bool is_static = static_cast<abi::arm64::ArtMethodPrefix*>(resolved)->access_flags.load(
-        std::memory_order_relaxed) & 0x0008;  // modifiers.h: kAccStatic.
+    const uint32_t flags = static_cast<abi::arm64::ArtMethodPrefix*>(resolved)->access_flags.load(
+        std::memory_order_relaxed);
+    const bool is_static = flags & 0x0008;  // modifiers.h: kAccStatic.
     if (is_static != (type == 0)) {  // invoke_type.h: kStatic.
       throw_exception(self ? self : current_thread(), "Ljava/lang/IncompatibleClassChangeError;",
                       "invoke kind changed by structural redefinition");
+      return nullptr;
+    }
+    // Verified virtual/super/interface sites outside the declaring class lose
+    // access when the declaration becomes private. Do not use its direct-method
+    // index as a vtable/IMT slot. New legal self calls use invoke-direct; active
+    // target frames that can still contain old self calls retain admission 71.
+    if ((flags & 0x0002) && (type == 2 || type == 3 || type == 4)) {
+      throw_exception(self ? self : current_thread(), "Ljava/lang/IllegalAccessError;",
+                      "virtual target became private after structural redefinition");
       return nullptr;
     }
   }
@@ -61,7 +71,7 @@ uintptr_t GetMethod(void* self, void* caller, const uint16_t* instruction) noexc
         : original_caller(linker, self, instruction[1], caller, type);
     resolved = Check(self, resolved, type);
     // Resolution or Check has installed the exception. Do not let
-    // nterp cache a static method's index as a virtual dispatch slot.
+    // nterp cache a direct method's index as a virtual dispatch slot.
     if (!resolved) return 0;
   }
   return original_nterp(self, caller, instruction);

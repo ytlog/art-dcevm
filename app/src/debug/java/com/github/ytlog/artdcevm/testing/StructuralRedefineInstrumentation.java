@@ -50,6 +50,7 @@ import com.github.ytlog.artdcevm.fixture.PreloadHookSubject;
 import com.github.ytlog.artdcevm.fixture.PreloadSubject;
 import com.github.ytlog.artdcevm.fixture.AccessCaller;
 import com.github.ytlog.artdcevm.fixture.AccessSubject;
+import com.github.ytlog.artdcevm.fixture.AccessCallerBase;
 import com.github.ytlog.artdcevm.fixture.StorageCaller;
 import com.github.ytlog.artdcevm.fixture.StorageSubject;
 import com.github.ytlog.artdcevm.fixture.SuperChild;
@@ -179,6 +180,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("static-narrow".equals(isolated)) runStaticNarrowingScenarios();
             else if ("field-retype".equals(isolated)) runRetypeScenarios();
             else if ("invoke-kind".equals(isolated)) runInvokeKindScenarios();
+            else if ("method-private".equals(isolated)) runPrivateCallScenarios();
+            else if ("tool".equals(isolated)) runToolScenarios();
             else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
                 runAbstractUnimplementedScenario(isolated.substring("interface-abstract-unimplemented-".length()));
@@ -1646,10 +1649,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         String contractSchema = memberSchema(InterfaceBatchFixture.Contract.class);
         String implementationSchema = memberSchema(InterfaceBatchFixture.Implementation.class);
         String[] failures = {"invalid", "abstract"};
-        int[] codes = {71, 70};
+        int[] codes = {70, 70};
         for (int i = 0; i < failures.length; ++i) {
             String variant = "interface-implementation-" + failures[i];
-            String reason = i == 0 ? "old kind" : "live instances";
+            String reason = i == 0 ? "subclass" : "live instances";
             runScenario(variant, codes[i], scenario -> {
                 scenario.expectRejectionBy(InterfaceBatchFixture.Implementation.class);
                 scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Implementation.class, InterfaceBatchFixture.Contract.class},
@@ -1696,13 +1699,13 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         String interfaceSchema = memberSchema(InterfaceBatchFixture.Contract.class);
         String unrelatedSchema = memberSchema(InterfaceBatchFixture.Unrelated.class);
-        runScenario("interface-batch-unrelated-invalid", 71, scenario -> {
+        runScenario("interface-batch-unrelated-invalid", 70, scenario -> {
             scenario.expectRejectionBy(InterfaceBatchFixture.Unrelated.class);
             // Reverse input order checks rejection independently of target position.
             scenario.redefine(new Class<?>[]{InterfaceBatchFixture.Unrelated.class, InterfaceBatchFixture.Contract.class},
                     "interface-batch-invalid", "interface-batch-next");
             scenario.check("rejectionReason", true,
-                    DcevmRuntime.capabilities().getString("lastRejection").contains("old kind"));
+                    DcevmRuntime.capabilities().getString("lastRejection").contains("live instances"));
             scenario.check("unchangedInterface", interfaceSchema, memberSchema(InterfaceBatchFixture.Contract.class));
             scenario.check("unchangedUnrelated", unrelatedSchema, memberSchema(InterfaceBatchFixture.Unrelated.class));
             scenario.check("interfaceUnchanged", 12, contract.value());
@@ -1907,8 +1910,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runInterfaceInvokeKindScenarios();
     }
 
-    // Static/default changes protect old callers; private changes still require
-    // those callers in the batch. Reach Contract through reflection and Caller.
+    // Static/default/private changes protect external callers; old active target
+    // frames retain a separate 71 boundary for virtual-to-private dispatch.
     private void runInterfaceInvokeKindScenarios() throws Exception {
         Class<?> type = InterfaceInvokeKindFixture.Contract.class;
         InterfaceInvokeKindFixture.Impl impl = new InterfaceInvokeKindFixture.Impl();
@@ -3399,17 +3402,137 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
-    // Only virtual-to-private changes retain outside-batch rejection.
-    // Both static/instance directions protect old bytecode, including re-addition.
-    private void runMethodKindChangeScenarios() throws Exception {
-        AccessSubject access = new AccessSubject();
-        runScenario("method-private", 71, scenario -> {
-            scenario.check("callerBefore", 7, AccessCaller.callTarget(access));
-            scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private");
-            scenario.check("targetIsPublic", true, Modifier.isPublic(
-                    AccessSubject.class.getDeclaredMethod("target").getModifiers()));
-            scenario.check("callerAfter", 7, AccessCaller.callTarget(access));
+    private void runPrivateCallScenarios() throws Exception {
+        AccessSubject subject = new AccessSubject();
+        AccessCaller.Child child = new AccessCaller.Child();
+        AccessCaller.Override override = new AccessCaller.Override();
+        CountDownLatch selfReady = new CountDownLatch(1), selfResume = new CountDownLatch(1);
+        Object[] selfResult = new Object[1];
+        Thread own = new Thread(() -> {
+            try { selfResult[0] = subject.await(selfReady, selfResume); }
+            catch (Throwable t) { selfResult[0] = t.getClass().getName(); }
         });
+        own.start();
+        try {
+            if (!selfReady.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("self not ready");
+            runScenario("method-private-active-target", 71, scenario -> {
+                scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private");
+                scenario.check("activeReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("active frame"));
+                scenario.check("publicKind", true, Modifier.isPublic(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
+                selfResume.countDown(); own.join(10000);
+                scenario.check("activeCompleted", true, !own.isAlive());
+                scenario.check("oldSelf", 7, selfResult[0]);
+            });
+        } finally { selfResume.countDown(); own.join(10000); }
+        for (int cycle = 0; cycle < 2; cycle++) {
+            String suffix = cycle == 0 ? "" : "-again";
+            for (int i = 0; i < 30000; i++) {
+                if (AccessCaller.callTarget(subject) != 7 || AccessCaller.inherited(child) != 7 ||
+                        child.throughSuper() != 7 || AccessCaller.range(subject) != 11 || AccessCaller.overridden(override) != 47)
+                    throw new AssertionError("private warmup");
+            }
+            runScenario("method-private" + suffix, 0, scenario -> {
+                CountDownLatch ready = new CountDownLatch(1), resume = new CountDownLatch(1);
+                Throwable[] failure = new Throwable[1];
+                Thread active = new Thread(() -> {
+                    try { AccessCaller.await(subject, ready, resume); } catch (Throwable t) { failure[0] = t; }
+                });
+                active.start();
+                try {
+                    if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("external not ready");
+                    scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private");
+                    resume.countDown(); active.join(10000);
+                    scenario.check("activeCompleted", true, !active.isAlive());
+                    scenario.check("activeError", IllegalAccessError.class.getName(), failure[0] == null ? "" : failure[0].getClass().getName());
+                    scenario.check("privateKind", true, Modifier.isPrivate(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
+                    scenario.check("hotFailures", 30000, AccessCaller.hotFailures(subject, 30000));
+                    for (int i = 0; i < 32; i++) {
+                        scenario.expectError("virtual" + i, IllegalAccessError.class, () -> AccessCaller.callTarget(subject));
+                        scenario.expectError("inherited" + i, IllegalAccessError.class, () -> AccessCaller.inherited(child));
+                        scenario.expectError("super" + i, IllegalAccessError.class, child::throughSuper);
+                        scenario.expectError("range" + i, IllegalAccessError.class, () -> AccessCaller.range(subject));
+                        scenario.expectError("baseOverride" + i, IllegalAccessError.class, () -> AccessCaller.callTarget(override));
+                    }
+                    scenario.expectError("nullReceiver", IllegalAccessError.class, () -> AccessCaller.callTarget(null));
+                    scenario.check("oldCallsDidNotEnter", 0, AccessSubject.entered);
+                    scenario.check("ownCall", 25, subject.callTarget());
+                    scenario.check("ownCallOverride", 25, override.callTarget());
+                    scenario.check("override", 47, AccessCaller.overridden(override));
+                    Method target = AccessSubject.class.getDeclaredMethod("target"); target.setAccessible(true);
+                    Method range = AccessSubject.class.getDeclaredMethod("range", long.class, long.class, long.class); range.setAccessible(true);
+                    scenario.check("newPrivate", 25, target.invoke(subject));
+                    scenario.check("newRange", 41, range.invoke(subject, 1L, 2L, 3L));
+                    long before = StandardJvmtiClient.singleStepCount();
+                    scenario.check("singleStepEnable", 0, StandardJvmtiClient.setThreadSingleStep(true));
+                    try {
+                        scenario.expectError("interpreterVirtual", IllegalAccessError.class, () -> AccessCaller.callTarget(subject));
+                        scenario.expectError("interpreterRange", IllegalAccessError.class, () -> AccessCaller.range(subject));
+                    } finally { scenario.check("singleStepDisable", 0, StandardJvmtiClient.setThreadSingleStep(false)); }
+                    scenario.check("singleStepObserved", true, StandardJvmtiClient.singleStepCount() > before);
+                    System.gc();
+                    scenario.expectError("afterGc", IllegalAccessError.class, () -> AccessCaller.callTarget(subject));
+                    scenario.check("entered", 4, AccessSubject.entered);
+                    scenario.check("value", 5, subject.value);
+                } finally { resume.countDown(); active.join(10000); }
+            });
+            runScenario("method-private-caller-rebuild" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{AccessCallerBase.class}, "method-private-caller-rebuild");
+                scenario.check("hotFailures", 30000, AccessCaller.hotFailures(subject, 30000));
+                scenario.check("entered", 4, AccessSubject.entered);
+            });
+            runScenario("method-private-delete" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private-delete");
+                scenario.expectError("oldVirtual", NoSuchMethodError.class, () -> AccessCaller.callTarget(subject));
+                scenario.expectError("oldRange", NoSuchMethodError.class, () -> AccessCaller.range(subject));
+                scenario.check("self", 55, subject.callTarget());
+            });
+            runScenario("method-private-readd" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private");
+                AccessSubject.entered = 0;
+                scenario.expectError("oldVirtual", IllegalAccessError.class, () -> AccessCaller.callTarget(subject));
+                scenario.check("hotFailures", 30000, AccessCaller.hotFailures(subject, 30000));
+                scenario.check("entered", 0, AccessSubject.entered);
+            });
+            runScenario("method-private-restore" + suffix, 0, scenario -> {
+                scenario.redefine(new Class<?>[]{AccessSubject.class, AccessCallerBase.class},
+                        "method-private-original", "method-private-original");
+                scenario.check("virtual", 7, AccessCaller.callTarget(subject));
+                scenario.check("range", 11, AccessCaller.range(subject));
+                scenario.check("super", 7, child.throughSuper());
+                AccessSubject.entered = 0;
+            });
+        }
+        InterfaceInvokeKindFixture.Impl impl = new InterfaceInvokeKindFixture.Impl();
+        AccessCaller.InterfaceOverride interfaceOverride = new AccessCaller.InterfaceOverride();
+        for (int i = 0; i < 30000; i++) {
+            if (AccessCaller.interfaceCall(impl) != 11 || AccessCaller.interfaceVirtual(impl) != 11 ||
+                    AccessCaller.interfaceCall(interfaceOverride) != 49) throw new AssertionError("private interface warmup");
+        }
+        runScenario("method-private-interface", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceInvokeKindFixture.Contract.class}, "interface-kind-private");
+            for (int i = 0; i < 32; i++) {
+                scenario.expectError("interface" + i, IllegalAccessError.class, () -> AccessCaller.interfaceCall(impl));
+                scenario.expectError("interfaceOverride" + i, IllegalAccessError.class, () -> AccessCaller.interfaceCall(interfaceOverride));
+                scenario.expectError("virtual" + i, NoSuchMethodError.class, () -> AccessCaller.interfaceVirtual(impl));
+            }
+            Method ownCall = InterfaceInvokeKindFixture.Contract.class.getMethod("selfValue");
+            scenario.check("ownCall", 31, ownCall.invoke(impl));
+            scenario.check("ownCallOverride", 31, ownCall.invoke(interfaceOverride));
+            scenario.check("override", 49, AccessCaller.interfaceOverride(interfaceOverride));
+            System.gc();
+            scenario.expectError("afterGc", IllegalAccessError.class, () -> AccessCaller.interfaceCall(impl));
+        });
+        runScenario("method-private-interface-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{InterfaceInvokeKindFixture.Contract.class}, "interface-kind-original");
+            scenario.check("interface", 11, AccessCaller.interfaceCall(impl));
+            scenario.check("virtual", 11, AccessCaller.interfaceVirtual(impl));
+        });
+    }
+
+    // Invocation guards cover old bytecode, including retired identities re-added
+    // as a different kind. Private target activity retains a separate 71 boundary.
+    private void runMethodKindChangeScenarios() throws Exception {
+        runPrivateCallScenarios();
         StorageSubject subject = new StorageSubject();
         Method cachedStatic = StorageSubject.class.getDeclaredMethod("staticValue");
         runScenario("method-storage", 0, scenario -> {

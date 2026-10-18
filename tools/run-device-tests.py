@@ -47,7 +47,19 @@ SCENARIOS = (
     ("methods-restore", ["methods-original"], 0),
     ("methods-retire-again", ["methods-delete"], 0),
     ("methods-restore-again", ["methods-original"], 0),
-    ("method-private", ["method-private"], 71),
+    ("method-private-active-target", ["method-private"], 71),
+    ("method-private", ["method-private"], 0),
+    ("method-private-caller-rebuild", ["method-private-caller-rebuild"], 0),
+    ("method-private-delete", ["method-private-delete"], 0),
+    ("method-private-readd", ["method-private"], 0),
+    ("method-private-restore", ["method-private-original", "method-private-original"], 0),
+    ("method-private-again", ["method-private"], 0),
+    ("method-private-caller-rebuild-again", ["method-private-caller-rebuild"], 0),
+    ("method-private-delete-again", ["method-private-delete"], 0),
+    ("method-private-readd-again", ["method-private"], 0),
+    ("method-private-restore-again", ["method-private-original", "method-private-original"], 0),
+    ("method-private-interface", ["interface-kind-private"], 0),
+    ("method-private-interface-restore", ["interface-kind-original"], 0),
     ("method-storage", ["method-storage"], 0),
     ("method-storage-delete", ["method-storage-delete"], 0),
     ("method-storage-readd", ["method-storage"], 0),
@@ -82,7 +94,7 @@ SCENARIOS = (
     ("interface-kind-instance-legacy", ["interface-kind-static-restore"], 0),
     ("interface-kind-static-restore", ["interface-kind-static-restore", "interface-kind-static-restore"], 0),
     ("interface-batch-unrelated", ["interface-batch-body", "interface-batch-body"], 0),
-    ("interface-batch-unrelated-invalid", ["interface-batch-invalid", "interface-batch-next"], 71),
+    ("interface-batch-unrelated-invalid", ["interface-batch-invalid", "interface-batch-next"], 70),
     ("interface-batch-after-rejection", ["interface-batch-next"], 0),
     ("interface-batch-unrelated-reverse", ["interface-batch-body", "interface-batch-body"], 0),
     ("interface-implementation-body", ["interface-implementation-body", "interface-implementation-body"], 0),
@@ -90,7 +102,7 @@ SCENARIOS = (
     ("interface-implementation-child", ["interface-implementation-child", "interface-implementation-child", "interface-implementation-child"], 0),
     ("interface-implementation-child-only", ["interface-implementation-child-only", "interface-implementation-child-only"], 0),
     ("interface-implementation-retire", ["interface-implementation-retire", "interface-implementation-retire"], 0),
-    ("interface-implementation-invalid", ["interface-implementation-invalid", "interface-implementation-invalid"], 71),
+    ("interface-implementation-invalid", ["interface-implementation-invalid", "interface-implementation-invalid"], 70),
     ("interface-implementation-abstract", ["interface-implementation-abstract", "interface-implementation-abstract"], 70),
     ("interface-implementation-recovery", ["interface-implementation-next"], 0),
     ("interface-overlap-body", ["interface-overlap-body", "interface-overlap-body"], 0),
@@ -297,7 +309,7 @@ MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "
                          "interface-kind-abstract-missing", "interface-parent-missing",
                          "multi-interface-unimplemented", "interface-default-conflict"})
 MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy"})
-MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith("invoke-kind-"))
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
 VAR_HANDLE_API = 33
 # Up to this API, ART fails to link a package-private or protected
 # implementation of an interface method, so the transaction rejects with 63;
@@ -532,7 +544,12 @@ REQUIRED_CHECKS = {
     "methods-restore": METHOD_RESTORE_CHECKS,
     "methods-retire-again": METHOD_RETIRE_CHECKS,
     "methods-restore-again": METHOD_RESTORE_CHECKS,
-    "method-private": {"callerBefore": 7, "targetIsPublic": True, "callerAfter": 7},
+    "method-private-active-target": {"activeReason": True, "publicKind": True, "activeCompleted": True, "oldSelf": 7},
+    "method-private-interface": {
+        **{kind + str(i): ("java.lang.NoSuchMethodError" if kind == "virtual" else "java.lang.IllegalAccessError")
+           for kind in ("interface", "interfaceOverride", "virtual") for i in range(32)},
+        "ownCall": 31, "ownCallOverride": 31, "override": 49, "afterGc": "java.lang.IllegalAccessError"},
+    "method-private-interface-restore": {"interface": 11, "virtual": 11},
     "method-storage": {"callerStaticBefore": 32, "callerVirtualBefore": 8, "staticValueIsStatic": False,
                        "callerStatic": "java.lang.IncompatibleClassChangeError",
                        "callerVirtual": "java.lang.IncompatibleClassChangeError", "combined": 60},
@@ -674,6 +691,21 @@ REQUIRED_CHECKS = {
                                    "staticCleared", "mismatchNull", "staticMismatchNull", "proxyKept", "proxyBaseKept",
                                    "indirectProxyNull", "childProxyKept", "childProxyBaseKept", "childIndirectProxyNull")}},
 }
+
+for suffix in ("", "-again"):
+    REQUIRED_CHECKS["method-private" + suffix] = {
+        "activeCompleted": True, "activeError": "java.lang.IllegalAccessError", "privateKind": True,
+        "hotFailures": 30000,
+        **{kind + str(i): "java.lang.IllegalAccessError" for kind in ("virtual", "inherited", "super", "range", "baseOverride") for i in range(32)},
+        "nullReceiver": "java.lang.IllegalAccessError", "oldCallsDidNotEnter": 0,
+        "ownCall": 25, "ownCallOverride": 25, "override": 47, "newPrivate": 25, "newRange": 41,
+        "singleStepEnable": 0, "singleStepDisable": 0, "singleStepObserved": True,
+        **{kind: "java.lang.IllegalAccessError" for kind in ("interpreterVirtual", "interpreterRange", "afterGc")},
+        "entered": 4, "value": 5}
+    REQUIRED_CHECKS["method-private-caller-rebuild" + suffix] = {"hotFailures": 30000, "entered": 4}
+    REQUIRED_CHECKS["method-private-delete" + suffix] = {"oldVirtual": "java.lang.NoSuchMethodError", "oldRange": "java.lang.NoSuchMethodError", "self": 55}
+    REQUIRED_CHECKS["method-private-readd" + suffix] = {"oldVirtual": "java.lang.IllegalAccessError", "hotFailures": 30000, "entered": 0}
+    REQUIRED_CHECKS["method-private-restore" + suffix] = {"virtual": 7, "range": 11, "super": 7}
 
 REQUIRED_CHECKS["invoke-kind-abort"] = {"before": 8, "after": 8, "range": 13, "instanceKind": False, "entered": 0}
 for suffix in ("", "-again"):
@@ -988,6 +1020,10 @@ def scenario_sequence(scenario_group):
     if scenario_group == "invoke-interface-kind":
         return tuple(item for item in SCENARIOS
                      if item[0].startswith("interface-kind-static") or item[0] == "interface-kind-instance-legacy")
+    if scenario_group == "tool":
+        return tuple(item for item in SCENARIOS if item[0].startswith("tool-"))
+    if scenario_group == "method-private":
+        return tuple(item for item in SCENARIOS if item[0].startswith("method-private"))
     if scenario_group == "invoke-kind":
         return tuple(item for item in SCENARIOS if item[0].startswith("invoke-kind-"))
     if scenario_group == "field-retype":
@@ -1179,7 +1215,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
                         help="Debug-only canonical IMT capture path to verify before engine initialization")

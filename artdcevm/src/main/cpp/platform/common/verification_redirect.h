@@ -5,14 +5,12 @@
 #include "platform/abi/arm64/common/redefinition.h"
 #include "platform/common/art_hook.h"
 
-// ART verifies the new DEX before the commit. Since Android 13 its verifier
-// resolves the class's own descriptor through the class loader, which still
-// yields the old class (old superclass), so a call to the new superclass's
-// constructor fails verification. While ART verifies a target whose
-// transaction Requirements ask for it, this thread's FindClass answers that
-// descriptor with the new class object, which the holder keeps rooted. For an
-// interface group, interface_redefinition answers with the group's
-// replacements instead.
+// ART verifies the new DEX before commit. Its self descriptor normally resolves
+// to the published class, whose methods or superclass can differ from the new
+// definition (for example, a restored virtual call still resolves private).
+// While ART verifies a target that requests redirection, FindClass answers its
+// self descriptor with the rooted replacement. Interface groups use their own
+// replacement lookup for every affected member.
 namespace artdcevm::interface_redefinition { struct Backend; }
 namespace artdcevm::verification_redirect {
 

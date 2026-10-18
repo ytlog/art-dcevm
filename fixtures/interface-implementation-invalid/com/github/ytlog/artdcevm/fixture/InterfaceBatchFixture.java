@@ -4,8 +4,8 @@ public final class InterfaceBatchFixture {
     public interface Contract {
         default int value() { return 18; }
     }
-    public static class Implementation implements Contract {
+    public static final class Implementation implements Contract {
         public int marker = 17;
-        private int ownValue() { return 99; }
+        public int ownValue() { return 99; }
     }
 }
