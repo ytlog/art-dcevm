@@ -46,6 +46,11 @@ static_assert(offsetof(Class, fields) == 40 && offsetof(Class, methods) == 48 &&
 
 static_assert(offsetof(Class, status) == 104);
 
+// sizeof(mirror::Class) (MANAGED is PACKED(4)): Class::EmbeddedVTableLengthOffset.
+// The embedded IMT pointer follows at ImtPtrOffset = RoundUp(this + 4, 8).
+inline constexpr size_t ObjectSize(const Class*) { return offsetof(Class, status) + sizeof(uint32_t); }
+static_assert(ObjectSize(nullptr) == 108);
+
 // Class.java names used to probe the fixed native slots through ART.
 inline constexpr std::array<const char*, 1> kFieldArrayNames{"fields"};
 

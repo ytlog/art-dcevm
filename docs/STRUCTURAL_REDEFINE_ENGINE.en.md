@@ -203,7 +203,7 @@ Renumbering can change an old lambda instance's synthetic class into another lam
 | Change class visibility, final, abstract, synthetic or InnerClass flags | Accept through the structural path. Adding final with a loaded subclass rejects with `CLASS_MODIFIERS_CHANGED` (70); adding abstract while the class itself has instances rejects with 70 after `CollectAndCreateNewInstances` |
 | Switch a class between class, interface, annotation and enum kinds | Reject with 70 |
 | Add interfaces, with optional reordering | Accept with readable runtime flags and successful resolution/access checks; adding an interface alone does not require member mapping for a class, but does for an interface target. When the batch rebuilds the interface or one of its parents, that rebuild is allocated first and the class links its replacement. Unresolved, non-interface or inaccessible types reject with `FAILS_VERIFICATION` (62); no usable layout for reading flags rejects with `HIERARCHY_CHANGED` (66); a newly linked default conflict rejects with 63 when using custom mapping |
-| Remove an interface; repeat an interface | Removal rejects with 66; see [why narrowing is unsupported](#narrowing-is-unsupported). A duplicate rejects with 62 |
+| Remove an interface; repeat an interface | An ordinary class may remove one when member mapping and dispatch sealing are available; see [removing interfaces](#removing-interfaces). An interface target removing a parent, a target in an interface group of the batch, or missing services reject with 66. A duplicate rejects with 62 |
 | Change the superclass | Accept when the new superclass extends the original; other cases reject with 62, 61 or 66 under the conditions in [widening superclass changes](#widening-superclass-changes) |
 
 ## Runtime probes
@@ -305,14 +305,24 @@ The new superclass B must be a proper subclass of the original superclass A, for
 
 B is not initialized during redefinition; its static initialization runs when first needed. Existing instances do not execute B's constructor.
 
+## Removing interfaces
+
+When an ordinary class T stops implementing interface L (directly, or by losing L as a parent of a removed interface), verified code may still use a T value as L. ART's verifier never checks an invoke-interface receiver ([method_verifier.cc](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/verifier/method_verifier.cc)), and code such as `L l = t;` carries no runtime cast. The interpreter looks the call up in the receiver's IfTable through `FindVirtualMethodForInterface` and throws `IncompatibleClassChangeError` when it finds nothing; the IMT conflict trampoline falls back to the same lookup when its table misses ([artInvokeInterfaceTrampoline](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/entrypoints/quick/quick_trampoline_entrypoints.cc)). Only direct IMT entries skip the receiver check: JIT code, boot-image AOT code and nterp call whatever implementation sits in L's IMT slot, which ART's own arm64 code generator records as b/18116999. A slot used by a single method stores that implementation directly (`ClassLinker::SetIMTRef`), so the call may jump to another method of T.
+
+The engine therefore seals the interface dispatch of every concrete replacement class of the target and its loaded subclasses, last in `CollectAndCreateNewInstances`, while ART can still fail and before the classes are published. It allocates a new IMT from the class loader's LinearAlloc (`ClassLoader.allocator`, read through ART's field lookup), fills every slot with a fresh conflict method from named `Runtime::CreateImtConflictMethod`, each with its own empty table, and stores it as the class's embedded IMT pointer. Every interface call on these classes then goes through the conflict trampoline. On a hit, ART fills that slot's own table with `AddMethodToConflictTable`; L's methods miss and throw `IncompatibleClassChangeError`, as on a JVM. Each slot gets its own conflict method because ART updates a non-shared conflict method's table in place, and subclasses copy their superclass IMT slot by slot.
+
+- **Layout**: `Class::ImtPtrOffset` is `RoundUp(sizeof(Class) + 4, 8)` in 11–17, with `sizeof(Class)` taken from each release's fixed declaration (11–16 end with `virtual_methods_offset_`, 17 with `status_`). Before writing, the engine checks that the embedded vtable length fits the class size, that every declared or copied virtual method sits at its `method_index`, and that no IMT slot is empty; otherwise it rejects with 66. The LinearAlloc allocation uses named `LinearAlloc::Alloc`, with `LinearAllocKind::kNoGCRoots` on ART 14 and later.
+- **Subclasses loaded later**: `LinkClass` in 11–17 starts a subclass IMT from its superclass's (`FillImtFromSuperClass`/`LinkMethods`) and calls `SetIMTRef` only for slots with a new implementation in the subclass. Those slots already hold a runtime method, so they become conflict methods rather than direct entries. Untouched slots keep the superclass's conflict method, whose lookups hold for the subclass too. An abstract class has no IMT; a concrete subclass of it loaded later rebuilds its IMT from the IfTable and may still get direct entries; see [risks](#risks).
+- **Members**: copied defaults and mirandas of the removed interface vanish from the re-linked classes. The existing path maps a vanished copy to its declaring class's canonical method, so an old `invoke-virtual` re-resolves and throws `NoSuchMethodError`. Removal therefore requires the engine's own member mapping.
+- **Rejections**: an interface target removing a parent still rejects with 66. So does a target in an interface group of the batch (it implements an interface the batch rebuilds, or is the superclass of a group member), because the group allocates those classes itself without sealing, and so does a transaction without member mapping or the sealing services.
+- **Existing references**: fields, arrays and locals that hold a T instance typed as L keep it; calling L's methods through them throws `IncompatibleClassChangeError`. JBR also clears fields declared with the removed interface type in redefined classes when the value no longer fits; the engine does not do that yet.
+- **Boundary**: a non-CheckJNI JNI call or a `MethodHandle` that calls L's method on a receiver not implementing L finds no implementation in ART and has undefined behavior, as the same misuse does on a JVM.
+
 ## Narrowing is unsupported
 
-Any loss of a supertype, whether removing an interface or omitting an old superclass from the new chain, is rejected with 66. The issue is verified code, not just existing references. ART's verifier previously proved that a T value could be used as L, so this code has no runtime cast.
+A new superclass chain that omits an old superclass is rejected with 66. The issue is verified code, not just existing references. ART's verifier previously proved that a T value could be used as A, so this code has no runtime cast. The interpreter does not check the receiver type for access already resolved to a field in superclass A, either: it reads or writes the T instance using A's offset. Unlike an interface call, a field access has no dispatch table that could be turned into a lookup.
 
-- **Interfaces**: after narrowing, JIT compilation of code such as `L l = t; l.m();` dispatches through an IMT slot. A single-method slot stores the implementation directly (`ClassLinker::SetIMTRef`), without checking that the receiver implements L, and may jump to another method of T.
-- **Superclasses**: the interpreter does not check the receiver type for access already resolved to a field in superclass A, either. It reads or writes the T instance using A's offset.
-
-Checking the heap and stacks at commit covers only existing references, not this code when it executes later. Safe narrowing would require ART to reverify every loaded class that may depend on the old type relationships. No usable named entry exists for that operation.
+Checking the heap and stacks at commit covers only existing references, not this code when it executes later. Safe superclass narrowing would require ART to reverify every loaded class that may depend on the old type relationships. No usable named entry exists for that operation.
 
 ## Invoke kind changes
 
@@ -346,6 +356,7 @@ Under `artdcevm/src/main/cpp`:
 | Transaction context, nested scopes and per-target policy requirements | `platform/common/transaction_context.{h,cc}` |
 | Shared Native Thread probes and named GC read barriers for ordinary classes and interfaces | `platform/common/runtime_thread.{h,cc}` |
 | Class layout probes and per-transaction layout selection | `platform/common/class_layout.{h,cc}` |
+| Interface dispatch sealing after an interface removal (private IMTs and conflict methods of replacement classes) | `platform/common/imt_sealing.{h,cc}`, `platform/symbols/imt_sealing_symbols.h` |
 | Shared layout readers and field-array probes | `platform/common/class_layout_table.h`, `platform/common/field_array_probe.h` |
 | Member mapping plans, commit and newly linked default conflict checks | `platform/common/member_mapping.{h,cc}` |
 | Retirement registry, retained class roots, field placeholders and JNI/reflection/MethodHandle guards | `platform/common/member_retirement.{h,cc}` |
@@ -405,6 +416,7 @@ Reflection placeholder classes for retired fields live in `artdcevm/src/main/jav
 
 ## Risks
 
+- **Subclasses loaded after an interface removal**: an abstract class has no IMT to seal. A concrete subclass, loaded later, of an abstract class that lost an interface rebuilds its IMT from the IfTable and may place a direct entry in a removed interface's slot; if old code calls such an instance as the removed interface, compiled code may dispatch to the wrong method. Subclasses loaded at redefinition time are all sealed.
 - **Mainline updates**: ART APEX is replaced through Google Play system updates, so the platform version can differ from the ART source version. Candidate declarations cover source versions 11–17 and are checked by runtime probes on each transaction. New ART source versions require source review; add a version directory when there is a real difference.
 - **ART service changes**: probes can verify only declarations with ART services or JVMTI as a reference: Class, ArtField, ArtMethod, DexCache, slots, maps, obsolete flags and MethodHandle offsets. Visitor vtable order, source types, Handle and guard signatures rely on source declarations and exact symbol names. Check source and device behavior when extending version coverage. Put differences only in `platform/abi/arm64/androidNN/`, without copying the backend.
 - **Retired access boundaries**: retain real old ArtMethod/ArtField objects and guard new access. Raw offsets cached by `Unsafe` and field updaters cannot be intercepted.

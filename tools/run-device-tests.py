@@ -169,11 +169,12 @@ SCENARIOS = (
     ('interface-abstract-exhausted-withdraw', ['interface-abstract-original'], 0),
     ('interface-abstract-exhausted-retry', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-stress-add', ['interface-stress-add'], 0),
+    ("interface-removal-batched", ["interface-remove", "interface-remove"], 66),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
     ("interface-missing", ["interface-missing"], 62),
     ("interface-add", ["interface-add"], 0),
-    ("interface-remove", ["interface-original"], 66),
+    ("interface-remove", ["interface-original"], 0),
     ("super-final", ["super-final"], 62),
     ("super-interface", ["super-interface"], 62),
     ("super-missing", ["super-missing"], 62),
@@ -201,6 +202,8 @@ SCENARIOS = (
     ("field-retype", ["field-retype"], 0),
     ("field-retype-restore", ["field-retype-restore"], 0),
     ("thread-subclass", ["thread-subclass-add"], 0),
+    ("interface-removal", ["interface-remove", "interface-remove"], 0),
+    ("interface-removal-restore", ["interface-remove-original", "interface-remove-original"], 0),
 )
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
@@ -228,6 +231,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
 MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signature', 'interface-miranda-add', 'interface-lambda-append', 'interface-stress-add', 'interface-bridge-add', 'interface-lambda-insert', 'interface-lambda-first', 'interface-default-add', 'interface-members-add', 'interface-miranda-prepare'})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
                         if name.startswith("interface-abstract-") and code == 0)
+MAPPED_SCENARIOS.update({"interface-remove", "interface-removal", "interface-removal-restore"})
 VAR_HANDLE_API = 33
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
@@ -502,7 +506,9 @@ REQUIRED_CHECKS = {
     "interface-add": {**INTERFACE_ADDED_CHECKS, "contractLoadedBefore": False,
                       "nestedLoadedBefore": False, "contractLoadedAfter": True,
                       "newContractTwice": 102},
-    "interface-remove": INTERFACE_ADDED_CHECKS,
+    "interface-remove": {"interfaceCount": 0, "oldIsContract": False, "childIsContract": False,
+                         "oldContractTwice": "java.lang.ClassCastException", "oldIsIntSupplier": False,
+                         "contract": 51},
     **{name: SUPER_REJECTED_CHECKS for name in (
         "super-final", "super-interface", "super-missing", "super-final-override", "super-circular")},
     "super-widen": {**SUPER_WIDENED_CHECKS, "describeBefore": "base", "newMiddleValue": 11,
@@ -657,6 +663,18 @@ class RunFailure(RuntimeError):
     """A safe failure message; raw command details stay in local evidence."""
 
 
+REMOVAL_TIMES = 200_000
+REQUIRED_CHECKS["interface-removal-batched"] = {"stillRemoved": True, "viaRemoved": 11}
+REQUIRED_CHECKS["interface-removal"] = {
+    "warmedUp": 0, "runBefore": 1, "lateLoadedBefore": False, "removed": False, "marker": 5, "kept": 22,
+    "viaRemoved": "java.lang.IncompatibleClassChangeError", "compiledFailures": REMOVAL_TIMES,
+    "held": "java.lang.IncompatibleClassChangeError", "copiedDefault": "java.lang.NoSuchMethodError",
+    "childRemoved": False, "childKept": 22, "childFailures": REMOVAL_TIMES,
+    "bootDispatch": "java.lang.IncompatibleClassChangeError", "runAfter": 1, "spins": 1,
+    "lateKept": 22, "lateOwn": 33, "lateFailures": REMOVAL_TIMES, "afterGc": 5}
+REQUIRED_CHECKS["interface-removal-restore"] = {
+    "restored": True, "viaRemoved": 11, "compiledFailures": 0, "held": 11, "copiedDefault": 7,
+    "lateFailures": 0, "lateOwn": 33, "runRestored": 2}
 REQUIRED_CHECKS["thread-subclass"] = {
     "runningKept": 17, "runningName": "dcevm-thread-running", "runningAlive": True, "runningAdded": 5,
     "runningFinished": False, "runningInterrupted": True, "runningSelf": True, "runningResult": 2,
@@ -862,6 +880,8 @@ def scenario_sequence(scenario_group):
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
     if scenario_group == "thread-subclass":
         return tuple(item for item in SCENARIOS if item[0] == "thread-subclass")
+    if scenario_group == "interface-removal":
+        return tuple(item for item in SCENARIOS if item[0] in ("interface-removal", "interface-removal-restore"))
     if scenario_group == "ordinary":
         # Match the contiguous interface-target block in runScenarios. Ordinary
         # classes adding interfaces remain part of the ordinary suite.
@@ -1036,7 +1056,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")

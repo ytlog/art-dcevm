@@ -4,6 +4,7 @@
 #include <array>
 #include <android/log.h>
 #include "shadowhook.h"
+#include "platform/common/imt_sealing.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/runtime_thread.h"
@@ -127,7 +128,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   runtime_thread::Prepare();
   prepared.runtime_thread = runtime_thread::Available();
   class_layout::Prepare({});
-  std::string retirement_note, interface_note, failure;
+  std::string retirement_note, interface_note, sealing_note, failure;
   JNIEnv* jni = nullptr;
   vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
   std::vector<Hook> retirement_hooks;
@@ -158,6 +159,9 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     prepared.retirement = true;
     prepared.instance_check = true;
     prepared.superclass_change = verification_redirect::ResolvesClasses();
+    // Optional: without it an ordinary class cannot drop an interface.
+    if (!imt_sealing::Prepare(process->layout_services, &failure))
+      sealing_note = "interface removal unavailable: " + failure;
     replacements = std::move(retirement_hooks);
     class_layout::Report("unverified");
   } else {
@@ -226,7 +230,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       : process->capabilities.field_retirement
           ? "ART structural transaction with method and field retirement"
           : "ART structural transaction with method retirement; fields cannot retire";
-  for (const auto* note : {&retirement_note, &field_note, &interface_note})
+  for (const auto* note : {&retirement_note, &field_note, &interface_note, &sealing_note})
     if (!note->empty()) process->diagnostic += "; " + *note;
   return JVMTI_ERROR_NONE;
 }

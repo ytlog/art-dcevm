@@ -37,7 +37,7 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
   --scenario-group full --checkjni-mode checkjni
 ```
 
-`ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` helps isolate abstract additions and `thread-subclass` runs the application `Thread` subclass scenario alone; neither replaces full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
+`ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` helps isolate abstract additions and `thread-subclass` runs the application `Thread` subclass scenario alone and `interface-removal` the interface removal and restoration scenarios; none of them replaces full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
 
 ## Recovery and fault isolation
 
@@ -147,7 +147,9 @@ A symbol's presence proves only that it can be located. Runtime probes check the
 | `methodDeletion`, `methodSignatureChange`, `interfaceAddition` | Method-retirement hooks are installed |
 | `fieldDeletion`, `fieldTypeChange`, `memberDeletion`, `memberTypeChange` | Field guards are also available |
 | `superclassWidening` | Method-retirement hooks and verification redirection are both installed |
-| `hierarchyChange`, `fullDcevmComplete` | Always false: narrowing is unsupported and full DCEVM is not complete |
+| `interfaceRemoval` | Method-retirement hooks are installed and interface dispatch sealing is available; an ordinary class may remove an interface |
+| `interfaceDispatchSealing` | `available` or `unavailable: reason` (named `Runtime::CreateImtConflictMethod`, `LinearAlloc::Alloc` or the class-loader allocator read is unavailable) |
+| `hierarchyChange`, `fullDcevmComplete` | Always false: superclass narrowing is unsupported and full DCEVM is not complete |
 | `interfaceRedefinition` | Boolean: true only after installation and all Class/Thread/HandleScope/holder probes pass. False before probing, when versions/services are unavailable, or after process-wide probe disablement. A target-specific rejection does not clear it |
 | `interfaceRuntime` | `unavailable`, `unverified: interface runtime declarations`, `verified: androidNN Class/Thread/HandleScope/holder probes`, or `disabled: reason`. Only API 33–36 are allowed; other versions are disabled with a reason |
 | `interfaceAbstractMethodAddition` | True after interface runtime and dispatch probes pass and required link-error services are available; all implementations are still checked per transaction |

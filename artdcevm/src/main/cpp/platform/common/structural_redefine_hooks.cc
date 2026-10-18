@@ -5,6 +5,7 @@
 #include "platform/common/art_hook.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/fault_injection.h"
+#include "platform/common/imt_sealing.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/runtime_thread.h"
@@ -113,6 +114,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // target may evolve its members whenever the engine owns the mapping.
   abilities.interface_members = abilities.member_mapping;
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
+  abilities.interface_removal = abilities.member_mapping && imt_sealing::Available();
   abilities.batch_interfaces = interfaces && interfaces->Available();
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
@@ -144,6 +146,13 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     decision.reason = snapshot.anchored_by + " changes its superclass and links the published version of " +
                       incoming.descriptor + ", which this batch changes structurally";
   }
+  // An interface group re-links its members and their ancestors in its own
+  // allocation, which does not seal interface dispatch.
+  if (decision.error == JVMTI_ERROR_NONE && decision.interfaces_removed &&
+      interfaces && (interfaces->IsAffected(self) || interfaces->SharesImplementationGroup(self))) {
+    decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
+    decision.reason = "interface removal overlaps an interface group of the batch";
+  }
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
     if (std::string callers = KindCallers(*thread, self, snapshot, *batch, decision.kind_changes); !callers.empty()) {
       decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
@@ -170,6 +179,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
+  requirements.seal_dispatch = decision.interfaces_removed;
   requirements.linked_interfaces.clear();
   if (snapshot.hierarchy.added_interface_in_batch)
     for (const auto& [descriptor, type] : snapshot.interface_classes) requirements.linked_interfaces.push_back(type);
@@ -284,6 +294,11 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         !member_mapping::CheckDefaultConflicts(*data, &rejection))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                              std::move(rejection));
+    // Last: every check above may still reject, and only the unpublished
+    // replacements change here.
+    if (target && target->seal_dispatch && !imt_sealing::Seal(*thread, self, *data, selected, &why))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                             named(("interface dispatch cannot be sealed: " + why).c_str()));
     class_layout::Select(selected);
     if (ARTDCEVM_FAULT(22))
       return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY,

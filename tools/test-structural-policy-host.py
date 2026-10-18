@@ -479,6 +479,9 @@ int main(int argc, char** argv) {
         auto parent = contract; parent.interfaces.push_back("Lfixture/Parent;");
         Require(policy::Evaluate(parent, contract, {}, abilities).error ==
                 JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "interface parent removal");
+        auto sealing = abilities; sealing.interface_removal = true;
+        Require(policy::Evaluate(parent, contract, {}, sealing).error ==
+                JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "interface parent removal with sealing");
         // An interface's class modifiers evolve like a class's; its kind does not.
         next = contract; next.access |= acc::kAccSynthetic;
         Require(policy::Evaluate(contract, next, {}, abilities).error == JVMTI_ERROR_NONE,
@@ -782,6 +785,21 @@ int main(int argc, char** argv) {
       Accept(live, next, false, true, resolved);
       auto implementing = next;
       Reject(implementing, live, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED);
+      // Removal: an ordinary class may drop an interface only when the engine
+      // owns the mapping (vanishing copies) and seals interface dispatch.
+      policy::Abilities removal;
+      removal.member_mapping = true;
+      Require(policy::Evaluate(implementing, live, {}, removal).error ==
+              JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "removal needs dispatch sealing");
+      removal.interface_removal = true;
+      const auto dropped = policy::Evaluate(implementing, live, {}, removal);
+      Require(dropped.error == JVMTI_ERROR_NONE && dropped.interfaces_removed &&
+              dropped.requires_member_mapping && dropped.methods_structural, "interface removal accepted");
+      Require(!policy::Evaluate(implementing, implementing, {}, removal).interfaces_removed,
+              "unchanged interfaces are not removed");
+      removal.member_mapping = false;
+      Require(policy::Evaluate(implementing, live, {}, removal).error ==
+              JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "removal needs member mapping");
       auto duplicated = next; duplicated.interfaces.push_back("Lfixture/Interface;");
       Reject(live, duplicated, JVMTI_ERROR_FAILS_VERIFICATION, resolved);
       implementing.interfaces.push_back("Lfixture/Other;");

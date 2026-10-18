@@ -20,6 +20,7 @@ add_library(artdcevm SHARED
   platform/common/transaction_context.cc
   platform/common/member_retirement.cc
   platform/common/member_mapping.cc
+  platform/common/imt_sealing.cc
   platform/common/verification_redirect.cc
   platform/common/interface_dispatch.cc
   platform/common/interface_snapshot.cc

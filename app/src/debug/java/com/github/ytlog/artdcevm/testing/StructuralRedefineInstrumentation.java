@@ -55,6 +55,7 @@ import com.github.ytlog.artdcevm.fixture.SuperChild;
 import com.github.ytlog.artdcevm.fixture.SuperMiddle;
 import com.github.ytlog.artdcevm.fixture.SuperSubject;
 import com.github.ytlog.artdcevm.fixture.ThreadSubclassFixture;
+import com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.ToolHost;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodSubject;
 import com.github.ytlog.artdcevm.fixture.AbstractMethodChild;
@@ -155,6 +156,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
             else if ("thread-subclass".equals(isolated)) runThreadSubclassScenario();
+            else if ("interface-removal".equals(isolated)) runInterfaceRemovalScenarios();
             else if (isolated.startsWith("interface-abstract-reject-"))
                 runAbstractRejectionScenario(isolated.substring("interface-abstract-reject-".length()));
             else throw new IllegalArgumentException("Unsupported isolated scenario");
@@ -326,6 +328,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             runInterfaceEvolutionScenarios();
             runAbstractInterfaceScenarios();
             runInterfaceStressAdditionScenario();
+            runInterfaceRemovalBatchScenario();
         }
         runInterfaceScenarios();
         runSuperclassScenarios();
@@ -335,6 +338,83 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 originalObject, originalStaticObject);
         runRetypeScenarios();
         runThreadSubclassScenario();
+        runInterfaceRemovalScenarios();
+    }
+
+    // An interface group of the batch re-links its implementations itself, so
+    // one of them cannot drop an interface in the same batch.
+    private void runInterfaceRemovalBatchScenario() throws Exception {
+        InterfaceRemovalFixture.Subject subject = new InterfaceRemovalFixture.Subject();
+        runScenario("interface-removal-batched", 66, scenario -> {
+            scenario.expectRejectionBy(InterfaceRemovalFixture.Subject.class);
+            scenario.redefine(new Class<?>[]{InterfaceRemovalFixture.Subject.class, InterfaceRemovalFixture.Kept.class},
+                    "interface-remove", "interface-remove");
+            scenario.check("stillRemoved", true, InterfaceRemovalFixture.Removed.class.isInstance(subject));
+            scenario.check("viaRemoved", 11, InterfaceRemovalFixture.viaRemoved(subject));
+        });
+    }
+
+    // Subject drops Removed and Task drops Runnable. Calls that verified code
+    // still makes through the removed interface throw
+    // IncompatibleClassChangeError on every dispatch path: interpreted,
+    // compiled once hot, and from boot code (Thread.run).
+    private void runInterfaceRemovalScenarios() throws Exception {
+        final int times = 200_000;
+        InterfaceRemovalFixture.Subject subject = new InterfaceRemovalFixture.Subject();
+        InterfaceRemovalFixture.Child child = new InterfaceRemovalFixture.Child();
+        InterfaceRemovalFixture.Task task = new InterfaceRemovalFixture.Task();
+        Thread thread = new Thread(task);
+        InterfaceRemovalFixture.held = subject;
+        String late = "Lcom/github/ytlog/artdcevm/fixture/InterfaceRemovalFixture$LateChild;";
+        Class<?>[] batch = {InterfaceRemovalFixture.Subject.class, InterfaceRemovalFixture.Task.class};
+        Object[] lateChild = new Object[1];
+        runScenario("interface-removal", 0, scenario -> {
+            scenario.check("warmedUp", 0, InterfaceRemovalFixture.failures(subject, times));
+            thread.run();
+            scenario.check("runBefore", 1, task.runs);
+            scenario.check("lateLoadedBefore", false, StandardJvmtiClient.isLoaded(late));
+            scenario.redefine(batch, "interface-remove", "interface-remove");
+            scenario.check("removed", false, InterfaceRemovalFixture.Removed.class.isInstance(subject));
+            scenario.check("interfaces", "[" + InterfaceRemovalFixture.Kept.class + "]",
+                    java.util.Arrays.toString(InterfaceRemovalFixture.Subject.class.getInterfaces()));
+            scenario.check("marker", 5, subject.marker);
+            scenario.check("kept", 22, InterfaceRemovalFixture.kept(subject));
+            scenario.expectError("viaRemoved", IncompatibleClassChangeError.class,
+                    () -> InterfaceRemovalFixture.viaRemoved(subject));
+            scenario.check("compiledFailures", times, InterfaceRemovalFixture.failures(subject, times));
+            scenario.expectError("held", IncompatibleClassChangeError.class,
+                    () -> InterfaceRemovalFixture.call(InterfaceRemovalFixture.held));
+            scenario.expectError("copiedDefault", NoSuchMethodError.class,
+                    () -> InterfaceRemovalFixture.callDefault(subject));
+            scenario.check("childRemoved", false, InterfaceRemovalFixture.Removed.class.isInstance(child));
+            scenario.check("childKept", 22, InterfaceRemovalFixture.kept(child));
+            scenario.check("childFailures", times, InterfaceRemovalFixture.failures(child, times));
+            scenario.expectError("bootDispatch", IncompatibleClassChangeError.class, thread::run);
+            scenario.check("runAfter", 1, task.runs);
+            ((InterfaceRemovalFixture.Spinner) (Object) task).spin9();
+            scenario.check("spins", 1, task.spins);
+            lateChild[0] = Class.forName("com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture$LateChild")
+                    .getConstructor().newInstance();
+            InterfaceRemovalFixture.Subject lateSubject = (InterfaceRemovalFixture.Subject) lateChild[0];
+            scenario.check("lateKept", 22, InterfaceRemovalFixture.kept(lateSubject));
+            scenario.check("lateOwn", 33, ((InterfaceRemovalFixture.Late) lateChild[0]).late22());
+            scenario.check("lateFailures", times, InterfaceRemovalFixture.failures(lateSubject, times));
+            Runtime.getRuntime().gc();
+            scenario.check("afterGc", 5, subject.marker);
+        });
+        runScenario("interface-removal-restore", 0, scenario -> {
+            scenario.redefine(batch, "interface-remove-original", "interface-remove-original");
+            InterfaceRemovalFixture.Subject lateSubject = (InterfaceRemovalFixture.Subject) lateChild[0];
+            scenario.check("restored", true, InterfaceRemovalFixture.Removed.class.isInstance(subject));
+            scenario.check("viaRemoved", 11, InterfaceRemovalFixture.viaRemoved(subject));
+            scenario.check("compiledFailures", 0, InterfaceRemovalFixture.failures(subject, times));
+            scenario.check("held", 11, InterfaceRemovalFixture.call(InterfaceRemovalFixture.held));
+            scenario.check("copiedDefault", 7, InterfaceRemovalFixture.callDefault(subject));
+            scenario.check("lateFailures", 0, InterfaceRemovalFixture.failures(lateSubject, times));
+            scenario.check("lateOwn", 33, ((InterfaceRemovalFixture.Late) lateChild[0]).late22());
+            thread.run();
+            scenario.check("runRestored", 2, task.runs);
+        });
     }
 
     // A reference field whose declared type changes keeps an old value that
@@ -2136,9 +2216,18 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("contractLoadedAfter", true, StandardJvmtiClient.isLoaded(contract));
             scenario.check("newContractTwice", 102, InterfaceCaller.contractTwice(new InterfaceSubject()));
         });
-        runScenario("interface-remove", 66, scenario -> {
+        // Removing them again narrows the existing instances; the checkcast in
+        // InterfaceCaller now fails for both.
+        runScenario("interface-remove", 0, scenario -> {
             scenario.redefine(new Class<?>[]{InterfaceSubject.class}, "interface-original");
-            checkAddedInterfaces(scenario, subject, child, interfaces);
+            scenario.check("interfaceCount", 0, InterfaceSubject.class.getInterfaces().length);
+            scenario.check("oldIsContract", false, InterfaceCaller.isContract(subject));
+            scenario.check("childIsContract", false, InterfaceCaller.isContract(child));
+            scenario.expectError("oldContractTwice", ClassCastException.class,
+                    () -> InterfaceCaller.contractTwice(subject));
+            scenario.check("oldIsIntSupplier", false, IntSupplier.class.isInstance(subject));
+            scenario.check("contract", 51, subject.contract());
+            scenario.check("unchangedMembers", schema, memberSchema(InterfaceSubject.class));
         });
     }
 

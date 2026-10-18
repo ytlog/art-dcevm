@@ -61,7 +61,8 @@
 | --- | --- | --- |
 | 方法在 static 与实例之间变化、实例方法改为 private，或已删除的方法以另一种调用方式重新加入，而批次之外仍有已加载类的代码按旧调用方式引用它，或批次类有活动帧 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | 已校验的代码会按原调用方式调用这个名称与签名，见引擎文档[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化)；把这些调用方同批提交即可 |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
-| 移除接口，以及任何失去父类型的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
+| 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
+| 普通类移除接口，而该类属于本批某个接口组（实现了同批重定义的接口，或是组成员的父类），或成员映射、分派封闭不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
 
 方法删除/改签名与字段删除/改类型/存储变化在退役不可用时分别以 `UNSUPPORTED_REDEFINITION_METHOD_DELETED`（67）与 `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED`（64）拒绝，native 改 Java 以 71 拒绝；新增接口与父类变化在没有探测通过的类布局时以 66 拒绝；父类变化还需要校验重定向。
 
@@ -88,6 +89,14 @@
 
 - 已有实例与已加载子类的实例随即成为新接口的实例。新增的接口在重定义前经目标类的加载器加载但不初始化，其静态初始化照常在首次需要时执行；该加载器随之成为这个接口的发起加载器。
 
+
+## 移除接口的语义
+
+- 普通类可以不再实现某个接口。已有实例与已加载子类的实例随即不再是该接口的实例（`instanceof`、`isInstance` 与强制转换按新层级判断）。
+- 仍把这些对象当作被移除接口调用的已校验代码，以及字段、数组中以该接口类型保存的旧引用，调用其方法时抛 `IncompatibleClassChangeError`，与 JVM 相同；解释执行、JIT 编译后的代码与 boot 代码（例如 `Thread.run` 调用 `Runnable.run`）都如此。旧引用不会被置空。
+- 类从被移除接口继承的 default 方法随之消失：以类本身调用它的旧字节码抛 `NoSuchMethodError`。
+- 这些类的接口调用经分派槽位查找执行，会稍慢。之后加载的具体子类继承这一行为；失去接口的抽象类之后才加载的具体子类除外，见引擎文档[移除接口](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。
+- 接口目标移除父接口仍以 66 拒绝。
 ## 方法种类的语义
 
 - 删除的 native 方法与其他方法一样退役；正在执行它的线程继续执行。native 改为 Java 后，已有的调用点、缓存的反射对象与 JNI 方法 ID 执行新的 Java 方法体。

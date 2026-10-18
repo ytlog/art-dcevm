@@ -63,7 +63,8 @@ These changes are rejected with a JVMTI error, leaving the old definitions intac
 | --- | --- | --- |
 | Switching a method between static and instance, making an instance method private, or re-adding a deleted method as another invoke kind, while code of a loaded class outside the batch still names it with the old kind or a batch class has an active frame | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED` (71) | Verified code keeps invoking that name and signature as the old kind; see [invoke kind changes](STRUCTURAL_REDEFINE_ENGINE.en.md#invoke-kind-changes). Submit those callers in the same batch |
 | Switching a class between class, interface, annotation and enum kinds | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED` (70) | |
-| Removing an interface, or changing the superclass in a way that drops an existing supertype | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
+| Changing the superclass in a way that drops an existing superclass | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | Verified code depends on the old type relationships; see [why narrowing is unsupported](STRUCTURAL_REDEFINE_ENGINE.en.md#narrowing-is-unsupported) |
+| An ordinary class removing an interface while it belongs to an interface group of the batch (it implements an interface the batch redefines, or is the superclass of a group member), or without member mapping or dispatch sealing | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED` (66) | See [removing interfaces](#removing-interfaces) |
 
 When retirement is unavailable, method deletion or signature changes are rejected with `UNSUPPORTED_REDEFINITION_METHOD_DELETED` (67), and field deletion, type changes or storage changes with `UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED` (64). Changing native to Java is rejected with 71. Adding an interface or changing the superclass is rejected with 66 when no probed class layout is available. Superclass changes also require verification redirection.
 
@@ -92,6 +93,14 @@ The following conflicts reject the transaction:
 
 - Existing instances and instances of loaded subclasses immediately become instances of the new interface. The interface is loaded through the target's loader before redefinition, without initialization. Its static initialization runs when first needed, as usual; the target's loader becomes an initiating loader for the interface.
 
+
+## Removing interfaces
+
+- An ordinary class may stop implementing an interface. Its existing instances and those of loaded subclasses immediately stop being instances of that interface (`instanceof`, `isInstance` and casts follow the new hierarchy).
+- Verified code that still calls them as the removed interface, and old references stored in fields or arrays typed with it, throw `IncompatibleClassChangeError` when calling its methods, as on a JVM. This holds for interpreted code, JIT-compiled code and boot code (for example `Thread.run` calling `Runnable.run`). Old references are not cleared.
+- Default methods the class inherited from the removed interface disappear: old bytecode that calls one on the class throws `NoSuchMethodError`.
+- Interface calls on these classes are looked up through their dispatch slots and become slightly slower. Concrete subclasses loaded later inherit this, except a concrete subclass, loaded later, of an abstract class that lost the interface; see [removing interfaces](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces) in the engine design.
+- An interface target removing a parent interface is still rejected with 66.
 ## Method kinds
 
 - A deleted native method is retired like any other method. Threads already executing it continue to do so. When a native method becomes Java, existing call sites, cached reflection objects and JNI method IDs execute the new Java body.
