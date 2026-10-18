@@ -38,6 +38,7 @@ The device runner records `totalSeconds` and per-command `commandSeconds` in `ru
 python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-field-retype.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-proxy-parents.py --java-home JBR_REFERENCE_HOME
+python3 tools/compare-jbr-interface-matrix.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 ```
 
@@ -45,7 +46,11 @@ python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 
 `tools/compare-jbr-field-retype.py` uses the same fixed runtime and shared field-retyping fixtures to check ordinary values, direct and indirect interfaces, dynamic proxies, inherited fields, restoration, repeated updates and GC.
 
-Replace the `JBR_REFERENCE_HOME` path placeholder. Raw output and fixture, harness and runtime hashes stay under ignored `build/evidence/`. These comparisons cover specific interface-narrowing and reference-field rules, not complete JBR parity. ART device tests must check matching values, errors, field clearing and behavior after failure.
+Replace the `compare-jbr-interface-matrix.py` and device group `interface-selection` cover 22 receiver shapes: own/inherited private, package-private and protected declarations, distinct packages, split defining loaders and more specific public overrides. Separate lanes add abstract, default or parent-interface methods, switch abstract/default, and check old/later-loaded sites, interface reflection and cached MethodHandles, class calls, 30,000 hot calls, GC, later class loading, two rounds and planned aborts. Parent removal only resets the fixture; this matrix makes no parity claim for old symbolic calls after that removal. The device-report validator independently pins transport, access-flag and loader expectations.
+
+Fixed JBR can fail a `javaCalls.cpp` parameter-count guarantee on JNI interface calls after adding an abstract member; cached reflection slots in indirectly rebuilt classes can also alias another method. Use `--probe-jni-failures` to reproduce added-abstract and default-to-abstract failures in isolated processes; the latter first proves successful JNI dispatch before redefinition. These crashes are recorded separately and do not count as passing JNI parity. Class-call oracles use original bytecode and symbolic MethodHandle lookup; these results do not claim that those JBR defects are fixed. The device matrix separately requires safe, correct JNI calls for new members and preserved class reflection calls.
+
+`JBR_REFERENCE_HOME` path placeholder. Raw output and fixture, harness and runtime hashes stay under ignored `build/evidence/`. These comparisons cover specific interface-narrowing and reference-field rules, not complete JBR parity. ART device tests must check matching values, errors, field clearing and behavior after failure.
 
 `compare-jbr-invoke-kind.py` and device group `invoke-kind` compare old static, virtual, super, inherited and range calls after static/instance changes in both directions, plus old static calls after interface static-to-default changes, including hot recompilation, caller/target active frames, GC, implicit rebuilds, restoration and failed transactions. Device group `method-private` also covers IAE for old external virtual/super/range calls, interface default-to-private IAE/NSME, overrides, legal new self calls, null receivers, hot calls, implicit rebuilds, deletion/re-addition and restoration. The JBR oracle separately verifies obsolete self frames invoking the new private method; devices record the remaining 71 boundary. Device group `tool` isolates appended-subclass verification and a later redefinition of an added class, guarding the replacement class graph. `test-invoke-kind-host.py` checks both named-service ABI families, missing services, installation rollback and compilation flags; host fakes do not replace ART device validation.
 

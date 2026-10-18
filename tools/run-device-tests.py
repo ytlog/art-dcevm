@@ -21,6 +21,52 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dev.artdcevm.lab"
 COMPONENT = PACKAGE + "/com.github.ytlog.artdcevm.testing.StructuralRedefineInstrumentation"
 REPORT_PATH = "files/structural-redefine.json"
+INTERFACE_SELECTION_ROWS = ("Plain", "OwnPrivate", "PrivateChild", "PrivateGrandchild",
+    "OwnPackage", "PackageChild", "OwnProtected", "ProtectedChild", "OtherPackageChild",
+    "PrivatePublic", "PackagePublic", "ProtectedPublic", "OtherPackagePublic",
+    "OwnPrivateLate", "PrivateLate", "PackageLate", "ProtectedLate", "OtherPackageLate", "PublicLate", "RedeclaredPrivate", "OwnOnInherited", "OwnOnPlain")
+INTERFACE_SELECTION_SCENARIOS = []
+INTERFACE_SELECTION_REQUIRED = {}
+for _split in (False, True):
+    for _lane in ("abstract", "default", "parent"):
+        for _round in range(2):
+            _prefix = f"interface-selection-{'split' if _split else 'local'}-{_lane}-{_round}"
+            _addition = "interface-selection-" + _lane
+            INTERFACE_SELECTION_SCENARIOS.append((_prefix + "-abort", [_addition], 110))
+            INTERFACE_SELECTION_REQUIRED[_prefix + "-abort"] = {"armed": 0, "failureHits": 1,
+                "stable": 19, "noDeclaration": "java.lang.NoSuchMethodException", "classCall": 112, "afterGc": 19}
+            for _phase, _label in enumerate(("add", "swap", "back", "restore")):
+                _restore, _parent = _phase == 3, _lane == "parent"
+                _abstract = _phase == 1 if _parent or _lane == "default" else _phase != 1
+                _variant = "original" if _restore else ("parent-abstract" if _abstract else "parent") if _parent else "abstract" if _abstract else "default"
+                _name = _prefix + "-" + _label
+                INTERFACE_SELECTION_SCENARIOS.append((_name, ["interface-selection-" + _variant], 0))
+                _required = {"isolatedLoader": 19, "differentContract": False, "splitRuntimePackage": _split}
+                for _row, _type in enumerate(INTERFACE_SELECTION_ROWS):
+                    _selected = (141 + _row - 9 if 9 <= _row <= 12 else 145 if _row == 18
+                        else "java.lang.IllegalAccessError" if 4 <= _row <= 8 or 15 <= _row <= 17
+                        else "java.lang.AbstractMethodError" if _abstract or _row in (3, 14) or _row >= 19 else 17 if _parent else 7)
+                    if _restore: _selected = "java.lang.NoSuchMethodError"
+                    for _transport in (() if _restore and _parent else ("oldSite", "newSite")) + (() if _restore else
+                            ("reflection", "cachedReflection", "cachedHandle", "cachedJni", "fresh")):
+                        _required[_type + "." + _transport] = _selected
+                    _old = (100,101,102,102,111,112,121,122,131,102,142,143,131,103,102,112,122,131,145,104,105,106)[_row]
+                    if _split and _row == 10: _old = 112
+                    for _transport in ("classBytecode", "classReflection", "classHandle", "classJni"):
+                        _required[_type + "." + _transport] = _old
+                    if _row:
+                        _declared = (0,101,102,102,111,112,121,122,131,141,142,143,144,103,102,112,122,131,145,104,105,106)[_row]
+                        for _transport in ("declaredReflection", "declaredHandle"):
+                            _required[_type + "." + _transport] = _declared
+                        _required[_type + ".access"] = 1 if 9 <= _row <= 12 or _row == 18 else 2 if _row in (1,2,3,13,14) or _row >= 19 else 4 if _row in (6,7,16) else 0
+                    _required[_type + ".identity"] = True
+                    _required[_type + ".stable"] = 19
+                    if _phase == 2 and _row in (2,3,5,11):
+                        _required[_type + ".hot"] = 30000 * (_selected if isinstance(_selected, int)
+                            else -1 if _selected == "java.lang.IllegalAccessError" else -2)
+                    if _row == 2: _required["afterGc"] = 19 if _restore and _parent else _selected
+                INTERFACE_SELECTION_REQUIRED[_name] = _required
+
 SCENARIOS = (
     ("body", ["body"], 0),
     ("add", ["add"], 0),
@@ -148,6 +194,7 @@ SCENARIOS = (
         else "interface-shadow-parent" if suffix == "-parent" else "interface-shadow-" + kind], 110 if suffix == "-abort" else 0)
       for kind in ("static", "private", "protected", "package", "other-package")
       for suffix in (("-abort", "", "-abstract", "-default", "-parent", "-restore", "-readd") if kind == "protected" else ("", "-restore", "-readd"))],
+    *INTERFACE_SELECTION_SCENARIOS,
     ('interface-bridge-add', ['interface-bridge-add', 'interface-bridge-add'], 0),
     ('interface-lambda-first', ['interface-lambda-first'], 0),
     ('interface-lambda-append', ['interface-lambda-append', 'interface-lambda-append'], 0),
@@ -368,14 +415,10 @@ MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "
                          "interface-kind-abstract-missing", "interface-parent-missing",
                          "multi-interface-unimplemented", "interface-default-conflict"})
 MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy", "tool-retransform-structural", "tool-retransform-restore"})
-MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("interface-shadow-") and code == 0)
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith(("interface-shadow-", "interface-selection-")) and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("proxy-interface-") and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
 VAR_HANDLE_API = 33
-# Up to this API, ART fails to link a package-private or protected
-# implementation of an interface method, so the transaction rejects with 63;
-# later releases link it and calls throw IllegalAccessError, also for a
-# private method.
 def release_expectation(name, code, required, api, self_selection):
     """Expected code and checks given the API and reported privateSelfSelection."""
     if name.startswith("method-private-self-") and not name.endswith("-restore") and self_selection:
@@ -1220,12 +1263,16 @@ for _kind in ("c", "i", "a"):
         "oldNullCall": "java.lang.NullPointerException", "afterGc": False}
 MAPPED_SCENARIOS.update(name for name, _, code in CLASS_KIND_SCENARIOS if code == 0)
 
+REQUIRED_CHECKS.update(INTERFACE_SELECTION_REQUIRED)
+
 def scenario_sequence(scenario_group, api=None):
     if api is not None and not 33 <= api <= 37:
         return tuple(item for item in scenario_sequence(scenario_group)
                      if not item[0].startswith("tool-retransform-"))
     if scenario_group == "class-kinds":
         return tuple(CLASS_KIND_SCENARIOS)
+    if scenario_group == "interface-selection":
+        return tuple(INTERFACE_SELECTION_SCENARIOS)
     if scenario_group == "interface-shadow":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-shadow-"))
     if scenario_group == "full":
@@ -1342,7 +1389,7 @@ def validate_report(report, scenario_group="full"):
         if name.startswith("tool-retransform-") and scenario_capabilities.get("retransformRouted") is not True:
             raise RunFailure("Retransform scenario ran without its installed route")
         mapping = (scenario.get("capabilities") or {}).get("memberMapping")
-        if (name.startswith("interface-shadow-") or name in {
+        if (name.startswith(("interface-shadow-", "interface-selection-")) or name in {
                 "interface-abstract-unimplemented-private", "interface-abstract-unimplemented-package",
                 "interface-abstract-unimplemented-protected"}) and capabilities.get("interfaceMethodSelection") is not True:
             raise RunFailure(name + " requires JBR interfaceMethodSelection")
@@ -1477,7 +1524,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool", "interface-shadow", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool", "interface-shadow", "interface-selection", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
                         help="Debug-only canonical IMT capture path to verify before engine initialization")

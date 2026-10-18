@@ -38,12 +38,17 @@ done
 python3 tools/compare-jbr-interface-removal.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-field-retype.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-proxy-parents.py --java-home JBR_REFERENCE_HOME
+python3 tools/compare-jbr-interface-matrix.py --java-home JBR_REFERENCE_HOME
 python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 ```
 
 `compare-jbr-proxy-parents.py` 与设备组 `proxy-interface` 共用父接口夹具，检查共享父接口的保留与移除、旧引用调用与字段清理、恢复、多个接口同时新增且父接口同批重定义、代理类缓存与重复 GC。
 
 `tools/compare-jbr-field-retype.py` 使用同一固定运行时与字段改型夹具，检查普通引用、直接与间接接口、动态代理、继承字段、恢复、重复更新和 GC。
+
+`compare-jbr-interface-matrix.py` 与设备组 `interface-selection` 覆盖 22 种接收者：自身／继承 private、package-private、protected、跨包、分离定义加载器与更具体 public 覆写。分别从新增 abstract、新增 default 和新增父接口开始，切换 abstract/default，并检查旧／后加载调用点、接口反射与缓存 MethodHandle、类调用、30,000 次热调用、GC、后续类加载、两轮恢复及规划后失败。父接口移除仅用于重置测试状态，不对移除后的旧符号调用作该矩阵的对齐声明。设备报告验证器独立固定每种传输、访问标志及加载器关系的期望值。
+
+固定 JBR 在新增 abstract 后的接口 JNI 调用可触发 `javaCalls.cpp` 参数数量断言；间接重建类的缓存反射槽也可能别名到另一方法。加上 `--probe-jni-failures` 可在隔离子进程重现新增 abstract 与 default 改 abstract 的参考 VM 失败；后者先证明重定义前的 JNI 调用成功。崩溃单列记录，不计入通过的 JNI 对齐结论。类调用对照使用原字节码及符号查找的 MethodHandle，不能据此声称上述 JBR 缺陷已修复。设备矩阵另外验证新增成员的 JNI 和原类反射调用保持安全与正确。
 
 `JBR_REFERENCE_HOME` 是待替换的路径占位符。原始输出、输入夹具／执行器／运行时哈希保存在忽略的 `build/evidence/`。该对照覆盖特定接口收窄与引用字段规则，不能证明全部 JBR 功能已对齐。ART 设备测试应复核相同返回值、错误、引用清理及失败后行为。
 

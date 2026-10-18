@@ -116,7 +116,7 @@ elif "instrument" in parts:
     if mode == "instrument_exit":
         sys.exit(1)
 elif "cat" in parts:
-    print("not JSON" if mode == "bad_json" else os.environ["APK_TEST_REPORT"])
+    print("not JSON" if mode == "bad_json" else open(os.environ["APK_TEST_REPORT_FILE"]).read())
     if mode == "report_read_exit":
         sys.exit(1)
 else:
@@ -125,6 +125,27 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_interface_selection_requires_transport_access_and_loader_evidence(self):
+        report = complete_report(36)
+        report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('interface-selection-')]
+        runner.validate_report(report, scenario_group='interface-selection')
+        for name, key in (('interface-selection-local-default-0-add', 'PrivateChild.cachedHandle'),
+                          ('interface-selection-local-default-0-add', 'OwnOnPlain.oldSite'),
+                          ('interface-selection-split-abstract-0-swap', 'PackagePublic.classBytecode'),
+                          ('interface-selection-local-parent-1-back', 'OwnPackage.access'),
+                          ('interface-selection-split-parent-0-add', 'splitRuntimePackage'),
+                          ('interface-selection-local-abstract-0-abort', 'failureHits')):
+            broken = copy.deepcopy(report)
+            scenario = next(s for s in broken['scenarios'] if s['name'] == name)
+            scenario['checks'] = [c for c in scenario['checks'] if c['name'] != key]
+            with self.subTest(scenario=name, missing=key), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group='interface-selection')
+        scenario = next(s for s in report['scenarios'] if s['name'] == 'interface-selection-local-default-0-add')
+        check = next(c for c in scenario['checks'] if c['name'] == 'PrivateChild.cachedJni')
+        check['expected'] = check['actual'] = 'java.lang.AbstractMethodError'
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report, scenario_group='interface-selection')
+
     def test_class_kinds_require_precise_calls_types_and_retained_members(self):
         report = complete_report(36)
         report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('class-kind-')]
@@ -515,8 +536,10 @@ class ApkVerificationTests(unittest.TestCase):
                     elif mode == "wrong_expected_behavior":
                         check = report["scenarios"][0]["checks"][1]
                         check["expected"] = check["actual"] = 99
+                    report_file = work / "mock-report.json"
+                    report_file.write_text(json.dumps(report))
                     environment = dict(os.environ, APK_TEST_TRACE=str(trace), APK_TEST_MODE=mode,
-                                       APK_TEST_SHA=digest, APK_TEST_REPORT=json.dumps(report))
+                                       APK_TEST_SHA=digest, APK_TEST_REPORT_FILE=str(report_file))
                     command = [sys.executable, str(RUNNER), "--serial", "private-device-selector",
                                "--device-id", "android-test-device", "--adb", str(fake_adb),
                                "--apk", str(apk), "--timeout", "1",

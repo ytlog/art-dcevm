@@ -196,6 +196,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("method-private".equals(isolated)) runPrivateCallScenarios();
             else if ("tool".equals(isolated)) runToolScenarios();
             else if ("interface-shadow".equals(isolated)) runInterfaceShadowScenarios();
+            else if ("interface-selection".equals(isolated)) runInterfaceSelectionMatrix();
             else if ("class-kinds".equals(isolated)) runClassKindScenarios();
             else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
@@ -2960,6 +2961,184 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
+    private static final String SELECTION_PACKAGE = "com.github.ytlog.artdcevm.fixture.selection.";
+    private static final String[] SELECTION_ROWS = {"Plain", "OwnPrivate", "PrivateChild", "PrivateGrandchild",
+            "OwnPackage", "PackageChild", "OwnProtected", "ProtectedChild", "OtherPackageChild",
+            "PrivatePublic", "PackagePublic", "ProtectedPublic", "OtherPackagePublic",
+            "OwnPrivateLate", "PrivateLate", "PackageLate", "ProtectedLate", "OtherPackageLate", "PublicLate", "RedeclaredPrivate", "OwnOnInherited", "OwnOnPlain"};
+    private static final int[] SELECTION_OLD = {100,101,102,102,111,112,121,122,131,102,142,143,131,103,102,112,122,131,145,104,105,106};
+    private static final int[] SELECTION_DECLARED = {0,101,102,102,111,112,121,122,131,141,142,143,144,103,102,112,122,131,145,104,105,106};
+
+    private static Object selectionExpected(int row, boolean abstractKind, boolean parent) {
+        if (row >= 9 && row <= 12) return 141 + row - 9;
+        if (row == 18) return 145;
+        if ((row >= 4 && row <= 8) || (row >= 15 && row <= 17)) return IllegalAccessError.class.getName();
+        if (abstractKind || row == 3 || row == 14 || row >= 19) return AbstractMethodError.class.getName();
+        return parent ? 17 : 7;
+    }
+
+    private interface MatrixAction { Object run() throws Throwable; }
+    private static void selectionResult(Scenario scenario, String name, Object expected, MatrixAction action) throws Exception {
+        Object actual;
+        try { actual = action.run(); }
+        catch (Throwable error) {
+            if (error instanceof InvocationTargetException && error.getCause() != null) error = error.getCause();
+            actual = error.getClass().getName();
+        }
+        scenario.check(name, expected, actual);
+    }
+
+    private final class SelectionGroup {
+        final boolean split;
+        final ClassLoader loader, isolatedLoader;
+        final Class<?> contract, parent;
+        final Object isolated;
+        final Method isolatedStable, call, hot, stable;
+        final Object[] values = new Object[SELECTION_ROWS.length];
+        final Method[] old = new Method[SELECTION_ROWS.length], declared = new Method[SELECTION_ROWS.length];
+        final MethodHandle[] oldHandles = new MethodHandle[SELECTION_ROWS.length], declaredHandles = new MethodHandle[SELECTION_ROWS.length];
+        final int[] modifiers = new int[SELECTION_ROWS.length], identities = new int[SELECTION_ROWS.length];
+        Method cached;
+        MethodHandle cachedHandle;
+        SelectionGroup(boolean split) throws Exception {
+            this.split = split;
+            String[] bases = {"Matrix$PrivateBase", "Matrix$PackageBase", "Matrix$ProtectedBase", "other.PackageBase"};
+            List<String> types = new ArrayList<>();
+            Collections.addAll(types, "Matrix", "Matrix$Contract", "Matrix$Parent");
+            for (String row : SELECTION_ROWS) types.add("Matrix$" + row);
+            List<String> all = new ArrayList<>(types); Collections.addAll(all, bases);
+            isolatedLoader = new dalvik.system.InMemoryDexClassLoader(selectionDexes(all), context.getClassLoader());
+            ClassLoader baseLoader = split ? new dalvik.system.InMemoryDexClassLoader(
+                    selectionDexes(java.util.Arrays.asList(bases)), context.getClassLoader()) : context.getClassLoader();
+            if (!split) Collections.addAll(types, bases);
+            java.nio.ByteBuffer[] definitions = selectionDexes(types);
+            java.nio.ByteBuffer[] calls = {selectionDex("interface-selection-calls", "Calls"), selectionDex("interface-selection-calls", "NewCalls")};
+            java.nio.ByteBuffer[] dexes = java.util.Arrays.copyOf(definitions, definitions.length + calls.length);
+            System.arraycopy(calls, 0, dexes, definitions.length, calls.length);
+            loader = new dalvik.system.InMemoryDexClassLoader(dexes, baseLoader);
+            contract = load("Contract"); parent = load("Parent");
+            isolated = Class.forName(SELECTION_PACKAGE + "Matrix$Plain", true, isolatedLoader).getConstructor().newInstance();
+            isolatedStable = Class.forName(SELECTION_PACKAGE + "Matrix$Contract", true, isolatedLoader).getMethod("stable");
+            call = Class.forName(SELECTION_PACKAGE + "Calls", true, loader).getMethod("call", contract);
+            hot = call.getDeclaringClass().getMethod("hot", contract, int.class);
+            stable = contract.getMethod("stable");
+            for (int row = 0; row < values.length; ++row) if (row < 13 || row >= 19) receiver(row);
+            call.getDeclaringClass().getMethod("stable", contract).invoke(null, values[0]);
+        }
+        java.nio.ByteBuffer selectionDex(String variant, String name) throws Exception {
+            return java.nio.ByteBuffer.wrap(readAsset(variant + "/" + SELECTION_PACKAGE.replace('.', '/')
+                    + name.replace('.', '/') + ".dex"));
+        }
+        java.nio.ByteBuffer[] selectionDexes(List<String> names) throws Exception {
+            java.nio.ByteBuffer[] dexes = new java.nio.ByteBuffer[names.size()];
+            for (int i = 0; i < names.size(); ++i) dexes[i] = selectionDex("interface-selection-original", names.get(i));
+            return dexes;
+        }
+        Class<?> load(String name) throws Exception { return Class.forName(SELECTION_PACKAGE + "Matrix$" + name, true, loader); }
+        void receiver(int row) throws Exception {
+            if (values[row] != null) return;
+            Class<?> type = load(SELECTION_ROWS[row]);
+            values[row] = type.getConstructor().newInstance(); identities[row] = System.identityHashCode(values[row]);
+            old[row] = type.getMethod("oldCall"); oldHandles[row] = MethodHandles.publicLookup().unreflect(old[row]);
+            for (Class<?> declaring = type; declaring != null; declaring = declaring.getSuperclass()) {
+                try { declared[row] = declaring.getDeclaredMethod("select"); break; }
+                catch (NoSuchMethodException absent) { /* Continue through the actual class chain. */ }
+            }
+            if (declared[row] != null) {
+                modifiers[row] = declared[row].getModifiers(); declared[row].setAccessible(true);
+                declaredHandles[row] = MethodHandles.lookup().unreflect(declared[row]);
+            }
+        }
+        void verify(Scenario scenario, boolean restore, boolean abstractKind, boolean parentLane, boolean warm) throws Exception {
+            Method freshCall = Class.forName(SELECTION_PACKAGE + "NewCalls", true, loader).getMethod("call", contract);
+            Method current = restore ? null : contract.getMethod("select");
+            for (int row = 0; row < values.length; ++row) {
+                final int index = row; final Object value = values[row]; String prefix = SELECTION_ROWS[row] + ".";
+                Object selected = restore ? NoSuchMethodError.class.getName() : selectionExpected(row, abstractKind, parentLane);
+                if (!(restore && parentLane)) {
+                    selectionResult(scenario, prefix + "oldSite", selected, () -> call.invoke(null, value));
+                    selectionResult(scenario, prefix + "newSite", selected, () -> freshCall.invoke(null, value));
+                }
+                if (!restore) {
+                    selectionResult(scenario, prefix + "reflection", selected, () -> current.invoke(value));
+                    selectionResult(scenario, prefix + "cachedReflection", selected, () -> cached.invoke(value));
+                    selectionResult(scenario, prefix + "cachedHandle", selected, () -> cachedHandle.invokeWithArguments(value));
+                    selectionResult(scenario, prefix + "cachedJni", selected, () -> StandardJvmtiClient.callInterfaceDispatchInt(value, 0));
+                    Object fresh = value.getClass().getConstructor().newInstance();
+                    selectionResult(scenario, prefix + "fresh", selected, () -> call.invoke(null, fresh));
+                }
+                int classResult = split && row == 10 ? 112 : SELECTION_OLD[row];
+                oldHandles[row] = MethodHandles.publicLookup().unreflect(value.getClass().getMethod("oldCall"));
+                if (declared[row] != null) {
+                    Method freshDeclaration = declared[row].getDeclaringClass().getDeclaredMethod("select");
+                    freshDeclaration.setAccessible(true); declaredHandles[row] = MethodHandles.lookup().unreflect(freshDeclaration);
+                }
+                selectionResult(scenario, prefix + "classBytecode", classResult, () -> call.getDeclaringClass().getMethod("classCall", Object.class, int.class).invoke(null, value, index));
+                selectionResult(scenario, prefix + "classReflection", classResult, () -> old[index].invoke(value));
+                selectionResult(scenario, prefix + "classHandle", classResult, () -> oldHandles[index].invokeWithArguments(value));
+                StandardJvmtiClient.cacheInterfaceDispatch(1, value.getClass().getMethod("oldCall"));
+                selectionResult(scenario, prefix + "classJni", classResult, () -> StandardJvmtiClient.callInterfaceDispatchInt(value, 1));
+                if (declared[row] != null) {
+                    scenario.check(prefix + "access", modifiers[row], declared[row].getDeclaringClass().getDeclaredMethod("select").getModifiers());
+                    selectionResult(scenario, prefix + "declaredReflection", SELECTION_DECLARED[row], () -> declared[index].invoke(value));
+                    selectionResult(scenario, prefix + "declaredHandle", SELECTION_DECLARED[row], () -> declaredHandles[index].invokeWithArguments(value));
+                }
+                scenario.check(prefix + "identity", true, identities[row] == System.identityHashCode(value));
+                scenario.check(prefix + "stable", 19, stable.invoke(value));
+            }
+            if (warm) for (int row : new int[]{2,3,5,11}) {
+                Object selected = selectionExpected(row, abstractKind, parentLane);
+                int perCall = selected instanceof Integer ? (Integer) selected : selected.equals(IllegalAccessError.class.getName()) ? -1 : -2;
+                scenario.check(SELECTION_ROWS[row] + ".hot", DISPATCH_CALLS * perCall, hot.invoke(null, values[row], DISPATCH_CALLS));
+            }
+            System.gc(); System.runFinalization(); System.gc();
+            scenario.check("isolatedLoader", 19, isolatedStable.invoke(isolated));
+            scenario.check("differentContract", false, contract.isInstance(isolated));
+            scenario.check("splitRuntimePackage", split, load("PackageChild").getSuperclass().getClassLoader() != loader);
+            if (restore && parentLane) scenario.check("afterGc", 19, stable.invoke(values[2]));
+            else selectionResult(scenario, "afterGc", restore ? NoSuchMethodError.class.getName() : selectionExpected(2, abstractKind, parentLane),
+                    () -> call.invoke(null, values[2]));
+        }
+    }
+
+    private void runInterfaceSelectionMatrix() throws Exception {
+        for (boolean split : new boolean[]{false, true}) for (String lane : new String[]{"abstract", "default", "parent"}) {
+            SelectionGroup group = new SelectionGroup(split);
+            for (int round = 0; round < 2; ++round) {
+                String name = "interface-selection-" + (split ? "split" : "local") + "-" + lane + "-" + round;
+                String addition = "interface-selection-" + (lane.equals("parent") ? "parent" : lane);
+                runScenario(name + "-abort", 110, scenario -> {
+                    scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(new Class<?>[]{group.contract}, addition);
+                    scenario.check("failureHits", 1, InterfaceAbortInstrumentation.failureHits());
+                    scenario.check("stable", 19, group.stable.invoke(group.values[0]));
+                    scenario.expectError("noDeclaration", NoSuchMethodException.class, () -> group.contract.getMethod("select"));
+                    scenario.check("classCall", 112, group.old[5].invoke(group.values[5]));
+                    System.gc(); System.runFinalization(); System.gc();
+                    scenario.check("afterGc", 19, group.stable.invoke(group.values[0]));
+                });
+                for (int phase = 0; phase < 4; ++phase) {
+                    final boolean restore = phase == 3, parentLane = lane.equals("parent"), warm = phase == 2;
+                    final boolean abstractKind = parentLane ? phase == 1 : lane.equals("abstract") ? phase != 1 : phase == 1;
+                    String variant = restore ? "original" : parentLane ? phase == 1 ? "parent-abstract" : "parent"
+                            : abstractKind ? "abstract" : "default";
+                    Class<?> target = parentLane && phase != 0 && !restore ? group.parent : group.contract;
+                    final boolean added = phase == 0;
+                    runScenario(name + "-" + new String[]{"add", "swap", "back", "restore"}[phase], 0, scenario -> {
+                        scenario.redefine(new Class<?>[]{target}, "interface-selection-" + variant);
+                        if (added) {
+                            for (int row = 13; row < SELECTION_ROWS.length; ++row) group.receiver(row);
+                            group.cached = group.contract.getMethod("select");
+                            group.cachedHandle = MethodHandles.publicLookup().unreflect(group.cached);
+                            StandardJvmtiClient.cacheInterfaceDispatch(0, group.cached);
+                        }
+                        group.verify(scenario, restore, abstractKind, parentLane, warm);
+                    });
+                }
+            }
+        }
+    }
+
     private void runInterfaceShadowScenarios() throws Exception {
         // Private/static declarations do not implement interface methods;
         // non-public virtual class declarations select IllegalAccessError.
@@ -3218,6 +3397,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("afterGc", 41, object.stable());
         });
         runInterfaceShadowScenarios();
+        runInterfaceSelectionMatrix();
         InterfaceEvolutionFixture.BridgeImpl bridge = new InterfaceEvolutionFixture.BridgeImpl();
         InterfaceEvolutionFixture.BridgeParent<Integer> erased = bridge;
         runScenario("interface-bridge-add", 0, scenario -> {

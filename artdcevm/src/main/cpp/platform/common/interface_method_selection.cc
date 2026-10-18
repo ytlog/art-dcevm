@@ -110,11 +110,19 @@ void InvocationReceiverFailure(void* method, void* receiver) noexcept {
 struct ShadowFramePrefix { void* link; abi::ArtMethodPrefix* method; };
 static_assert(offsetof(ShadowFramePrefix, method) == sizeof(void*));
 void InterpreterBridge(void* thread, const void* accessor, ShadowFramePrefix* frame, uint64_t* result) noexcept {
-  const char* exception = frame && (frame->method->access_flags.load(std::memory_order_relaxed) & evolution::kAccAbstract)
-      ? InvocationError(frame->method) : nullptr;
-  if (exception) {
+  if (frame && (frame->method->access_flags.load(std::memory_order_relaxed) & evolution::kAccAbstract)) {
     if (result) *result = 0;
-    services.throw_new(thread, exception, "interface method has no accessible implementation");
+    // Older MethodHandle dispatch enters this bridge without checking abstract
+    // methods, including ART's ordinary mirandas in classes with no hidden
+    // declarations. Never interpret their absent CodeItem. Keep registered IAE
+    // targets first, and let ART choose the normal invocation-time exception
+    // for all other abstract targets.
+    if (const char* exception = InvocationError(frame->method))
+      services.throw_new(thread, exception, "interface method has no accessible implementation");
+    else if (original_invocation)
+      reinterpret_cast<void (*)(void*)>(original_invocation)(frame->method);
+    else
+      reinterpret_cast<void (*)(void*, void*)>(original_invocation_receiver)(frame->method, nullptr);
     return;
   }
   using Function = void (*)(void*, const void*, ShadowFramePrefix*, uint64_t*);
@@ -262,10 +270,10 @@ template <typename Class, typename Method> struct Selector {
     }
     if (graph.empty()) return original(boundary, thread, klass, interfaces, conflict, imt);
     std::map<Key, Method*> class_methods;
-    std::set<Key> hidden, inherited_private, private_on_receiver;
+    std::set<Key> hidden, private_declarations;
     const auto collect_class_methods = [&] {
       Class* receiver = klass.Get<Class>();
-      class_methods.clear(); hidden.clear(); inherited_private.clear(); private_on_receiver.clear();
+      class_methods.clear(); hidden.clear(); private_declarations.clear();
       for (Class* type = receiver; type; type = Heap(type->super_class)) {
         auto* methods = class_layout::Members<Method>(type->methods);
         for (uint32_t i = 0; methods && i < methods->length; ++i) {
@@ -274,8 +282,7 @@ template <typename Class, typename Method> struct Selector {
           if (flags & (kCopied | evolution::kAccStatic | evolution::kAccConstructor)) continue;
           Key key = Identity(method);
           if (!(flags & evolution::kAccPublic)) hidden.insert(key);
-          if (type == receiver && (flags & evolution::kAccPrivate)) private_on_receiver.insert(key);
-          if (type != receiver && (flags & evolution::kAccPrivate) && !private_on_receiver.count(key)) inherited_private.insert(key);
+          if (flags & evolution::kAccPrivate) private_declarations.insert(key);
           if (!(flags & evolution::kAccPrivate)) class_methods.emplace(std::move(key), method);
         }
       }
@@ -353,6 +360,14 @@ ARTDCEVM_TEST(
     auto* table = class_layout::Heap<abi::ObjectArray>(Thread(), helper_class.Get<Class>()->iftable);
     std::map<Key, Method*> selected;
     std::map<Key, bool> inaccessible, missing;
+    const auto inherited_interface = [&](Method* method) {
+      void* owner = runtime_thread::Read(Thread(), method->declaring_class);
+      auto* superclass = Heap(klass.Get<Class>()->super_class);
+      auto* inherited = class_layout::Heap<abi::ObjectArray>(Thread(), superclass->iftable);
+      for (int32_t i = 0; inherited && i < inherited->length; i += 2)
+        if (runtime_thread::Read(Thread(), inherited->elements[i]) == owner) return true;
+      return false;
+    };
     for (int32_t i = 0; i < table->length; i += 2) {
       auto* iface = class_layout::Heap<Class>(Thread(), table->elements[i]);
       auto declarations = Virtuals(iface);
@@ -367,10 +382,15 @@ ARTDCEVM_TEST(
         selected[key] = actual != class_methods.end() && !denied ? actual->second
             : reinterpret_cast<Method*>(array->elements[j]);
         inaccessible[key] = denied;
-        // Fixed JBR distinguishes a private declaration on the receiver from
-        // one reached only through a superclass: the latter does not supply
-        // the inherited default and selects a miranda, also after redefinition.
-        missing[key] = actual == class_methods.end() && inherited_private.count(key) &&
+        // JBR's defaultMethods::find_empty_vtable_slots reconsiders inherited
+        // defaults only when ordinary class lookup finds no declaration. A
+        // private declaration can suppress that inherited slot, even on the
+        // receiver itself. It does not suppress a newly implemented interface's
+        // default: a class first implementing I below a private-method base can
+        // call I's default, while its child selects AME. Compare interface class
+        // identities in the final superclass graph, never names or packages.
+        missing[key] = actual == class_methods.end() && private_declarations.count(key) &&
+            inherited_interface(selected[key]) &&
             !(selected[key]->access_flags.load() & evolution::kAccAbstract);
       }
     }

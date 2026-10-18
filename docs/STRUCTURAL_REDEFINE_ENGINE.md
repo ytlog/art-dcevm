@@ -163,11 +163,24 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 2. 新增 default 与类链 protected/package-private 虚方法同签名时，`Abilities::interface_selection` 决定能否按 JBR 接受：类方法优先，接口调用抛 `IllegalAccessError`，原有类方法调用保留；更具体 public 覆写仍优先。`subtype_shadows` 保留服务不可用时的拒绝依据，命名服务与运行时声明探测通过后才放开新增 default、abstract/default 切换和新增父接口带来的 default。
 3. 与 JBR 相同，新出现的 default 冲突照常接受：ART 为两个无关接口的同签名 default 链接冲突方法，调用时抛 `IncompatibleClassChangeError`；`PlanMethods` 把旧 copied default 映射到该冲突方法，缓存的旧解析随之失效。之后的事务消除冲突时，调用恢复到唯一的 default。
 
-4. 新增 public abstract、default 改为 abstract 和新增父接口的 abstract 方法均可接受。缺少实现时调用抛 `AbstractMethodError`；private 类方法不作为实现，package-private/protected 虚方法选择 `IllegalAccessError`。真实 bridge、更具体 default、abstract 遮蔽和冲突仍由 ART 的链接器决定。固定 JBR 对仅在父类找到 private 声明的子类保留 miranda 而不继承新增 default；同一路径覆盖该子类的结构重建和后续普通类加载。
+4. 新增 public abstract、default 改为 abstract 和新增父接口的 abstract 方法均可接受。缺少实现时调用抛 `AbstractMethodError`；private 类方法不作为实现，package-private/protected 虚方法选择 `IllegalAccessError`。真实 bridge、更具体 default、abstract 遮蔽和冲突仍由 ART 的链接器决定。private/default 的选择还取决于接口进入类链的位置，不能仅按 private 声明位于自身或父类分类（见下表）；同一路径覆盖结构重建和后续普通类加载。
+
+固定 JBR 的非 public 类链选择矩阵（签名包含返回类型）：
+
+| 类链状态 | 新增或切换为 abstract | 新增或切换为 default／新增 default 父接口 |
+| --- | --- | --- |
+| 无类方法 | AME | 接口 default |
+| 自身 private，首次在该类实现接口 | AME | 接口 default |
+| 父类 private，该类首次实现接口 | AME | 接口 default |
+| 类链有 private，default 已从父类实现的接口继承 | AME | AME；包括该类自身重声明 private |
+| 最近的非 private 类声明为 package-private／protected | IAE | IAE |
+| 更具体的 public 类覆写 | public 覆写 | public 覆写 |
+
+这里“父类已实现”按最终父类 IfTable 中的真实接口身份判断。JBR 的 `defaultMethods::find_empty_vtable_slots` 会因普通类查找找到 private 声明而跳过继承 default 槽的重新生成；新实现接口的 default 不受这一继承槽规则抑制。解析类方法时跳过 private 后寻找最近的非 private 声明。package-private／protected 的接口调用选择不因跨包或跨加载器而变成 default；普通类调用仍服从运行时包及覆写规则，例如不同加载器定义的同包名类不共享 package-private 覆写关系。原类声明和调用槽保留，不修改已发布方法的访问标志。
 
 `interface_method_selection.cc` 共用现有 `LinkMethods` 钩子，并从外层 `LinkClass` 保存真实 ClassLinker 接收者，避免把模板 helper 当作链接器。它用独立有效 DEX 暂时隐藏私有替换类自身的接口列表，保留全部 ID、签名与代码；包括普通类加载在内，先分配仅属于待链接类的私有 DexCache；仅在原链接调用期间替换该私有 cache 的 DexFile，并通过可移动 Handle 恢复，不切换共享 cache。ART 照常分配类方法 vtable 索引。另一个不发布到 ClassTable 的空抽象类实现最终接口图，借用 ART 的默认方法、miranda 与冲突选择；然后将选中方法复制进接收类，填好私有 vtable/IfTable，仍由外层 ART 完成类布局和发布。
 
-非 public 错误入口采用真实接口签名的 public abstract copied miranda，清除代码和可执行 default 标志，保留原类方法与其虚调用槽。JIT 无法将这个不可执行入口内联为原类方法或 default。命名的 invocation-time/abstract 错误服务为登记入口选择 IAE/AME；旧版 MethodHandle 跳过抽象检查时，由命名的 interpreter-to-interpreter 调用入口在执行前抛出相同错误。普通解释器方法直接经过标志快路径。登记在类发布前完成；失败删除登记和根，成功时像退役成员一样保留类加载器根至进程结束，避免原生方法地址重用。后续普通类加载通过预加载的 JNI native 探针获得本线程的真实 Native 声明证明，沿用已验证 Class 布局；不修改线程状态、不推算地址。`interfaceMethodSelection` 单独报告服务可用性。
+非 public 错误入口采用真实接口签名的 public abstract copied miranda，清除代码和可执行 default 标志，保留原类方法与其虚调用槽。JIT 无法将这个不可执行入口内联为原类方法或 default。命名的 invocation-time/abstract 错误服务为登记入口选择 IAE/AME；旧版 MethodHandle 跳过抽象检查时，由命名的 interpreter-to-interpreter 调用入口在执行前抛出相同错误；普通 ART miranda 也必须在此交回原 invocation-time 服务，不能进入不存在的 CodeItem。普通解释器方法直接经过标志快路径。登记在类发布前完成；失败删除登记和根，成功时像退役成员一样保留类加载器根至进程结束，避免原生方法地址重用。后续普通类加载通过预加载的 JNI native 探针获得本线程的真实 Native 声明证明，沿用已验证 Class 布局；不修改线程状态、不推算地址。`interfaceMethodSelection` 单独报告服务可用性。
 
 接口 direct 方法退役使用现有 `{old, old, kRetired}` 映射、DexCache 清理与访问守卫：字节码、JNI、MethodHandle 调用抛 `NoSuchMethodError`，缓存反射调用抛包装它的 `InvocationTargetException`；活动旧帧继续执行。标准入口的保活根已覆盖接口及整组子类型，发生退役时保留至进程结束；每个目标独立记录 retired kinds，因此之后以另一种调用方式恢复同名同描述符时，仍按原调用方式检查，采用与直接切换相同的调用保护或 71 限制。接口不需要新的访问守卫。
 

@@ -47,7 +47,7 @@
 
 与 JBR 相同，新增 public abstract 方法不要求已加载的实现类提供实现：已有实现、继承实现、同批补齐的实现与 ART 选中的更具体 default 照常分派；缺少实现、缺少真实 bridge 或被更具体 abstract 遮住的 default，在调用时抛 `AbstractMethodError`。`interfaceMethodSelection=true` 时，package-private/protected 类虚方法（含另一运行时包的父类方法）在接口选择中优先于 default，事务成功，接口调用抛 `IllegalAccessError`；原有类方法调用保留原行为。private 方法本身不实现新增 abstract，调用抛 `AbstractMethodError`。
 
-新增 default、abstract/default 互换与新增父接口带来的方法共用同一选择路径。类自身的 private/static 声明不代替 default；更具体的 public 类覆写照常优先。固定 JBR 还区分仅从父类找到 private 声明的子类：该子类对 default 的调用抛 `AbstractMethodError`，包括重定义后才加载的子类，重新演进后仍保持此结果。命名链接、分配与错误服务缺失时 `interfaceMethodSelection=false`，保留原有保守拒绝；本次新增路径已在 API 33/36 的普通与 CheckJNI 模式验证，其他版本目前只有源码和符号覆盖。
+新增 default、abstract/default 互换与新增父接口带来的方法共用同一选择路径。private/static 声明不作为接口实现；更具体的 public 类覆写照常优先。private/default 的结果取决于接口进入类链的位置：该类首次实现接口时可以选择 default；类链有 private、且从父类继承接口 default 时选择 `AbstractMethodError`，包括自身重声明 private 与后加载子类。详见[选择矩阵](STRUCTURAL_REDEFINE_ENGINE.md)。命名链接、分配与错误服务缺失时 `interfaceMethodSelection=false`，保留原有保守拒绝；平台验证记录见[兼容性说明](COMPATIBILITY.md)。
 
 多个接口组共同提交。快照后加载的相关类型触发现有有界重试，达到上限时整批拒绝 113，撤回或修正后可重新提交。失败不改写旧定义、已缓存的反射／MethodHandle／JNI method ID 或预热调用点。
 
