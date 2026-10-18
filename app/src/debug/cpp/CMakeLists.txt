@@ -6,9 +6,14 @@ add_link_options("LINKER:-z,common-page-size=16384")
 add_library(artdcevm_client_test SHARED testing/standard_jvmti_client.cc)
 target_compile_features(artdcevm_client_test PRIVATE cxx_std_17)
 target_include_directories(artdcevm_client_test PRIVATE ../../../../third_party/jvmti)
-# JNI loops for HookOverheadBenchmark; no JVMTI or engine dependency.
-add_library(artdcevm_bench SHARED testing/hook_overhead_benchmark.cc)
+# JNI loops plus opt-in ART 13/JVMTI probes, confined to the Debug APK.
+add_library(artdcevm_bench SHARED testing/hook_overhead_benchmark.cc
+            testing/jit_instrumentation_probe.cc)
 target_compile_features(artdcevm_bench PRIVATE cxx_std_17)
+target_include_directories(artdcevm_bench PRIVATE ../../../../third_party/jvmti
+                           ../../../../artdcevm/src/main/cpp)
+find_package(shadowhook REQUIRED CONFIG)
+target_link_libraries(artdcevm_bench PRIVATE shadowhook::shadowhook)
 
 # The lab compiles the shared engine sources with an explicit Debug-only flag.
 # Library-owned Debug/Release builds keep the CMake option OFF.

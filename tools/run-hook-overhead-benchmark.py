@@ -26,6 +26,9 @@ REPORT_PATH = "files/hook-overhead.json"
 STATES = ("none", "agent", "engine", "engine-client", "added", "removed")
 # Opt-in controls: redefinitions without the engine's transaction (--states).
 CONTROLS = ("art-body", "art-added", "engine-body")
+# Debug-only ART 13 observation and restoration experiments, opt-in.
+PROBES = tuple(state + "-" + probe for state in ("art-added", "added")
+               for probe in ("observe", "restore", "jvmti"))
 MODES = ("jit", "interp")
 # (label, compared state, baseline state)
 DELTAS = (("agent-none", "agent", "none"), ("engine-agent", "engine", "agent"),
@@ -87,7 +90,7 @@ def summarize(reports):
 def markdown(summary):
     lines = []
     for mode, states in summary.items():
-        present = [state for state in STATES + CONTROLS if state in states]
+        present = [state for state in STATES + CONTROLS + PROBES if state in states]
         names = sorted({name for state in present for name in states[state]}, key=lambda n: (n.startswith(("once.", "setup.")), n))
         labels = [label for label, _, _ in DELTAS if label in states["deltas"]]
         lines += ["", "mode=" + mode + " (median ns over processes; deltas are paired same-round medians)", "",
@@ -115,6 +118,8 @@ def main(argv=None):
     parser.add_argument("--checkjni", choices=("true", "false"), default="false",
                         help="JNI checking mode selected before any agent (Debug apps default to true)")
     parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--probe-unwind", action="store_true",
+                        help="Probe states only: let the original instrumentation thread exit before redefining")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/hook-overhead/runs")
     parser.add_argument("--summarize", type=Path, nargs="+", metavar="DIR",
                         help="Only recompute the summary from the reports in these evidence directories")
@@ -133,7 +138,7 @@ def main(argv=None):
     if not args.apk.is_file(): parser.error("The requested APK is missing; build :app:assembleDebug first")
     if not re.fullmatch(r"[a-z][a-z0-9-]{0,63}", args.device_id) or args.device_id == args.serial:
         parser.error("Use an anonymous --device-id such as android-device-1")
-    if not set(modes) <= set(MODES) or not set(states) <= set(STATES + CONTROLS) or args.rounds <= 0:
+    if not set(modes) <= set(MODES) or not set(states) <= set(STATES + CONTROLS + PROBES) or args.rounds <= 0:
         parser.error("Unsupported modes, states or rounds")
     if not args.evidence_root.resolve().is_relative_to((ROOT / "build/evidence").resolve()):
         parser.error("Evidence must remain under ignored build/evidence")
@@ -147,7 +152,7 @@ def main(argv=None):
 
     meta = {"deviceId": args.device_id, "apkSha256": hashlib.sha256(args.apk.read_bytes()).hexdigest(),
             "startedUtc": timestamp, "rounds": args.rounds, "modes": modes, "states": states,
-            "checkJni": args.checkjni, "runs": []}
+            "checkJni": args.checkjni, "probeUnwind": args.probe_unwind, "runs": []}
     installed = adb("install", "-r", str(args.apk))
     require_install_success(installed.returncode, installed.stdout, installed.stderr)
     path = base_apk_path(adb("shell", "pm", "path", PACKAGE).stdout)
@@ -161,6 +166,7 @@ def main(argv=None):
                 adb("shell", "am", "force-stop", PACKAGE)
                 adb("shell", "run-as", PACKAGE, "rm", "-f", REPORT_PATH)
                 test = adb("shell", "am", "instrument", "-w", "-r", "-e", "state", state, "-e", "mode", mode,
+                           "-e", "probeunwind", str(args.probe_unwind).lower(),
                            "-e", "checkjni", args.checkjni, COMPONENT, timeout=args.timeout)
                 (out / (label + ".txt")).write_text(safe_console(test.stdout + test.stderr, args.serial))
                 raw = adb("exec-out", "run-as", PACKAGE, "cat", REPORT_PATH).stdout
@@ -174,8 +180,12 @@ def main(argv=None):
                     run["completed"] = report.get("completed") is True
                     if run["completed"] and run["instrumentationOk"]: reports.append({**report, "round": round_index})
                     else: run["error"] = report.get("fatalError")
+                    probe = report.get("instrumentationProbe", {})
+                    if "restorationSucceeded" in probe:
+                        run["restoration"] = "restored" if probe["restorationSucceeded"] else "blocked"
                 meta["runs"].append(run)
-                print(label, "ok" if run.get("completed") and run["instrumentationOk"] else "FAILED", flush=True)
+                print(label, "ok" if run.get("completed") and run["instrumentationOk"] else "FAILED",
+                      ("restore=" + run["restoration"]) if "restoration" in run else "", flush=True)
     if reports: meta["device"] = reports[0]["device"]
     summary = summarize(reports)
     meta["passed"] = len(reports) == len(meta["runs"])

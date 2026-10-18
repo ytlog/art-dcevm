@@ -6,6 +6,8 @@ import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Debug;
+import android.os.Handler;
+import android.os.Looper;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.Evolving;
@@ -25,6 +27,8 @@ import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Locale;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Steady-state cost of the engine's resident hooks, one state per process:
@@ -50,6 +54,10 @@ import java.util.Locale;
  * {@code mode=interp} stops JIT compilation before anything is measured;
  * {@code mode=jit} warms each workload until it runs compiled. Early receivers
  * are linked before the state is selected and late ones after it.
+ * ART 13 only: append {@code -observe}, {@code -restore}, or {@code -jvmti}
+ * to {@code art-added} or {@code added} for the instrumentation experiment.
+ * A completed benchmark does not imply restoration succeeded; the probe
+ * records the remaining blockers and {@code restorationSucceeded} separately.
  */
 public final class HookOverheadBenchmark extends Instrumentation {
     private static final String REPORT_FILE = "hook-overhead.json";
@@ -61,6 +69,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
 
     private Bundle arguments;
     private Context context;
+    private Throwable preparationError;
     private final JSONObject report = new JSONObject();
 
     /** Stops ART's JIT workers for the rest of the process (test engine library). */
@@ -76,9 +85,34 @@ public final class HookOverheadBenchmark extends Instrumentation {
 
     @Override public void onStart() {
         context = getTargetContext();
+        if (argument("probeunwind", "false").equals("true")
+                && argument("state", "none").matches(".+-(observe|restore|jvmti)")) {
+            // Attaching before the new Thread starts removes boot-image compiled
+            // entry points. Let the original InstrumentationThread's old quick
+            // frames return completely before redefining on this new thread.
+            try {
+                InterfaceAbortInstrumentation.configureRuntime(arguments);
+                StandardJvmtiClient.attach(context);
+            } catch (Throwable error) { preparationError = error; }
+            Thread creator = Thread.currentThread();
+            new Thread(() -> {
+                try { creator.join(); }
+                catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                    preparationError = error;
+                }
+                executeBenchmark();
+            }, "jit-probe-worker").start();
+            return;
+        }
+        executeBenchmark();
+    }
+
+    private void executeBenchmark() {
         boolean completed = false;
         Bundle result = new Bundle();
         try {
+            if (preparationError != null) throw preparationError;
             run();
             completed = true;
         } catch (Throwable error) {
@@ -98,9 +132,12 @@ public final class HookOverheadBenchmark extends Instrumentation {
 
     private void run() throws Throwable {
         String state = argument("state", "none");
+        String baseState = state.replaceFirst("-(observe|restore|jvmti)$", "");
+        String probe = state.equals(baseState) ? "none" : state.substring(baseState.length() + 1);
         String mode = argument("mode", "jit");
         if (!Arrays.asList("none", "agent", "engine", "engine-client", "added", "removed",
-                "art-body", "art-added", "engine-body").contains(state))
+                "art-body", "art-added", "engine-body").contains(baseState)
+                || (!probe.equals("none") && !Arrays.asList("art-added", "added").contains(baseState)))
             throw new IllegalArgumentException("Unsupported state " + state);
         if (!mode.equals("jit") && !mode.equals("interp"))
             throw new IllegalArgumentException("Unsupported mode " + mode);
@@ -123,9 +160,9 @@ public final class HookOverheadBenchmark extends Instrumentation {
 
         JSONObject setup = new JSONObject();
         report.put("setup", setup);
-        boolean engine = !Arrays.asList("none", "agent", "art-body", "art-added").contains(state);
-        boolean client = !Arrays.asList("none", "agent", "engine").contains(state);
-        if (state.equals("agent")) {
+        boolean engine = !Arrays.asList("none", "agent", "art-body", "art-added").contains(baseState);
+        boolean client = !Arrays.asList("none", "agent", "engine").contains(baseState);
+        if (baseState.equals("agent")) {
             System.loadLibrary("artdcevm");
             Debug.attachJvmtiAgent("libartdcevm.so", null, context.getApplicationContext().getClassLoader());
         }
@@ -135,22 +172,59 @@ public final class HookOverheadBenchmark extends Instrumentation {
             setup.put("initializeNanos", System.nanoTime() - begin);
         }
         if (client) StandardJvmtiClient.attach(context);
-        if (client && !state.equals("engine-client")) {
-            boolean removal = state.equals("removed");
-            boolean body = state.endsWith("-body");
+        if (!probe.equals("none")) {
+            int code = JitInstrumentationProbe.install();
+            if (code != 0) throw new AssertionError("Cannot install ART 13 probe: " + code);
+            if (probe.equals("jvmti")) JitInstrumentationProbe.attach(context);
+        }
+        if (client && !baseState.equals("engine-client")) {
+            boolean removal = baseState.equals("removed");
+            boolean body = baseState.endsWith("-body");
             Class<?> type = removal ? InterfaceRemovalFixture.Subject.class : Evolving.class;
             String path = (removal ? "interface-remove/" : body ? "body/" : "add/")
                     + type.getName().replace('.', '/') + ".dex";
             Class<?>[] classes = {type};
             byte[][] dexes = {readAsset(path)};
             long begin = System.nanoTime();
-            int code = state.equals("art-added") ? StandardJvmtiClient.redefineStructurally(classes, dexes)
+            int code = baseState.equals("art-added") ? StandardJvmtiClient.redefineStructurally(classes, dexes)
                     : StandardJvmtiClient.redefine(classes, dexes);
             setup.put("redefineNanos", System.nanoTime() - begin).put("redefineCode", code);
             if (code != 0) throw new AssertionError("Redefinition failed: " + code);
             if (removal ? InterfaceRemovalFixture.Removed.class.isInstance(subject)
                         : evolving.compute() != (body ? 12 : 13))
                 throw new AssertionError("Redefinition not visible");
+        }
+        if (!probe.equals("none")) {
+            JSONObject diagnostics = new JSONObject().put("strategy", probe);
+            report.put("instrumentationProbe", diagnostics);
+            diagnostics.put("afterRedefine", JitInstrumentationProbe.state());
+            diagnostics.put("unwindOriginalThread", argument("probeunwind", "false"));
+            if (argument("probeunwind", "false").equals("true")) {
+                CountDownLatch mainProgress = new CountDownLatch(1);
+                new Handler(Looper.getMainLooper()).post(mainProgress::countDown);
+                if (!mainProgress.await(5, TimeUnit.SECONDS))
+                    throw new AssertionError("Main Looper did not advance");
+            }
+            if (!probe.equals("observe")) {
+                JSONArray restoration = new JSONArray();
+                diagnostics.put("restoration", restoration);
+                for (int attempt = 0; attempt < 10; attempt++) {
+                    long begin = System.nanoTime();
+                    int code = probe.equals("restore") ? JitInstrumentationProbe.maybeRestore()
+                            : JitInstrumentationProbe.cycleJvmti();
+                    long elapsed = System.nanoTime() - begin;
+                    JSONObject status = JitInstrumentationProbe.state();
+                    restoration.put(new JSONObject().put("code", code)
+                            .put("nanos", elapsed).put("state", status));
+                    if (code < 0 || (probe.equals("jvmti") && code != 0))
+                        throw new AssertionError("Restoration rejected: " + code);
+                    if (status.getLong("exitStubsInstalled") == 0) break;
+                    Thread.sleep(50);
+                }
+            }
+            diagnostics.put("beforeWorkloads", JitInstrumentationProbe.state());
+            if (!probe.equals("observe")) diagnostics.put("restorationSucceeded",
+                    diagnostics.getJSONObject("beforeWorkloads").getLong("exitStubsInstalled") == 0);
         }
         if (engine) setup.put("capabilities", DcevmRuntime.capabilities());
         // After setup: ART's Redefiner suspends the JIT itself and restarts it.
@@ -222,6 +296,8 @@ public final class HookOverheadBenchmark extends Instrumentation {
             for (int i = 0; i < n; i++) total += Class.forName(forName, false, loader).hashCode() & 1;
             return total;
         });
+        if (!probe.equals("none")) report.getJSONObject("instrumentationProbe")
+                .put("afterWorkloads", JitInstrumentationProbe.state());
     }
 
     /**
