@@ -37,7 +37,7 @@
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
 | boot 接口、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
-| 有 Proxy 实现类的接口改变父接口 | `HIERARCHY_CHANGED`（66） |
+| 有 Proxy 实现类的接口移除父接口（与 JBR 一致），或新增的父接口同批也被重定义、或同批另一个接口目标也给同一 Proxy 新增父接口 | `HIERARCHY_CHANGED`（66） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
 删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 相同，未实现它的类调用时抛 `AbstractMethodError`；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法与新增 abstract 相同；其 default 由实现类获得 copied default。
@@ -54,7 +54,7 @@
 
 接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
 
-`java.lang.reflect.Proxy` 生成的实现类（例如 Retrofit 服务或注解实例）保留原类与 `InvocationHandler`：保留的方法照常交给处理器，处理器收到的是新接口的 `Method`；Proxy 没有的新增 abstract 方法调用时抛 `AbstractMethodError`，新增 default 执行其方法体；之后用同一接口创建的代理复用这个类，行为相同，与 JBR 一致。新增 abstract 方法不因 Proxy 缺实现而拒绝（Proxy 没有可以同批补齐的源码），普通实现类同样在调用时按上文规则抛错。
+`java.lang.reflect.Proxy` 生成的实现类（例如 Retrofit 服务或注解实例）保留原类与 `InvocationHandler`：保留的方法照常交给处理器，处理器收到的是新接口的 `Method`；Proxy 没有的新增 abstract 方法调用时抛 `AbstractMethodError`，新增 default 执行其方法体；之后用同一接口创建的代理复用这个类，行为相同，与 JBR 一致。接口新增父接口时，已有和之后创建的代理都成为该父接口的实例，与 JBR 一致：Proxy 原本没有的父接口方法执行父接口的 default 方法体或抛 `AbstractMethodError`，Proxy 原本就有的方法仍交给处理器。新增 abstract 方法不因 Proxy 缺实现而拒绝（Proxy 没有可以同批补齐的源码），普通实现类同样在调用时按上文规则抛错。
 
 ## 不支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 
@@ -97,7 +97,7 @@
 - 实例字段按 JBR 的持有者与实例更新规则清理不兼容引用；静态字段另按 JBR FieldCopier 的重定义类与签名规则复制，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。已有 `Thread` 持有的任务可能被清空，此后 `run()` 无动作；恢复接口也不会恢复被清空的字段。数组元素、局部变量和收窄后才创建的引用不受该次字段清理影响；经保留引用调用不再实现的接口时抛 `IncompatibleClassChangeError`，解释执行、JIT 与 boot 调用都须遵循此结果。
 - 类从被移除接口继承的 default 方法随之消失：以类本身调用它的旧字节码抛 `NoSuchMethodError`。
 - 首次接口收窄后，分派保护持续到进程结束，覆盖后续结构重建与新链接的类，包括抽象父类的晚加载具体子类。接口调用需要查找；全进程后续链接与字段快照的性能成本尚未量化。
-- 接口目标也可以移除父接口：其子接口、实现类及其子类随之失去该父接口，语义同上；有 Proxy 实现类时以 66 拒绝。
+- 接口目标也可以移除父接口：其子接口、实现类及其子类随之失去该父接口，语义同上；有 Proxy 实现类时以 66 拒绝，与 JBR 一致。
 ## 方法种类的语义
 
 - 删除的 native 方法与其他方法一样退役；正在执行它的线程继续执行。native 改为 Java 后，已有的调用点、缓存的反射对象与 JNI 方法 ID 执行新的 Java 方法体。

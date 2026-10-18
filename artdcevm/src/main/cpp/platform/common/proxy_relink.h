@@ -16,7 +16,8 @@
 // and descriptor, so the invocation handler keeps receiving it, now as the new
 // interface method; a method the proxy never had maps to the new declaration
 // itself (an abstract one throws AbstractMethodError, a default runs its body),
-// as a JVM's re-linked proxy class does. The proxy's IMT is sealed
+// as a JVM's re-linked proxy class does. Parent interfaces the target adds
+// join the proxy's IfTable the same way. The proxy's IMT is sealed
 // (imt_sealing.h) because the new methods may occupy other slots.
 namespace artdcevm::proxy_relink {
 // An interface target of the batch.
@@ -29,9 +30,10 @@ struct Interface {
 bool Install(const class_layout::Services& services, std::string* failure);
 bool Available();
 // Native: for each loaded proxy class and each interface target it implements,
-// a long[] sized for the new interface's IfTable methods. Rejects a target
-// whose new definition changes its parent interfaces: the proxy's IfTable
-// would need entries it does not have.
+// a long[] sized for the new interface's IfTable methods. A target that adds
+// parent interfaces gives the proxy a new IfTable with an entry for each one
+// it does not implement yet, superinterfaces first; as on JBR, a target that
+// drops a parent interface is rejected.
 jvmtiError Prepare(JNIEnv* jni, const std::vector<jclass>& proxies, const std::vector<Interface>& interfaces,
                    std::string* error);
 // Before ART's no-failure point, match each interface by Class identity in

@@ -412,6 +412,37 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("twice", 77, api.twice());
             scenario.check("sum", 5 * times, ProxyFixture.sum(api, times));
         });
+        // As on JBR, the proxy class stays and gains the new parent: kept methods
+        // still reach the handler, the parent's default runs its body and its
+        // abstract method throws AbstractMethodError. Dropping it again rejects.
+        runScenario("proxy-interface-parent", 0, scenario -> {
+            scenario.check("parentBefore", false, ProxyFixture.isParent(api));
+            scenario.redefine(batch, "proxy-parent-add");
+            Runtime.getRuntime().gc();
+            scenario.check("isParent", true, ProxyFixture.isParent(api));
+            scenario.check("directInterfaces", 1, api.getClass().getInterfaces().length);
+            scenario.check("get", 5, ProxyFixture.get(api));
+            scenario.check("handlerSeesNewMethod", true, ProxyFixture.currentInterface);
+            scenario.check("twice", 77, api.twice());
+            scenario.check("parentDefault", 41, ProxyFixture.parentDefault(api));
+            scenario.check("parentReflection", 41, ProxyFixture.Parent.class.getMethod("parentDefault").invoke(api));
+            scenario.expectError("parentAbstract", AbstractMethodError.class,
+                    () -> ProxyFixture.Parent.class.getMethod("parentAbstract").invoke(api));
+            int sum = 0;
+            for (int i = 0; i < times; i++) sum += ProxyFixture.parentDefault(api);
+            scenario.check("parentSum", 41 * times, sum);
+            ProxyFixture.Api fresh = ProxyFixture.create();
+            scenario.check("freshSameClass", true, fresh.getClass() == api.getClass());
+            scenario.check("freshIsParent", true, ProxyFixture.isParent(fresh));
+            Runtime.getRuntime().gc();
+            scenario.check("afterGc", 41, ProxyFixture.parentDefault(api));
+        });
+        runScenario("proxy-interface-parent-drop", 66, scenario -> {
+            scenario.redefine(batch, "proxy-api-original");
+            scenario.check("isParent", true, ProxyFixture.isParent(api));
+            scenario.check("get", 5, ProxyFixture.get(api));
+            scenario.check("parentDefault", 41, ProxyFixture.parentDefault(api));
+        });
     }
 
     private void runStaticNarrowingScenarios() throws Exception {

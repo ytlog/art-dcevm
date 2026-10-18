@@ -199,6 +199,8 @@ SCENARIOS = (
     ("proxy-interface-group-final", ["proxy-group-original", "proxy-group-original", "proxy-group-original"], 0),
     ("proxy-interface", ["proxy-api-add"], 0),
     ("proxy-interface-restore", ["proxy-api-original"], 0),
+    ("proxy-interface-parent", ["proxy-parent-add"], 0),
+    ("proxy-interface-parent-drop", ["proxy-api-original"], 66),
     ("interface-drop-parent", ["parent-remove"], 0),
     ("interface-drop-parent-restore", ["parent-remove-original"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
@@ -310,7 +312,7 @@ MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
                         if name.startswith("interface-abstract-") and code == 0)
 MAPPED_SCENARIOS.update({"interface-removal-batched", "interface-removal-batched-restore", "interface-removal-repeat", "interface-removal-group", "abstract-removal",
                          "abstract-removal-repeat", "abstract-removal-group", "abstract-removal-restore", "interface-remove", "interface-removal", "interface-removal-restore",
-                         "proxy-interface", "proxy-interface-restore",
+                         "proxy-interface", "proxy-interface-restore", "proxy-interface-parent",
                          "interface-drop-parent", "interface-drop-parent-restore"})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
                         if code == 0 and (name.startswith("proxy-interface-group-") or name.startswith("static-narrow-")))
@@ -837,6 +839,11 @@ REQUIRED_CHECKS["proxy-interface"] = {
     "added": "java.lang.AbstractMethodError", "extra": 40, "freshSameClass": True, "freshGet": 5, "afterGc": 5}
 REQUIRED_CHECKS["proxy-interface-restore"] = {
     "get": 5, "handlerSeesNewMethod": True, "removed": 6, "twice": 77, "sum": 5 * PROXY_TIMES}
+REQUIRED_CHECKS["proxy-interface-parent"] = {
+    "parentBefore": False, "isParent": True, "directInterfaces": 1, "get": 5, "handlerSeesNewMethod": True,
+    "twice": 77, "parentDefault": 41, "parentReflection": 41, "parentAbstract": "java.lang.AbstractMethodError",
+    "parentSum": 41 * PROXY_TIMES, "freshSameClass": True, "freshIsParent": True, "afterGc": 41}
+REQUIRED_CHECKS["proxy-interface-parent-drop"] = {"isParent": True, "get": 5, "parentDefault": 41}
 PARENT_TIMES = 30_000  # DISPATCH_CALLS in StructuralRedefineInstrumentation
 REQUIRED_CHECKS["interface-drop-parent"] = {
     "warmedUp": 0, "defaultBefore": 7, "parents": 0, "isBase": False, "isChild": True, "child": 12, "side": 22,

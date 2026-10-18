@@ -11,6 +11,12 @@ public final class ProxyFixture {
         default int twice() { return get() * 2; }
     }
 
+    // Not a parent of Api until fixtures/proxy-parent-add adds it.
+    public interface Parent {
+        default int parentDefault() { return 41; }
+        int parentAbstract();
+    }
+
     // Whether the last call reached the handler as a method of the current Api class.
     public static boolean currentInterface;
     public static int calls;
@@ -28,6 +34,10 @@ public final class ProxyFixture {
         };
         return (Api) Proxy.newProxyInstance(Api.class.getClassLoader(), new Class<?>[]{Api.class}, handler);
     }
+
+    public static boolean isParent(Object object) { return object instanceof Parent; }
+    // A checkcast and invoke-interface through Parent from verified code.
+    public static int parentDefault(Object object) { return ((Parent) object).parentDefault(); }
 
     public static int get(Api api) { return api.get(); }
     public static int removed(Api api) { return api.removed(); }
