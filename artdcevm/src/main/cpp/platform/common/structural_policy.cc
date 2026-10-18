@@ -173,10 +173,10 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
 // Only new code invokes an added static or private interface method; as for a
 // class, ART never runs an initializer added to an initialized interface. An added
 // default fills a new iftable slot that ART links into every re-linked
-// subtype. Abstract additions require checking the actual linked dispatch
-// of every concrete implementation. `modifiers` is the JVMTI view.
+// subtype. Missing abstract implementations fail at the call. `modifiers`
+// is the JVMTI view.
 Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
-                                const LoadedHierarchy& hierarchy, bool supported, const Abilities& abilities) {
+                                const LoadedHierarchy& hierarchy, bool supported) {
   const std::string method = key.first + key.second;
   if (!supported)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
@@ -195,16 +195,9 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
   if (!(modifiers & acc::kAccPublic))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "added interface instance method is neither public nor private: " + method);
-  if (modifiers & acc::kAccAbstract) {
-    if (!abilities.interface_abstract_methods)
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
-                    "added abstract interface method requires a verified IfTable accessor: " + method +
-                        (abilities.interface_abstract_unavailable_reason.empty() ? ""
-                         : "; " + abilities.interface_abstract_unavailable_reason));
-    Decision pending;
-    pending.interface_obligations.push_back(key);
-    return pending;
-  }
+  // As on JBR, an implementation without the new abstract method links a
+  // miranda: calls to it throw AbstractMethodError.
+  if (modifiers & acc::kAccAbstract) return {};
   const auto shadow = hierarchy.subtype_shadows.find(key);
   if (shadow != hierarchy.subtype_shadows.end())
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
@@ -214,16 +207,13 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
 // An added parent interface brings its virtual methods, and those of its
 // superinterfaces the target did not inherit, to every implementation: like
 // added members, a direct method of the target must not hide one, a default
-// must not shadow a subtype method, and an abstract one needs implementations.
-Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarchy& hierarchy,
-                               const Abilities& abilities) {
-  std::set<MemberKey> direct, defaults;
+// must not shadow a subtype method. Missing abstract implementations fail at the call.
+Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarchy& hierarchy) {
+  std::set<MemberKey> direct;
   for (const auto& m : incoming.methods) {
     const uint32_t now = MethodModifiers(m.access);
     if (!Virtual(now)) direct.insert({m.name, m.descriptor});
-    else if (!(now & acc::kAccAbstract)) defaults.insert({m.name, m.descriptor});
   }
-  Decision pending;
   for (const auto& [declaring, methods] : hierarchy.parent_methods) {
     for (const auto& method : methods) {
       const std::string name = declaring + "." + method.key.first + method.key.second;
@@ -237,36 +227,23 @@ Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarch
                         "added parent interface default may change calls resolved by " + shadow->second + ": " + name);
         continue;
       }
-      if (defaults.count(method.key)) continue;
-      if (!abilities.interface_abstract_methods)
-        return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                      "added parent interface abstract method requires a verified IfTable accessor: " + name +
-                          (abilities.interface_abstract_unavailable_reason.empty() ? ""
-                           : "; " + abilities.interface_abstract_unavailable_reason));
-      pending.parent_obligations.emplace_back(declaring, method.key);
+      // An abstract method an implementation lacks throws AbstractMethodError
+      // when called, as on JBR.
     }
   }
-  return pending;
+  return {};
 }
 // A public interface instance method may switch between abstract and default.
 // A new default is an added default for every implementation; a new abstract
-// declaration needs a concrete implementation in every loaded implementation.
+// declaration throws AbstractMethodError when no implementation exists.
 Decision CheckInterfaceKindChange(const MemberKey& key, uint32_t before, uint32_t after,
-                                  const LoadedHierarchy& hierarchy, bool supported, const Abilities& abilities) {
+                                  const LoadedHierarchy& hierarchy, bool supported) {
   const std::string method = key.first + key.second;
   if (!supported || (before ^ after) != acc::kAccAbstract || !Virtual(before) || !(before & acc::kAccPublic))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                   "interface redefinition does not support method modifier changes: " + method);
-  if (after & acc::kAccAbstract) {
-    if (!abilities.interface_abstract_methods)
-      return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
-                    "interface method made abstract requires a verified IfTable accessor: " + method +
-                        (abilities.interface_abstract_unavailable_reason.empty() ? ""
-                         : "; " + abilities.interface_abstract_unavailable_reason));
-    Decision pending;
-    pending.interface_obligations.push_back(key);
-    return pending;
-  }
+  // An implementation that relied on the default links a miranda.
+  if (after & acc::kAccAbstract) return {};
   const auto shadow = hierarchy.subtype_shadows.find(key);
   if (shadow != hierarchy.subtype_shadows.end())
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
@@ -320,10 +297,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   decision.requires_member_mapping = superclass_changed || interfaces.interfaces_removed;
   if (interface_target && parents_changed) {
     // CheckInterfaces already rejected removed or unresolvable parents.
-    Decision parents = CheckInterfaceParents(incoming, hierarchy, abilities);
+    Decision parents = CheckInterfaceParents(incoming, hierarchy);
     if (parents.error != JVMTI_ERROR_NONE) return parents;
     decision.requires_member_mapping = true;
-    decision.parent_obligations = std::move(parents.parent_obligations);
   }
   // Only a new Class object carries the new flags or interface table: take
   // ART's structural path.
@@ -395,11 +371,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     }
     if (interface_target && changed) {
       Decision kind = CheckInterfaceKindChange({old.name, old.descriptor}, old.access, now, hierarchy,
-                                               interface_members, abilities);
+                                               interface_members);
       if (kind.error != JVMTI_ERROR_NONE) return kind;
       decision.requires_member_mapping = true;
-      decision.interface_obligations.insert(decision.interface_obligations.end(),
-          kind.interface_obligations.begin(), kind.interface_obligations.end());
     }
     // Abstract <-> concrete and Java <-> native change the method's kind; the
     // structural path creates the new kind. Native -> Java needs the engine's
@@ -432,12 +406,9 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   }
   if (interface_target) {
     for (const auto& [key, now] : new_methods) {
-      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members,
-                                              abilities);
+      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members);
       if (added.error != JVMTI_ERROR_NONE) return added;
       decision.requires_member_mapping = true;
-      decision.interface_obligations.insert(decision.interface_obligations.end(),
-          added.interface_obligations.begin(), added.interface_obligations.end());
     }
   }
   if (!new_methods.empty()) decision.methods_structural = true;

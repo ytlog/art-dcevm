@@ -374,10 +374,6 @@ jvmtiError DescribeParentMethods(jvmtiEnv* env, JNIEnv* jni, jclass target, std:
     }
     env->Deallocate(reinterpret_cast<unsigned char*>(methods));
     if (result != JVMTI_ERROR_NONE) { *error = "parent interface method description failed"; return result; }
-    jobject root = jni->NewGlobalRef(parent);
-    if (!root) { jni->ExceptionClear(); *error = "cannot retain a parent interface"; return JVMTI_ERROR_OUT_OF_MEMORY; }
-    roots->push_back(root);
-    snapshot->parent_interfaces[descriptor] = static_cast<jclass>(root);
     jint interface_count = 0;
     jclass* interfaces = nullptr;
     result = env->GetImplementedInterfaces(parent, &interface_count, &interfaces);

@@ -2,7 +2,6 @@
 
 #include "platform/common/imt_sealing.h"
 #include "platform/common/narrowed_references.h"
-#include "platform/common/interface_dispatch.h"
 #include "support/json.h"
 
 namespace artdcevm::structural_redefine {
@@ -25,7 +24,6 @@ std::string Capabilities() {
   const auto interface_timing = interfaces ? interfaces->LastTiming() : interface_redefinition::Timing{};
   // Both capability fields describe the same probe snapshot, including disablement.
   const std::string interface_state = interfaces ? interfaces->RuntimeState() : state.interface_runtime;
-  const std::string dispatch_state = interface_dispatch::State();
   return "{\"installed\":" + supported + ",\"standardRedefineRouted\":" + supported +
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
@@ -40,11 +38,6 @@ std::string Capabilities() {
       ",\"subclassLoadRetries\":" + std::to_string(state.subclass_retries.load()) +
       ",\"interfaceRedefinition\":" + (state.installed && interface_state.rfind("verified: ", 0) == 0 ? "true" : "false") +
       ",\"interfaceRuntime\":" + QuoteJsonMutf8(interface_state) +
-      ",\"interfaceAbstractMethodAddition\":" +
-          (state.installed && interface_state.rfind("verified: ", 0) == 0 &&
-           dispatch_state.rfind("verified: ", 0) == 0 && (interfaces && interfaces->AbstractLinkErrorsAvailable())
-               ? "true" : "false") +
-      ",\"interfaceAbstractDispatch\":" + QuoteJsonMutf8(dispatch_state) +
       ",\"interfaceSnapshotTypes\":" + std::to_string(interface_timing.types) +
       ",\"interfaceSnapshotNanos\":" + std::to_string(interface_timing.snapshot_ns) +
       ",\"interfaceAllocationNanos\":" + std::to_string(interface_timing.allocation_ns) +

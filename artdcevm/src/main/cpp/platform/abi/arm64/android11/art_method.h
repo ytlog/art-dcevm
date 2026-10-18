@@ -17,12 +17,4 @@ struct ArtMethod {
   void* quick_entry;
 };
 static_assert(offsetof(ArtMethod, dex_method_index) == 12 && sizeof(ArtMethod) == 40);
-
-// art_method.h IsDefaultConflicting of android-11.0.0_r1 with its
-// libdexfile/dex/modifiers.h values: a dedicated flag, never on an intrinsic.
-inline bool IsDefaultConflicting(const ArtMethod& method) {
-  constexpr uint32_t kAccDefaultConflict = 0x01000000, kAccIntrinsic = 0x80000000;
-  const uint32_t flags = method.access_flags.load(std::memory_order_relaxed);
-  return !(flags & kAccIntrinsic) && (flags & kAccDefaultConflict);
-}
 }  // namespace artdcevm::abi::arm64::android11

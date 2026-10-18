@@ -24,8 +24,6 @@ struct Timing { uint64_t types = 0, snapshot_ns = 0, allocation_ns = 0; };
 struct Backend {
   virtual ~Backend() = default;
   virtual bool Available() = 0;
-  // ART 13 needs its named early-link error service to diagnose non-public targets.
-  virtual bool AbstractLinkErrorsAvailable() = 0;
   // Diagnostics for the latest capture on the calling transaction thread.
   virtual Timing LastTiming() = 0;
   virtual std::string RuntimeState() = 0;
@@ -56,9 +54,6 @@ struct Backend {
   virtual bool CompleteInstances(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*,
                                  bool (*collect)(abi::arm64::ClassRedefinitionPrefix*,
                                                  abi::arm64::RedefinitionDataIter*)) noexcept = 0;
-  // Interface dispatch acceptance before ART's no-failure point.
-  virtual bool Check(const runtime_thread::VerifiedThread&, abi::arm64::ClassRedefinitionPrefix*,
-                     const abi::arm64::RedefinitionDataIter&, std::string*) = 0;
 };
 // Prepare the module's process-lived state, created on the first call, and
 // return its backend only when named services are available. The backend keeps

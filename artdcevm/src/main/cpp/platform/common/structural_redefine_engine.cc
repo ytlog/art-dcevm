@@ -7,7 +7,6 @@
 #include "platform/common/imt_sealing.h"
 #include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
-#include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/verification_redirect.h"
@@ -159,8 +158,6 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   }
   if (mapping_ready) {
     class_layout::Prepare(process->layout_services);
-    interface_dispatch::Prepare(jni, {process->layout_services.find_declared_instance_field,
-                                      process->layout_services.mirror_class, process->layout_services.class_type});
     prepared.member_mapping = true;
     prepared.retirement = true;
     prepared.instance_check = true;

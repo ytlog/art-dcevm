@@ -200,8 +200,28 @@ jvmtiError FindActiveBatchFrame(jvmtiEnv* env, JNIEnv* jni, Batch& batch) {
   return JVMTI_ERROR_NONE;
 }
 
+// A submitted definition drops an interface its class implements now. An
+// unreadable definition counts as dropping one; CheckClass reads the bytes
+// after any ClassFileLoadHook and asks for a retry if this guessed wrong.
+bool PredictsNarrowing(JNIEnv* jni, const Batch& batch, jint count, const jvmtiClassDefinition* definitions) {
+  for (jint i = 0; i < count; ++i)
+    for (const auto& [klass, snapshot] : batch.classes) {
+      if (!jni->IsSameObject(klass, definitions[i].klass)) continue;
+      const auto size = static_cast<size_t>(definitions[i].class_byte_count);
+      evolution::ClassSchema incoming;
+      std::string error;
+      if (!evolution::ReadClassDeclarations({definitions[i].class_bytes, size, definitions[i].class_bytes, size},
+                                            &incoming, &error))
+        return true;
+      for (const auto& old : snapshot.live.interfaces)
+        if (std::find(incoming.interfaces.begin(), incoming.interfaces.end(), old) == incoming.interfaces.end())
+          return true;
+    }
+  return false;
+}
+
 jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions,
-                     bool* subclass_loaded) {
+                     bool* subclass_loaded, bool* capture_references) {
   interface_redefinition::Backend* interfaces = InterfaceBackend();
   transaction::Scope scope;
   transaction::Context* context = &scope.context();
@@ -377,9 +397,13 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     process->snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(direct));
     context->affected_types.push_back(std::move(type));
   }
-  std::string reference_error;
-  result = narrowed_references::Capture(process->snapshot_env, jni, loaded.count, loaded.classes, &reference_error);
-  if (result != JVMTI_ERROR_NONE) { Diagnose(reference_error, true); return result; }
+  // The reference capture walks every loaded class; only a batch that drops
+  // an interface needs it.
+  if (*capture_references || PredictsNarrowing(jni, batch, count, definitions)) {
+    std::string reference_error;
+    result = narrowed_references::Capture(process->snapshot_env, jni, loaded.count, loaded.classes, &reference_error);
+    if (result != JVMTI_ERROR_NONE) { Diagnose(reference_error, true); return result; }
+  }
   if (process->capabilities.retirement) {
     // Build the permanent roots while Native, before ART's no-failure point.
     // Root all affected loaded subclasses: each replacement ClassExt retains
@@ -396,7 +420,9 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   }
   ARTDCEVM_TEST(fault_injection::SnapshotFinished(loaded_start, count, loaded.count));
   result = InvokeStructural(env, count, definitions, context);
-  *subclass_loaded = watch.SubclassLoaded() || (context->narrowing && watch.AnyClassPrepared());
+  *capture_references |= context->capture_references_on_retry;
+  *subclass_loaded = watch.SubclassLoaded() || (context->narrowing && watch.AnyClassPrepared()) ||
+                     context->capture_references_on_retry;
   return result;
 }
 
@@ -407,9 +433,12 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
 jvmtiError Route(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions) noexcept try {
   std::lock_guard<std::recursive_mutex> transaction_lock(process->transaction_mutex);
   constexpr int kAttempts = 3;
+  // Keep this request within the routed transaction, including nested calls
+  // made by a ClassFileLoadHook; one transaction cannot consume another's retry.
+  bool capture_references = false;
   for (int attempt = 1;; ++attempt) {
     bool subclass_loaded = false;
-    const jvmtiError result = RouteOnce(env, count, definitions, &subclass_loaded);
+    const jvmtiError result = RouteOnce(env, count, definitions, &subclass_loaded, &capture_references);
     if (result == JVMTI_ERROR_NONE) return result;
     if (subclass_loaded && attempt < kAttempts) {
       process->subclass_retries.fetch_add(1);

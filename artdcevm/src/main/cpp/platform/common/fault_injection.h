@@ -6,8 +6,7 @@
 #include "platform/abi/arm64/common/redefinition.h"
 #include <chrono>
 namespace artdcevm::fault_injection {
-enum class Counter { kDiscardedClasses, kAllocationOrder, kAllocatedTypes, kAllocatedGroups,
-                     kValidatedGroups };
+enum class Counter { kDiscardedClasses, kAllocationOrder, kAllocatedTypes, kAllocatedGroups };
 bool Inject(int stage);
 void InterfacePrepared(bool prepared);
 bool RejectThreadProbe();

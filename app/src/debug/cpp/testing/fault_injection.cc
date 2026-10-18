@@ -104,10 +104,6 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_failureHits(JNIEnv*, jclass) {
   return failure_hits;
 }
-extern "C" JNIEXPORT jint JNICALL
-Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_validatedInterfaceGroups(JNIEnv*, jclass) {
-  return counters[static_cast<int>(Counter::kValidatedGroups)];
-}
 extern "C" JNIEXPORT void JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_rejectRuntimeThreadProbe(JNIEnv*, jclass) {
   reject_next_probe = true;

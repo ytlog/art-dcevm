@@ -24,7 +24,6 @@ SOURCE = r'''
 #include "platform/common/structural_redefine_engine.h"
 #include "platform/common/interface_redefinition_internal.h"
 #include "platform/common/class_layout.h"
-#include "platform/common/interface_dispatch.h"
 #include "platform/common/verification_redirect.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/transaction_context.h"
@@ -330,22 +329,16 @@ int main(int argc, char** argv) {
     {
       transaction::Scope outer;
       verification_redirect::Begin();
-      interface_dispatch::Require(nullptr, "added", "()V");
       auto* verification = outer.context().verification.get();
-      auto* dispatch = outer.context().dispatch.get();
-      Require(verification && dispatch, "Module transaction Parts were not created");
+      Require(verification, "Module transaction Parts were not created");
       {
         transaction::Scope nested;
-        Require(!nested.context().verification && !nested.context().dispatch,
-                "Nested transaction inherited module-specific state");
+        Require(!nested.context().verification, "Nested transaction inherited module-specific state");
         verification_redirect::Begin();
-        interface_dispatch::Require(nullptr, "nested", "()I");
-        Require(nested.context().verification.get() != verification &&
-                nested.context().dispatch.get() != dispatch,
+        Require(nested.context().verification.get() != verification,
                 "Nested transaction reused outer module-specific state");
       }
-      Require(transaction::Current() == &outer.context() &&
-              outer.context().verification.get() == verification && outer.context().dispatch.get() == dispatch,
+      Require(transaction::Current() == &outer.context() && outer.context().verification.get() == verification,
               "Nested transaction did not restore its enclosing module Parts");
     }
     const auto result = structural_redefine::Install(&vm, &env, {});

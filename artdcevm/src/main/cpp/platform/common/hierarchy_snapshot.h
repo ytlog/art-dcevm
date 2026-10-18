@@ -11,8 +11,6 @@ struct Snapshot {
   structural_policy::LoadedHierarchy hierarchy;
   // Global references owned by the caller's roots vector.
   std::map<std::string, jclass> interface_classes;
-  // Interface targets: each declaring interface of hierarchy.parent_methods.
-  std::map<std::string, jclass> parent_interfaces;
   // A superclass of this target changes its own superclass in the batch.
   bool moved_ancestor = false;
   // A batched target whose superclass changes links this supertype or class

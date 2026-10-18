@@ -24,7 +24,6 @@ add_library(artdcevm SHARED
   platform/common/imt_sealing.cc
   platform/common/proxy_relink.cc
   platform/common/verification_redirect.cc
-  platform/common/interface_dispatch.cc
   platform/common/interface_snapshot.cc
   platform/common/interface_redefinition.cc
   platform/common/interface_admission.cc

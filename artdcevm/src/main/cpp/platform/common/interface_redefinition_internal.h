@@ -26,7 +26,6 @@
 #include "platform/common/class_layout.h"
 #include "platform/common/interface_snapshot.h"
 #include "platform/common/interface_array_roots.h"
-#include "platform/common/interface_dispatch.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 
@@ -75,7 +74,6 @@ struct Process {
 };
 struct RuntimeBackend final : Backend {
   bool Available() override;
-  bool AbstractLinkErrorsAvailable() override;
   Timing LastTiming() override;
   std::string RuntimeState() override;
   std::string TakeRejection() override;
@@ -91,8 +89,6 @@ struct RuntimeBackend final : Backend {
   bool CompleteInstances(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*,
                          bool (*)(abi::arm64::ClassRedefinitionPrefix*, abi::arm64::RedefinitionDataIter*)) noexcept override;
   jvmtiError VerificationError() noexcept override;
-  bool Check(const runtime_thread::VerifiedThread&, abi::arm64::ClassRedefinitionPrefix*,
-             const abi::arm64::RedefinitionDataIter&, std::string*) override;
 };
 namespace detail {
 // Created by the first Prepare and kept for the process lifetime: installed
@@ -148,7 +144,9 @@ struct Group {
 // Run's caller owns the DexFiles. This root outlives Run's holder and keeps
 // every linked replacement reachable until the result is known, including
 // partially completed allocations that never reach the holder's new_classes.
-struct NonPublicFailure { interface_dispatch::NonPublicSelection selection; int32_t index = -1; };
+// ART 13's named NO_INLINE error service reports this selected pair while
+// linking. Native metadata, rooted by the allocation attempt's class roots.
+struct NonPublicFailure { ArtMethod* implementation = nullptr; ArtMethod* declaration = nullptr; int32_t index = -1; };
 struct Attempt { RedefinerPrefix* driver; std::vector<Handle> replacements; Handle pending; bool committed = false; jvmtiError error = JVMTI_ERROR_NONE; NonPublicFailure non_public; };
 struct Linking {
   const std::vector<Handle>* old_types;

@@ -66,11 +66,13 @@ struct Context {
   std::unique_ptr<Part> batch;
   std::unique_ptr<Part> mapping;
   std::unique_ptr<Part> interfaces;
-  std::unique_ptr<Part> dispatch;  // Pending interface dispatch obligations.
   std::unique_ptr<Part> verification;  // Current verification redirection scope.
   std::unique_ptr<Part> thread;  // Native-probed runtime thread services.
   std::unique_ptr<Part> references;  // Planned JBR instance-reference compatibility.
   bool narrowing = false;  // Actual accepted input removes an interface.
+  // An interface removal appeared that the Native phase did not predict (a
+  // ClassFileLoadHook changed the bytes): retry with the reference capture.
+  bool capture_references_on_retry = false;
   std::unique_ptr<Part> proxies;  // Proxy classes of interface targets (proxy_relink.h).
   // Source-declared class layouts (class_layout.h) that every probe of this
   // transaction accepted, as a mask over the layout table; `probed` once any

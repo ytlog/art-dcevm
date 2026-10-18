@@ -89,14 +89,10 @@ struct Abilities {
   bool instance_check = false;
   // ART's verifier can be shown the new class under a new superclass.
   bool superclass_change = false;
-  // Interface targets may add default, static and private methods and retire
+  // Interface targets may add abstract, default, static and private methods and retire
   // static and private ones (requires member_mapping): the hierarchy carries
-  // inherited_interface and subtype_shadows, and the mapping rejects default
-  // conflicts that re-linked subtypes newly gain.
+  // inherited_interface and subtype_shadows.
   bool interface_members = false;
-  // Additionally accept public abstract additions as pending conditions,
-  // validated through a probed read-only IfTable accessor before commit.
-  bool interface_abstract_methods = false;
   // A class method may change its invoke kind (static <-> instance, virtual ->
   // private) when no loaded code outside the batch still invokes its old kind;
   // the engine checks that before accepting (requires member_mapping).
@@ -109,7 +105,6 @@ struct Abilities {
   // still treating them as the removed interface throw
   // IncompatibleClassChangeError (requires member_mapping).
   bool interface_removal = false;
-  std::string interface_abstract_unavailable_reason = {};
 };
 
 struct Decision {
@@ -132,11 +127,6 @@ struct Decision {
   bool superclass_changed = false;
   // The class stops implementing some interface: seal its replacements' dispatch.
   bool interfaces_removed = false;
-  // Added public abstract interface declarations, checked on the linked group.
-  std::vector<MemberKey> interface_obligations;
-  // Abstract methods of added parent interfaces, by declaring interface
-  // descriptor, that every loaded implementation must now implement.
-  std::vector<std::pair<std::string, MemberKey>> parent_obligations;
   // Methods whose old invoke kind loaded code outside the batch must not still
   // use, with that old kind's modifiers. The old declarations retire.
   std::vector<std::pair<MemberKey, uint32_t>> kind_changes;

@@ -136,7 +136,6 @@ void MappingRequirements() {
             abilities.field_retirement = bits & 2;
             abilities.superclass_change = bits & 4;
             abilities.interface_members = bits & 8;
-            abilities.interface_abstract_methods = bits & 16;
             abilities.instance_check = bits & 32;
             const auto result = policy::Evaluate(before, incoming, hierarchy, abilities);
             if (result.error != JVMTI_ERROR_NONE) {
@@ -195,31 +194,6 @@ int main(int argc, char** argv) {
               abi::android13::kFieldArrayNames[1] == std::string_view("sFields") &&
               abi::android16::kFieldArrayNames[0] == std::string_view("fields"),
               "Class.java field array slot names differ");
-    }
-    {
-      // ART's own default-conflict marks, which the member mapping reads after
-      // linking. Android 12-17 combine copied/abstract/default; 11 has its own flag.
-      namespace abi = artdcevm::abi::arm64;
-      const auto modern = [](uint32_t flags) {
-        abi::ArtMethod method{};
-        method.access_flags = flags;
-        return abi::IsDefaultConflicting(method);
-      };
-      const auto legacy = [](uint32_t flags) {
-        abi::android11::ArtMethod method{};
-        method.access_flags = flags;
-        return abi::android11::IsDefaultConflicting(method);
-      };
-      constexpr uint32_t kAbstract = 0x0400, kDefault = 0x00400000, kCopied = 0x01000000,
-                         kIntrinsic = 0x80000000;
-      Require(modern(kCopied | kAbstract | kDefault | acc::kAccPublic),
-              "Android 12-17 default conflict was not recognized");
-      Require(!modern(kCopied | kAbstract) && !modern(kCopied | kDefault) &&
-              !modern(kAbstract | kDefault) && !modern(kIntrinsic | kCopied | kAbstract | kDefault),
-              "Android 12-17 miranda, copied default, declared method or intrinsic taken as a conflict");
-      Require(legacy(kCopied) && legacy(kCopied | kAbstract) && !legacy(kIntrinsic | kCopied) &&
-              !legacy(0x00100000 | kAbstract | kDefault),
-              "Android 11 default conflict flag differs");
     }
     const auto live = Base();
     Accept(live, live, false, false);  // Method bodies do not alter declarations.
@@ -310,9 +284,9 @@ int main(int argc, char** argv) {
       const auto restored = policy::Evaluate(made_static, contract, {}, kinds);
       Require(restored.error == JVMTI_ERROR_NONE && restored.kind_changes.size() == 1,
               "interface static made default must request a caller scan");
-      Require(policy::Evaluate(made_static, made_abstract, {}, kinds).error ==
-                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
-              "interface static made abstract needs a verified IfTable accessor like an added abstract");
+      const auto abstracted = policy::Evaluate(made_static, made_abstract, {}, kinds);
+      Require(abstracted.error == JVMTI_ERROR_NONE && abstracted.kind_changes.size() == 1,
+              "interface static made abstract must be accepted like an added abstract, with a caller scan");
       policy::LoadedHierarchy inherited;
       inherited.inherited_interface = {{"value", "()I"}};
       Require(policy::Evaluate(contract, made_static, inherited, kinds).error ==
@@ -520,7 +494,7 @@ int main(int argc, char** argv) {
                           {"$r8$lambda$old", lambda,
                            acc::kAccPublic | acc::kAccStatic | acc::kAccSynthetic},
                           {"helper", "()I", acc::kAccPrivate}};
-      const policy::Abilities members{true, true, true, true, true, true};
+      const policy::Abilities members{true, true, true, true, true};
       const policy::Abilities body_only{true, true, true, true, false};
       const policy::Abilities unmapped{false, false, true, false, true};
       policy::LoadedHierarchy hierarchy;
@@ -586,28 +560,18 @@ int main(int argc, char** argv) {
         accept(removed, 1, kDeleted, "interface virtual method retirement must be accepted");
         auto resigned = contract; resigned.methods[index].descriptor = "(I)" + text;
         accept(resigned, 1, kDeleted, "interface virtual method signature change must be accepted");
-        const auto obligations = policy::Evaluate(contract, resigned, hierarchy, members).interface_obligations;
-        Require(obligations == (index == 0 ? std::vector<policy::MemberKey>{{"name", "(I)" + text}}
-                                           : std::vector<policy::MemberKey>{}),
-                "a new abstract signature must carry its implementation obligation");
       }
-      // abstract <-> default keeps the identity; a new abstract needs every
-      // implementation, a new default follows the added-default shadow rule.
+      // abstract <-> default keeps the identity. As on JBR, an implementation
+      // without a new abstract method throws AbstractMethodError at the call;
+      // a new default follows the added-default shadow rule.
       {
         auto abstracted = contract; abstracted.methods[1].access |= acc::kAccAbstract;
         const auto pending = policy::Evaluate(contract, abstracted, hierarchy, members);
         Require(pending.error == JVMTI_ERROR_NONE && pending.methods_structural &&
-                pending.requires_member_mapping &&
-                pending.interface_obligations == std::vector<policy::MemberKey>{{"label", "()" + text}},
-                "default made abstract must carry an implementation obligation");
-        auto no_dispatch = members; no_dispatch.interface_abstract_methods = false;
-        const auto denied = policy::Evaluate(contract, abstracted, hierarchy, no_dispatch);
-        Require(denied.error == kModifiers && denied.reason.find("IfTable accessor") != std::string::npos,
-                "default made abstract must fail closed without the dispatch probe");
+                pending.requires_member_mapping,
+                "default made abstract must be accepted");
         auto defaulted = contract; defaulted.methods[0].access &= ~acc::kAccAbstract;
         accept(defaulted, 0, kModifiers, "abstract made default must be accepted");
-        Require(policy::Evaluate(contract, defaulted, hierarchy, members).interface_obligations.empty(),
-                "abstract made default needs no obligation");
         auto hidden = with({{"hidden", "()I", acc::kAccPublic | acc::kAccAbstract}});
         auto shadowed = hidden; shadowed.methods.back().access = acc::kAccPublic;
         const auto shadow = policy::Evaluate(hidden, shadowed, hierarchy, members);
@@ -624,19 +588,9 @@ int main(int argc, char** argv) {
         facts.parent_methods["Lfixture/Parent;"] = {{{"required", "()I"}, true}, {{"provided", "()I"}, false}};
         facts.parent_methods["Lfixture/Grand;"] = {{{"grand", "()I"}, true}};
         const auto added = policy::Evaluate(contract, parented, facts, members);
-        const std::vector<std::pair<std::string, policy::MemberKey>> expected{
-            {"Lfixture/Grand;", {"grand", "()I"}}, {"Lfixture/Parent;", {"required", "()I"}}};
-        Require(added.error == JVMTI_ERROR_NONE && added.methods_structural && added.requires_member_mapping &&
-                added.parent_obligations == expected,
-                "added parent interface must carry implementation obligations for its abstract methods");
-        auto covered = parented; covered.methods.push_back({"required", "()I", acc::kAccPublic});
-        Require(policy::Evaluate(contract, covered, facts, members).parent_obligations.size() == 1,
-                "a target default for a parent abstract method needs no obligation");
+        Require(added.error == JVMTI_ERROR_NONE && added.methods_structural && added.requires_member_mapping,
+                "added parent interface with abstract methods must be accepted");
         constexpr auto kHierarchy = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
-        auto no_dispatch = members; no_dispatch.interface_abstract_methods = false;
-        const auto denied = policy::Evaluate(contract, parented, facts, no_dispatch);
-        Require(denied.error == kHierarchy && denied.reason.find("IfTable accessor") != std::string::npos,
-                "parent abstract methods must fail closed without the dispatch probe");
         auto hiding = parented; hiding.methods.push_back({"provided", "()I", acc::kAccPrivate | acc::kAccStatic});
         Require(policy::Evaluate(contract, hiding, facts, members).error == kHierarchy,
                 "a direct method hiding an added parent method must be rejected");
@@ -683,12 +637,8 @@ int main(int argc, char** argv) {
         auto candidate = with({{name, "()I", acc::kAccPublic | acc::kAccAbstract}});
         const auto pending = policy::Evaluate(contract, candidate, hierarchy, members);
         Require(pending.error == JVMTI_ERROR_NONE && pending.methods_structural &&
-                pending.interface_obligations == std::vector<policy::MemberKey>{{name, "()I"}},
-                "abstract addition must carry a full-descriptor obligation, bypassing default shadows");
-        auto no_dispatch = members; no_dispatch.interface_abstract_methods = false;
-        const auto denied = policy::Evaluate(contract, candidate, hierarchy, no_dispatch);
-        Require(denied.error == kAdded && denied.reason.find("IfTable accessor") != std::string::npos,
-                "abstract addition must fail closed without the dispatch probe");
+                pending.requires_member_mapping,
+                "abstract addition must be accepted, bypassing default shadows");
       }
       reject(with({{"packagedAbstract", "()I", acc::kAccAbstract}}), kAdded,
              "nonpublic abstract instance method must be rejected");

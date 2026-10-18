@@ -25,7 +25,7 @@
 | 16 / 36 | 通过 | 完整套件与失败恢复通过；已启用 | 已测配置；本表不额外声明 CC/CMC 双配置覆盖 |
 | 17 / 37 | 既有普通类第一阶段在两种收集器、两种 JNI 模式下通过；修正压力夹具后待复测 | 未启用；固定声明已准备 | CC 与分代 CMC 已运行；CC 未取得标记重叠证据 |
 
-API 34 的既有完整回归覆盖每次 146 个场景及旧式 HandleScope/holder；API 35 覆盖相同完整场景、16 字节 HandleScope 与三个 holder 标志。其抽象方法验收分别保留命名链接错误服务要求与使用已链接分派数组的配置；这里不改变运行时登记表。
+API 34 的既有完整回归覆盖每次 146 个场景及旧式 HandleScope/holder；API 35 覆盖相同完整场景、16 字节 HandleScope 与三个 holder 标志。这些历史结果使用当时缺实现拒绝 63 的规则；当前 JBR 调用时抛错语义尚未在 API 34/35 复测。
 
 ## 已覆盖的场景
 
@@ -33,8 +33,8 @@ API 34 的既有完整回归覆盖每次 146 个场景及旧式 HandleScope/hold
 - 应用 `Thread` 子类：运行中与未启动实例的结构重定义在 API 36 的普通模式与 CheckJNI 下通过。
 - 接口移除：API 36 的普通模式与 CheckJNI 覆盖解释执行、热点调用、boot 代码、晚加载具体子类、恢复接口及后续 GC；关闭分派封闭的对照构建发生错误方法分派。当前实现增加持续到进程结束的发布前保护，覆盖抽象父类的晚加载具体子类与后续重建；见引擎文档中的语义和成本边界。
 - Proxy：API 36 的普通模式与 CheckJNI 覆盖处理器收到新接口方法、缺失的新 abstract 调用抛 `AbstractMethodError`、新增 default、删除方法、缓存代理类复用和提交后 GC。以上分支证据不代表合并后的当前提交或其他版本已经验收。
-- 接口：顶层与嵌套接口的方法体与受支持成员变化；方法在 default、static、private 之间改变调用方式（批次外调用方 71，同批提交接受）；父子接口、多个组、同批实现类/子类/无关类；copied default、miranda、子接口优先、真实 bridge、lambda 与大实现组。`InterfaceEvolutionFixture`、`interfacelambda`、`interface-stress` 和 `interface-stress-add` 提供相应覆盖；压力样例含 200 个实现类。合并重建组覆盖由一个接口覆盖全部实例的相交接口组（拥有者不是批次首个接口）、无覆盖拥有者时的多轮实例收集（无关接口共享实现类；接口与组外结构父类各有独立实例），以及父类变化的 66 拒绝。接口 default 的删除、改签名与恢复，abstract 与 default 互换（含缺实现的 63 拒绝），接口静态字段增删，以及新增与移除父接口（新增时缺实现 63，有 Proxy 时父接口变化 66；普通类或接口新增的接口由同批重建时链接其替换类），在 API 33/36 覆盖调用、缓存反射与 GC；API 34/35 尚未复测。
-- 抽象方法：更具体的 abstract 遮住远处 default、移除最后实现、缺 bridge、多加载器身份、后一组拒绝及原子回滚；失败前后检查缓存反射、MethodHandle、JNI ID 和已预热字节码，修正或撤回后可重试。
+- 接口：顶层与嵌套接口的方法体与受支持成员变化；方法在 default、static、private 之间改变调用方式（批次外调用方 71，同批提交接受）；父子接口、多个组、同批实现类/子类/无关类；copied default、miranda、子接口优先、真实 bridge、lambda 与大实现组。`InterfaceEvolutionFixture`、`interfacelambda`、`interface-stress` 和 `interface-stress-add` 提供相应覆盖；压力样例含 200 个实现类。合并重建组覆盖由一个接口覆盖全部实例的相交接口组（拥有者不是批次首个接口）、无覆盖拥有者时的多轮实例收集（无关接口共享实现类；接口与组外结构父类各有独立实例），以及父类变化的 66 拒绝。接口 default 的删除、改签名与恢复，abstract 与 default 互换，接口静态字段增删，以及新增与移除父接口（有 Proxy 时父接口变化 66；普通类或接口新增的接口由同批重建时链接其替换类），在 API 33/36 覆盖调用、缓存反射与 GC；API 34/35 尚未复测。
+- 抽象方法的历史覆盖包括更具体的 abstract 遮住远处 default、移除最后实现、缺 bridge、多加载器身份及原子回滚。当前实现接受缺实现与 default 冲突，在调用时分别抛 `AbstractMethodError` 与 `IncompatibleClassChangeError`；各版最终产物的新语义验证以本地逐次记录为准。
 - 失败恢复：真实 DEX 校验错误（62）、链接后/分配后/实例分配/映射检查失败、Native 作用域构造失败、Thread/HandleScope/holder 拒绝，以及晚加载实现类/子类的重试与耗尽。失败后继续检查父类和接口事务、旧实例与 GC；API 33 关闭清理的对照 APK 在失败测试中崩溃，支持私有替换类必须清理的设计要求。
 - JNI ID：API 33 已复现 pointer 模式的缓存调用风险，并验证方法接口与仅字段接口在 pointer 模式下拒绝 79、在 index 模式下成功的对照；拒绝后旧 JNI 调用、GC 和普通类事务仍可用。这个保护不构成 API 37 接口验收。
 

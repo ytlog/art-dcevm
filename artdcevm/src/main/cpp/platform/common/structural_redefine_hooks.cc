@@ -8,7 +8,6 @@
 #include "platform/common/imt_sealing.h"
 #include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
-#include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/runtime_thread.h"
 
@@ -111,19 +110,16 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   abilities.instance_check = process->capabilities.instance_check && thread.has_value();
   abilities.superclass_change =
       abilities.member_mapping && process->capabilities.superclass_change;
-  // The snapshot carries the interface group's facts, the mapping rejects new
-  // default conflicts, and retirement roots cover the group: an interface
-  // target may evolve its members whenever the engine owns the mapping.
+  // The snapshot carries the interface group's facts and retirement roots
+  // cover the group: an interface target may evolve its members whenever the
+  // engine owns the mapping. As on JBR, an implementation that lacks a new
+  // abstract method or newly inherits conflicting defaults links a method
+  // that throws at the call.
   abilities.interface_members = abilities.member_mapping;
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
   abilities.interface_removal = abilities.member_mapping && process->capabilities.subclass_watch &&
       imt_sealing::Available() && narrowed_references::Available();
   abilities.batch_interfaces = interfaces && interfaces->Available();
-  abilities.interface_abstract_methods =
-      (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
-      interface_dispatch::Available(*thread, self, (interfaces && interfaces->AbstractLinkErrorsAvailable()));
-  if (!abilities.interface_abstract_methods)
-    abilities.interface_abstract_unavailable_reason = interface_dispatch::State();
   auto decision = structural_policy::Evaluate(snapshot.live, incoming, snapshot.hierarchy,
                                               abilities, snapshot.retired);
   const bool interface_target = (interfaces && interfaces->IsTarget(self));
@@ -173,6 +169,14 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     Diagnose(incoming.descriptor + ": " + decision.reason, true);
     return false;
   }
+  if (decision.interfaces_removed && !context->references) {
+    // The Native phase predicted no removal, so it skipped the reference
+    // capture this removal needs: fail this attempt and capture next time.
+    context->capture_references_on_retry = true;
+    self->driver->result = JVMTI_ERROR_INTERNAL;
+    Diagnose(incoming.descriptor + ": an interface removal appeared after the Native snapshot; retrying", true);
+    return false;
+  }
   // Activate before ART links any replacements. This is intentionally
   // monotonic: a rejected transaction can retain dispatch protection without
   // changing the old classes or their behavior. A later structural rebuild,
@@ -191,10 +195,6 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   requirements.member_mapping = interface_target || decision.requires_member_mapping;
   if (decision.requires_no_instances) batch->no_instances.insert(self);
   else batch->no_instances.erase(self);
-  for (const auto& [name, descriptor] : decision.interface_obligations)
-    interface_dispatch::Require(self, name, descriptor);
-  for (const auto& [declaring, key] : decision.parent_obligations)
-    interface_dispatch::Require(self, key.first, key.second, snapshot.parent_interfaces.at(declaring));
   // The policy rejects a superclass change related to another batch target,
   // so an interface group member never also changes its superclass.
   requirements.superclass = decision.superclass_changed ? snapshot.superclass_class : nullptr;
@@ -313,11 +313,6 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         !class_layout::SuperclassMatches(*thread, self, *data, target->superclass, selected))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
           named("the new superclass was not applied"));
-    std::string rejection;
-    if ((interfaces && !interfaces->Check(*thread, self, *data, &rejection)) ||
-        !member_mapping::CheckDefaultConflicts(*data, &rejection))
-      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
-                             std::move(rejection));
     if (context->narrowing && !narrowed_references::Plan(*thread, self, *data, selected, &why))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                              named(("interface reference cleanup cannot be planned: " + why).c_str()));

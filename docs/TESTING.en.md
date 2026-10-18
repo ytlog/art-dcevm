@@ -162,8 +162,6 @@ A symbol's presence proves only that it can be located. Runtime probes check the
 | `hierarchyChange`, `fullDcevmComplete` | Always false: superclass narrowing is unsupported and full DCEVM is not complete |
 | `interfaceRedefinition` | Boolean: true only after installation and all Class/Thread/HandleScope/holder probes pass. False before probing, when versions/services are unavailable, or after process-wide probe disablement. A target-specific rejection does not clear it |
 | `interfaceRuntime` | `unavailable`, `unverified: interface runtime declarations`, `verified: androidNN Class/Thread/HandleScope/holder probes`, or `disabled: reason`. Only API 33–36 are allowed; other versions are disabled with a reason |
-| `interfaceAbstractMethodAddition` | True after interface runtime and dispatch probes pass and required link-error services are available; all implementations are still checked per transaction |
-| `interfaceAbstractDispatch` | Read-only IfTable accessor for abstract additions: `unavailable`, `unverified: ...`, `verified: ...` or `rejected: reason`; actual dispatch is still validated per transaction |
 | `interfaceSnapshotTypes` | Type count in the calling transaction thread's latest interface snapshot: targets, subinterfaces, implementations and their subclasses |
 | `interfaceSnapshotNanos`, `interfaceAllocationNanos` | That thread's latest snapshot (including GetLoadedClasses) and interface allocation durations in monotonic nanoseconds; diagnostic only, potentially zero without an interface transaction |
 | `memberMapping` | Installation-unavailability reason or latest probe result (including Native Thread failures): `unavailable`, `unverified`, `verified: androidNN class layout`, or `rejected: reason` |
@@ -174,7 +172,7 @@ A symbol's presence proves only that it can be located. Runtime probes check the
 ## New-release validation order
 
 1. Run `--scenario-group ordinary` and abort instrumentation’s `-e scenario ordinary` in both JNI modes. After retirement scenarios, confirm completed `memberMapping` probes so fallback is not counted as a pass. On Android 14 and later, confirm actual CC and CMC configurations separately.
-2. Review one release at a time: fixed Class, Thread, HandleScope, holder, ClassRedefinition flags, IfTable/PointerArray and named prototypes, including the registry’s `linked_iftable_acceptance`. Begin with declarations/offline checks; compilation or a cloud device catalog entry is not execution evidence.
+2. Review one release at a time: fixed Class, Thread, HandleScope, holder, ClassRedefinition flags, IfTable/PointerArray and named prototypes. Begin with declarations/offline checks; compilation or a cloud device catalog entry is not execution evidence.
 3. Commit activation of that release separately only after the complete interface suite, abort recovery and android-compose-hotreload’s `interface abstract batch` pass on real devices. Entries lacking complete evidence remain `kPreparedOnly`.
 
 ## Evidence and public conclusions

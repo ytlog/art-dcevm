@@ -21,7 +21,7 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
-def complete_report():
+def complete_report(api=36):
     def rejection_check(code):
         if code == 0:
             return {"name": "lastRejection", "expected": "", "actual": "", "passed": True}
@@ -29,7 +29,7 @@ def complete_report():
         return {"name": "rejectedByPolicy", "expected": prefix, "actual": prefix, "passed": True}
     return {
         "schemaVersion": 1, "completed": True, "failures": 0, "uid": 10123,
-        "device": {"model": "Mock Android", "api": 36, "release": "16"},
+        "device": {"model": "Mock Android", "api": api, "release": str(api - 20)},
         "initialization": {"passed": True, "runtimeInitialized": True, "clientAttached": True,
                            "capabilities": {
             "installed": True, "standardRedefineRouted": True,
@@ -51,11 +51,13 @@ def complete_report():
                        "checks": [{"name": "returnCode", "expected": code, "actual": code,
                                    "passed": True},
                                   *[{"name": key, "expected": value, "actual": value, "passed": True}
-                                    for key, value in runner.REQUIRED_CHECKS[name].items()],
+                                    for key, value in required.items()],
                                   *[{"name": key, "expected": "captured baseline", "actual": "captured baseline",
                                      "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())],
                                   rejection_check(code)]}
-                      for name, variants, code in runner.SCENARIOS],
+                      for name, variants, base_code in runner.SCENARIOS
+                      for code, required in [runner.release_expectation(
+                          name, base_code, runner.REQUIRED_CHECKS[name], api)]],
     }
 
 
@@ -117,6 +119,25 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_non_public_interface_calls_require_release_specific_evidence(self):
+        for api in (33, 34, 35, 36):
+            with self.subTest(api=api):
+                report = complete_report(api)
+                runner.validate_report(report)
+                package = next(s for s in report["scenarios"]
+                               if s["name"] == "interface-abstract-unimplemented-package")
+                self.assertEqual(package["expectedCode"], 63 if api <= 34 else 0)
+                package["actualCode"] = 0 if api <= 34 else 63
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report)
+        report = complete_report(36)
+        private = next(s for s in report["scenarios"]
+                       if s["name"] == "interface-abstract-unimplemented-private")
+        call = next(c for c in private["checks"] if c["name"] == "interfaceCall")
+        call.update(expected="java.lang.AbstractMethodError", actual="java.lang.AbstractMethodError")
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report)
+
     def test_ordinary_group_requires_retirement_without_interface_admission(self):
         report = complete_report()
         names = {item[0] for item in runner.scenario_sequence("ordinary")}

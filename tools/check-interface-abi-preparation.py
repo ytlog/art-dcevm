@@ -26,7 +26,7 @@ def read_runtime_table():
     table = RUNTIME_TABLE.read_text()
     entries = re.findall(
         r'\{(\d+),\s*(\d+),\s*(\d+),\s*&android(\d+)::(\w+),\s*'
-        r'InterfaceRuntimeStatus::(kPreparedOnly|kDeviceVerified),\s*(?:true|false)\}', table)
+        r'InterfaceRuntimeStatus::(kPreparedOnly|kDeviceVerified)\}', table)
     versions = [int(entry[0]) for entry in entries]
     declared = sorted(int(path.parent.name.removeprefix('android'))
                       for path in ABI.glob('android*/interface_runtime.h'))
@@ -72,7 +72,6 @@ def main():
         offsets = expected[v]
         profile = f'kInterfaceRuntimes[{index}]'
         lines.append(f'static_assert({profile}.runtime == &android{v}::{name});')
-        lines.append(f'static_assert(UsesLinkedIfTable({v}) == {str(v in (15, 16)).lower()});')
         selected = f'{profile}.runtime' if status == 'kDeviceVerified' else 'nullptr'
         lines.append(f'static_assert(RuntimeFor({v}) == {selected});')
         for member, value in zip(('tid', 'is_gc_marking', 'jni_env', 'top_handle_scope'), offsets[:4]):

@@ -13,5 +13,4 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
 bool Plan(const runtime_thread::VerifiedThread& thread,
           abi::arm64::ClassRedefinitionPrefix* self, const abi::arm64::RedefinitionDataIter& data,
           int selected, std::string* why);
-bool CheckDefaultConflicts(const abi::arm64::RedefinitionDataIter& data, std::string* rejection);
 }  // namespace artdcevm::member_mapping

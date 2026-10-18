@@ -1,4 +1,5 @@
 #include "platform/common/interface_redefinition_internal.h"
+#include "platform/common/art_method_identity.h"
 
 namespace artdcevm::interface_redefinition {
 using namespace detail;
@@ -109,9 +110,6 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
     Attempt next{driver, {}, roots.Add(nullptr), false, JVMTI_ERROR_NONE, {}};
     for (size_t i = 0; i < state->groups.size(); ++i) next.replacements.push_back(roots.Add(nullptr));
     AttemptScope scope(state, &next);
-ARTDCEVM_TEST(
-    fault_injection::Set(fault_injection::Counter::kValidatedGroups, 0);
-)
     const jvmtiError result = reinterpret_cast<Function>(process->original_run)(driver);
     next.committed = result == JVMTI_ERROR_NONE;
     return result;
@@ -131,9 +129,37 @@ ARTDCEVM_TEST(
 void NonPublicImplementation(void* klass, ArtMethod* implementation, ArtMethod* declaration) noexcept {
   State* state = CurrentState();
   if (state && state->linking && state->attempt && state->attempt->pending.Get<void>() == klass)
-    state->attempt->non_public = {{implementation, declaration}, state->linking->index};
+    state->attempt->non_public = {implementation, declaration, state->linking->index};
   using Function = void (*)(void*, ArtMethod*, ArtMethod*);
   reinterpret_cast<Function>(process->original_non_public)(klass, implementation, declaration);
+}
+
+using DescribeNonPublicFn = bool (*)(const runtime_thread::VerifiedThread&, const NonPublicFailure&,
+                                     const std::string&, const std::string&, std::string*);
+template <typename Class, typename Method> struct NonPublicDescriber {
+  static bool Describe(const runtime_thread::VerifiedThread& thread, const NonPublicFailure& failure,
+                       const std::string& target, const std::string& concrete, std::string* rejection) {
+    auto* implementation = reinterpret_cast<Method*>(failure.implementation);
+    auto* declaration = reinterpret_cast<Method*>(failure.declaration);
+    auto* owner = implementation ? class_layout::Heap<Class>(thread, implementation->declaring_class) : nullptr;
+    auto* interface = declaration ? class_layout::Heap<Class>(thread, declaration->declaring_class) : nullptr;
+    evolution::Member method;
+    std::string why;
+    if (!owner || !interface || !class_layout::MethodIdentity<Class>(thread, declaration, &method, &why)) return false;
+    *rejection = target + ": " + concrete + " links non-public implementation " + class_layout::ClassDescriptor(thread, *owner) +
+        "." + method.name + method.descriptor + " of " + class_layout::ClassDescriptor(thread, *interface) +
+        " as IllegalAccessError";
+    return true;
+  }
+  static constexpr DescribeNonPublicFn Make(int) { return &Describe; }
+};
+const auto kNonPublicDescribers = class_layout::Table<NonPublicDescriber, DescribeNonPublicFn>();
+bool DescribeNonPublic(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self, const NonPublicFailure& failure,
+                       const std::string& concrete, std::string* rejection) {
+  const int selected = class_layout::Selected();
+  const Target* target = Find(process->mirror_class(self));
+  return selected >= 0 && target &&
+      kNonPublicDescribers[selected](thread, failure, target->live.descriptor, concrete, rejection);
 }
 
 bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
@@ -439,12 +465,11 @@ ARTDCEVM_TEST(
     if (attempt->error != JVMTI_ERROR_NONE)
       return FailAllocation(self, attempt->error, "interface linking hook failed");
     if (!replacement) {
-      // ART 13 may fail before any usable candidate IfTable exists. Convert
-      // only its exact selected non-public pair for a pending obligation.
+      // ART 13 links a non-public implementation of an interface method as an
+      // IllegalAccessError, where JBR links it and throws at the call.
       const auto& failure = attempt->non_public;
-      if (failure.index == static_cast<int32_t>(i) && interface_dispatch::DescribeNonPublicSelection(
-              Thread(), self, old_types, new_array, static_cast<int32_t>(i), failure.selection,
-              snapshot->descriptors[i], batch_index >= 0, &transaction::Current()->rejection))
+      if (failure.index == static_cast<int32_t>(i) &&
+          DescribeNonPublic(Thread(), self, failure, snapshot->descriptors[i], &transaction::Current()->rejection))
         self->driver->result = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED;
       return false;  // ART recorded its error and cleared the Java exception.
     }
@@ -697,11 +722,6 @@ bool RuntimeBackend::CompleteInstances(ClassRedefinitionPrefix* self, Redefiniti
   return detail::FailAllocation(self, JVMTI_ERROR_OUT_OF_MEMORY, "interface instance merge native allocation failed");
 } catch (...) {
   return detail::FailAllocation(self, ArtHookExceptionError(), "interface instance merge failed");
-}
-bool RuntimeBackend::Check(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
-                    const RedefinitionDataIter& data, std::string* rejection) {
-  return interface_dispatch::Check(thread, self, data, rejection,
-                                   [](void* old) { return detail::ReplacementFor(old, nullptr); });
 }
 
 }  // namespace artdcevm::interface_redefinition

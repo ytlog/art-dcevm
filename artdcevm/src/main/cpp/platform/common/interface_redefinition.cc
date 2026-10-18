@@ -13,11 +13,6 @@ bool RuntimeAvailable() { return process->available && process->disabled_reason.
 }  // namespace detail
 void RuntimeBackend::ObserveClassLinker(void* linker) { process->class_linker.store(linker); }
 bool RuntimeBackend::Available() { return RuntimeAvailable(); }
-bool RuntimeBackend::AbstractLinkErrorsAvailable() {
-  const State* state = CurrentState();
-  const int release = state ? state->selected_release : process->verified_release.load();
-  return UsesLinkedIfTable(release) || process->original_non_public != nullptr;
-}
 std::string RuntimeBackend::RuntimeState() {
   if (const char* reason = process->disabled_reason.load()) return std::string("disabled: ") + reason;
   if (!process->available) return "unavailable";

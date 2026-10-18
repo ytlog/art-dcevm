@@ -28,11 +28,11 @@
 
 | 接口目标的拒绝情况 | JVMTI 错误码 |
 | --- | --- |
-| 新增 native；新增 abstract 无有效实现或 IfTable 探测不通过；direct 方法遮蔽继承的接口／Object 方法；default 遮蔽类链 static／非 public 方法或产生 default 冲突 | `METHOD_ADDED`（63） |
+| 新增 native；direct 方法遮蔽继承的接口／Object 方法；default 遮蔽类链 static／非 public 方法；Android 13、14 上已加载类以 package-private／protected 方法实现新增的 abstract（ART 链接失败） | `METHOD_ADDED`（63） |
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
-| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 abstract 而 IfTable 探测不通过；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
-| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法；新父接口的 abstract 方法缺少 IfTable 探测 | `HIERARCHY_CHANGED`（66） |
+| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 default 后会遮蔽类链 static／非 public 方法 | `METHOD_MODIFIERS_CHANGED`（71） |
+| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 遮蔽类链 static／非 public 方法 | `HIERARCHY_CHANGED`（66） |
 | 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
@@ -40,23 +40,21 @@
 | 有 Proxy 实现类的接口改变父接口 | `HIERARCHY_CHANGED`（66） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
-删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 一样，要求每个已加载具体实现类都有有效实现，否则以 63 拒绝；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法，与新增 abstract 一样要求每个已加载具体实现类都有有效实现，否则以 63 拒绝，原因写明新父接口方法与缺实现的类；其 default 由实现类获得 copied default。
+删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 相同，未实现它的类调用时抛 `AbstractMethodError`；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法与新增 abstract 相同；其 default 由实现类获得 copied default。
 
-`lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义，default 冲突原因写明实现类和方法。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
+`lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义。与 JBR 相同，新出现的 default 冲突照常接受，经冲突方法的调用抛 `IncompatibleClassChangeError`，之后消除冲突的事务恢复唯一的 default。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
 
 接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。不能仅切换模式来修复此前缓存的指针 ID。普通类仍按其原有规则验收。
 
-新增 public abstract 方法要求重定义后，接口组内**每个已加载的具体实现类**都能通过 ART 的实际 IfTable 分派到同名、完整 descriptor 相同的 public 具体实例方法，包括没有实例、没有提交 DEX 的类。同批补齐实现不要求提交顺序；已有实现、父类继承的实现和 ART 实际选中的更具体 default 均可接受。缺少实现、abstract/miranda、static/private/非 public 方法或 default 冲突均整批拒绝 63，不推迟到调用时抛 `AbstractMethodError`。泛型与协变返回依赖真实 bridge，不把相同名称或不同返回类型当作实现；同名类型按类加载器身份分别判断。`lastRejection` 写出接口方法及缺实现的类，撤回或补齐后可重试。
+与 JBR 相同，新增 public abstract 方法不要求已加载的实现类提供实现：已有实现、父类继承的实现、同批补齐的实现和 ART 选中的更具体 default 照常分派；缺少实现的类（包括没有实例、没有提交 DEX 的类）调用时抛 `AbstractMethodError`。更具体的 abstract 重声明遮住远处的 default，同批移除最后一个实现也是如此。泛型与协变返回依赖真实 bridge，不把相同名称或不同返回类型当作实现。实现类只有同签名的非 public 方法时遵循 ART 的选择：Android 15、16 链接成功，调用抛 `IllegalAccessError`（API 36 实测，只有 private 方法时同样）；Android 13、14 链接 package-private／protected 实现即抛 `IllegalAccessError`，类无法链接，整批以 63 拒绝，`lastRejection` 写明实现类、方法与接口。
 
-新增 abstract 需要逐事务完成实际分派验收。分派访问器或所需链接错误服务不可用时，新增 abstract 以 63 拒绝；其他接口修改仍按各自规则验收。ART 13 在生成可用 IfTable 前拒绝非 public 实现，增强库观察 ART 实际选中的方法对，只将匹配待验证条件的错误沿原事务转换为 63。ART 14 的配置也要求该命名链接错误服务；ART 15、16 验收已链接的分派数组。
-
-更具体的 abstract 重声明不能由远处的 default 补足；同批移除最后一个有效实现也拒绝。多个接口组在全部验收后才共同提交。快照后加载的相关类型触发现有有界重试，达到上限时整批拒绝 113，撤回或修正后可重新提交。失败不改写旧定义、已缓存的反射／MethodHandle／JNI method ID 或预热调用点。
+多个接口组共同提交。快照后加载的相关类型触发现有有界重试，达到上限时整批拒绝 113，撤回或修正后可重新提交。失败不改写旧定义、已缓存的反射／MethodHandle／JNI method ID 或预热调用点。
 
 子类型相交的接口组，以及同批做结构修改、又是组内类型父类的组外类，合并为一次重建，每个类型只替换和迁移一次，与提交顺序无关。ART 的实例收集只覆盖拥有者条目所属类的实例；没有一个根覆盖全部具体成员时，引擎让 ART 以其余各根依次再收集一轮，每个实例只保留在它最先可赋值的根那一轮，因此无关接口共享实现类、接口与组外父类各有独立实例时同样只迁移一次。组外父类只改方法体时不并入重建，仍原地更新。
 
 接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
 
-`java.lang.reflect.Proxy` 生成的实现类（例如 Retrofit 服务或注解实例）保留原类与 `InvocationHandler`：保留的方法照常交给处理器，处理器收到的是新接口的 `Method`；Proxy 没有的新增 abstract 方法调用时抛 `AbstractMethodError`，新增 default 执行其方法体；之后用同一接口创建的代理复用这个类，行为相同，与 JBR 一致。新增 abstract 方法不因 Proxy 缺实现而拒绝（Proxy 没有可以同批补齐的源码），普通实现类仍按上文验收。
+`java.lang.reflect.Proxy` 生成的实现类（例如 Retrofit 服务或注解实例）保留原类与 `InvocationHandler`：保留的方法照常交给处理器，处理器收到的是新接口的 `Method`；Proxy 没有的新增 abstract 方法调用时抛 `AbstractMethodError`，新增 default 执行其方法体；之后用同一接口创建的代理复用这个类，行为相同，与 JBR 一致。新增 abstract 方法不因 Proxy 缺实现而拒绝（Proxy 没有可以同批补齐的源码），普通实现类同样在调用时按上文规则抛错。
 
 ## 不支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 
@@ -147,7 +145,7 @@
 
 | 变化 | JBR DCEVM | art-dcevm |
 | --- | --- | --- |
-| 接口新增 abstract 方法，而已加载的实现类没有实现 | 接受，调用时抛 `AbstractMethodError` | 拒绝 63，提交前指出缺实现的类；Proxy 实现类除外，与 JBR 相同 |
+| 接口新增 abstract 方法，而已加载的实现类只有同签名的非 public 方法 | 接受；private 调用时抛 `AbstractMethodError`，package-private／protected 抛 `IllegalAccessError` | 按 ART 的选择：Android 15、16 接受，调用均抛 `IllegalAccessError`；Android 13、14 的 package-private／protected 实现无法链接，拒绝 63 |
 | 实例方法改为 static，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 拒绝 71：ART 重新解析时不检查调用方式，无法抛出该错误；同批提交调用方即可接受 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
 | 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 持久发布前保护与后续结构重建共同保留正确分派，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口) |

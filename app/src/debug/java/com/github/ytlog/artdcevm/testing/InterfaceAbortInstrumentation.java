@@ -35,47 +35,54 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native int primePointerId(Class<?> klass, int kind);
     private static native int configureCheckJni(boolean enabled);
     private static native int configureImtFallback(int mode);
-    static native int validatedInterfaceGroups();
     static native long referenceCleanupVisits();
     static native long referenceCleanupClears();
     static int armMappingPlanFailure() { return armFailure(22); }
-    static int armDispatchFailure() { return armFailure(21); }
     static int armPointerFailure(int stage) { return armFailure(stage); }
-    private void checkDefaultConflictRollback() throws Exception {
+    // A new default conflict links, as on JBR, a method that throws at the
+    // call; later transactions on the class and the interface resolve it.
+    private void checkDefaultConflict() throws Exception {
         InterfaceEvolutionFixture.Diamond instance = new InterfaceEvolutionFixture.Diamond();
         instance.marker = 101;
         expect("conflict baseline", 21, instance.conflict());
         expect("left baseline", 11, instance.left());
-        expect("default conflict rejection", 63, redefine(InterfaceEvolutionFixture.Left.class,
+        expect("default conflict accepted", 0, redefine(InterfaceEvolutionFixture.Left.class,
                 asset("interface-default-conflict", InterfaceEvolutionFixture.Left.class)));
-        String reason = DcevmRuntime.capabilities().getString("lastRejection");
-        if (!reason.contains("InterfaceEvolutionFixture$Diamond;: conflict()I")
-                || !reason.contains("conflict between unrelated interface defaults"))
-            throw new AssertionError("Missing linked default conflict reason");
-        ++checks;
-        expect("old interface schema", 1, InterfaceEvolutionFixture.Left.class.getDeclaredMethods().length);
-        expect("old default after conflict", 21, instance.conflict());
-        expect("old left after conflict", 11, instance.left());
-        expect("old parent after conflict", 30, instance.base());
-        expect("old field after conflict", 101, instance.marker);
-        expect("new object after conflict", 21, new InterfaceEvolutionFixture.Diamond().conflict());
+        expectConflict("old object conflict", instance);
+        expectConflict("new object conflict", new InterfaceEvolutionFixture.Diamond());
+        expect("left after conflict", 12, instance.left());
+        expect("parent after conflict", 30, instance.base());
+        expect("field after conflict", 101, instance.marker);
         System.gc(); System.runFinalization(); System.gc();
-        expect("default after conflict GC", 21, instance.conflict());
+        expectConflict("conflict after GC", instance);
         expect("parent transaction after conflict", 0, redefine(InterfaceEvolutionFixture.ConflictBase.class,
                 asset("interface-conflict-recovery", InterfaceEvolutionFixture.ConflictBase.class)));
         expect("parent behavior after conflict", 32, instance.base());
         expect("parent addition after conflict", 33, (Integer) InterfaceEvolutionFixture.ConflictBase.class
                 .getMethod("added").invoke(instance));
+        expectConflict("conflict after parent transaction", instance);
         expect("interface transaction after conflict", 0, redefine(InterfaceEvolutionFixture.Left.class,
                 asset("interface-conflict-recovery", InterfaceEvolutionFixture.Left.class)));
         expect("interface behavior after conflict", 13, instance.left());
-        expect("other default preserved", 21, instance.conflict());
+        expect("other default restored", 21, instance.conflict());
         expect("field after recovery", 101, instance.marker);
         System.gc(); System.runFinalization(); System.gc();
         expect("interface after recovery GC", 13, instance.left());
+        expect("default after recovery GC", 21, instance.conflict());
         expect("parent after recovery GC", 32, instance.base());
         expect("parent addition after recovery GC", 33, (Integer) InterfaceEvolutionFixture.ConflictBase.class
                 .getMethod("added").invoke(instance));
+    }
+    private void expectConflict(String name, InterfaceEvolutionFixture.Diamond instance) {
+        try {
+            instance.conflict();
+        } catch (IncompatibleClassChangeError error) {
+            if (error.getClass() != IncompatibleClassChangeError.class)
+                throw new AssertionError(name + ": expected IncompatibleClassChangeError, got " + error);
+            ++checks;
+            return;
+        }
+        throw new AssertionError(name + ": expected IncompatibleClassChangeError");
     }
 
     private static native void rejectRuntimeThreadProbe();
@@ -334,7 +341,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
                 finish(Activity.RESULT_OK, result);
                 return;
             }
-            checkDefaultConflictRollback();
+            checkDefaultConflict();
             PointerIdFixture.Implementation pointerInstance = new PointerIdFixture.Implementation();
             byte[] pointerDex = asset("interface-pointer-body", PointerIdFixture.Contract.class);
             int naturalCode = redefine(PointerIdFixture.Contract.class, pointerDex);
@@ -522,11 +529,11 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             expect("nested old virtual dispatch", 42, nested.value());
             expect("nested new dispatch", 42, new NestedInterfaceHost.Implementation().value());
             expect("nested instance field", 73, nested.marker);
-            expect("unsupported nested transaction", 63, redefine(NestedInterfaceHost.Contract.class,
-                    asset("nested-interface-add", NestedInterfaceHost.Contract.class)));
+            expect("invalid nested transaction", 62, redefine(NestedInterfaceHost.Contract.class,
+                    invalidReturn(asset("nested-interface-body", NestedInterfaceHost.Contract.class))));
             String rejection = DcevmRuntime.capabilities().getString("lastRejection");
             if (!rejection.startsWith("Lcom/github/ytlog/artdcevm/fixture/NestedInterfaceHost$Contract;: ")
-                    || !rejection.contains("has no concrete public implementation")) throw new AssertionError("Missing nested rejection reason");
+                    || rejection.endsWith(": ")) throw new AssertionError("Missing nested rejection reason");
             ++checks;
             expect("nested unchanged after rejection", 42, nestedContract.value());
             expect("top-level after nested transactions", 0, redefine(CopiedDefault.class, patch));

@@ -116,9 +116,6 @@ struct MappingPlan {
   std::set<std::string> removed_interfaces;
   std::map<std::string, std::vector<jobject>> static_compatibility;
   std::vector<MethodMapping> methods;
-  // "class: method" that a re-linked class newly links as a default conflict.
-  // Not a probe failure: the transaction must be rejected.
-  std::string default_conflict;
 };
 
 bool Initializer(const std::string& name) { return name == "<init>" || name == "<clinit>"; }
@@ -221,12 +218,10 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
     std::vector<evolution::Member> identities(new_methods ? new_methods->length : 0);
     for (uint32_t j = 0; new_methods && j < new_methods->length; ++j)
       if (!class_layout::MethodIdentity<Class>(thread, new_methods->At(j), &identities[j], why)) return false;
-    std::set<std::pair<std::string, std::string>> old_conflicts;
     for (uint32_t i = 0; old_methods && i < old_methods->length; ++i) {
       Method* old_method = old_methods->At(i);
       evolution::Member identity;
       if (!class_layout::MethodIdentity<Class>(thread, old_method, &identity, why)) return false;
-      if (IsDefaultConflicting(*old_method)) old_conflicts.emplace(identity.name, identity.descriptor);
       const bool declared = class_layout::Heap<Class>(thread, old_method->declaring_class) == old_class;
       void* replacement = nullptr;
       for (uint32_t j = 0; new_methods && j < new_methods->length; ++j) {
@@ -276,13 +271,6 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
         plan->methods.push_back({old_method, original, MethodMapping::kCopied});
       }
     }
-    // ClassLinker links a conflict when a class inherits one identity as the
-    // default of two unrelated interfaces. A conflict the old class did not
-    // have would make calls that reached a default throw from now on.
-    for (uint32_t j = 0; new_methods && j < new_methods->length && plan->default_conflict.empty(); ++j)
-      if (IsDefaultConflicting(*new_methods->At(j)) &&
-          !old_conflicts.count({identities[j].name, identities[j].descriptor}))
-        plan->default_conflict = class_layout::ClassDescriptor(thread, *new_class) + ": " + identities[j].name + identities[j].descriptor;
     return true;
   }
 
@@ -669,11 +657,5 @@ bool Plan(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix*
   if (!context->mapping) context->mapping = std::make_unique<Plans>();
   static_cast<Plans*>(context->mapping.get())->by_index[data.index] = std::move(plan);
   return true;
-}
-bool CheckDefaultConflicts(const RedefinitionDataIter& data, std::string* rejection) {
-  const auto* plan = PlanOf(transaction::Current(), data.index);
-  if (!plan || plan->default_conflict.empty()) return true;
-  *rejection = plan->default_conflict + " would become a conflict between unrelated interface defaults";
-  return false;
 }
 }  // namespace artdcevm::member_mapping

@@ -54,9 +54,9 @@ SCENARIOS = (
     ("method-storage-restore", ["method-storage-original"], 0),
     ("interface-method-bodies", ["interface-method-bodies"], 0),
     ("nested-interface-body", ["nested-interface-body"], 0),
-    ("nested-interface-add", ["nested-interface-add"], 63),
-    ("nested-interface-modifiers", ["nested-interface-modifiers"], 63),
-    ("nested-interface-parents", ["nested-interface-parents"], 63),
+    ("nested-interface-add", ["nested-interface-add"], 0),
+    ("nested-interface-modifiers", ["nested-interface-modifiers"], 0),
+    ("nested-interface-parents", ["nested-interface-parents"], 0),
     ("nested-interface-signature", ["nested-interface-signature"], 0),
     ("nested-interface-restore-signature", ["nested-interface-body"], 0),
     ("nested-interface-delete", ["nested-interface-delete"], 0),
@@ -67,9 +67,9 @@ SCENARIOS = (
     ("nested-interface-restore-initializer", ["nested-interface-body"], 0),
     ("interface-after-nested", ["interface-default-body"], 0),
     ("interface-kind-default", ["interface-kind-default", "interface-kind-default"], 0),
-    ("interface-kind-abstract-missing", ["interface-kind-abstract-missing"], 63),
+    ("interface-kind-abstract-missing", ["interface-kind-abstract-missing"], 0),
     ("interface-kind-abstract", ["interface-kind-abstract", "interface-kind-abstract"], 0),
-    ("interface-parent-missing", ["interface-parent-missing"], 63),
+    ("interface-parent-missing", ["interface-parent-missing"], 0),
     ("interface-parent-add", ["interface-parent-add", "interface-parent-add"], 0),
     ("interface-parent-remove", ["interface-parent-original"], 0),
     ("interface-parent-readd", ["interface-parent-add", "interface-parent-add"], 0),
@@ -98,7 +98,7 @@ SCENARIOS = (
     ("interface-overlap-superclass", ["interface-overlap-superclass", "interface-overlap-superclass"], 66),
     ("interface-overlap-uncovered", ["interface-overlap-uncovered", "interface-overlap-uncovered"], 0),
     ("multi-interface-unrelated", ["multi-interface-body", "multi-interface-body"], 0),
-    ("multi-interface-invalid", ["multi-interface-next", "multi-interface-invalid"], 63),
+    ("multi-interface-unimplemented", ["multi-interface-next", "multi-interface-invalid"], 0),
     ("multi-interface-recovery", ["multi-interface-next", "multi-interface-next"], 0),
     ("multi-interface-family", ["multi-interface-body", "multi-interface-body"], 0),
     ("multi-interface-shared", ["multi-interface-body", "multi-interface-body"], 0),
@@ -116,7 +116,7 @@ SCENARIOS = (
     ('interface-default-add', ['interface-default-add'], 0),
     ('interface-miranda-prepare', ['interface-miranda-prepare'], 0),
     ('interface-miranda-add', ['interface-miranda-add'], 0),
-    ('interface-default-conflict', ['interface-default-conflict'], 63),
+    ('interface-default-conflict', ['interface-default-conflict'], 0),
     ('interface-hide-parent-static', ['interface-hide-parent-static'], 63),
     ('interface-hide-parent-private', ['interface-hide-parent-private'], 63),
     ('interface-hide-object', ['interface-hide-object'], 63),
@@ -134,37 +134,35 @@ SCENARIOS = (
     ('interface-abstract-inherited', ['interface-abstract-add'], 0),
     ('interface-abstract-defaultimplementation', ['interface-abstract-add'], 0),
     ('interface-abstract-bridge', ['interface-abstract-bridge'], 0),
-    ('interface-abstract-missing', ['interface-abstract-add'], 63),
+    ('interface-abstract-missing', ['interface-abstract-add'], 0),
     ('interface-abstract-withdraw', ['interface-abstract-original'], 0),
     ('interface-abstract-retry', ['interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-partial', ['interface-abstract-add', 'interface-abstract-add'], 63),
+    ('interface-abstract-partial', ['interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-partial-retry', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-reject-signature', ['interface-abstract-add'], 63),
-    ('interface-abstract-reject-wrong-return', ['interface-abstract-add', 'interface-abstract-wrong-return'], 63),
-    ('interface-abstract-reject-private', ['interface-abstract-add', 'interface-abstract-private'], 63),
+    ('interface-abstract-unimplemented-signature', ['interface-abstract-add'], 0),
+    ('interface-abstract-unimplemented-wrong-return', ['interface-abstract-add', 'interface-abstract-wrong-return'], 0),
+    ('interface-abstract-unimplemented-private', ['interface-abstract-add', 'interface-abstract-private'], 0),
     ('interface-abstract-retry-private', ['interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-reject-package', ['interface-abstract-add', 'interface-abstract-package'], 63),
+    ('interface-abstract-unimplemented-package', ['interface-abstract-add', 'interface-abstract-package'], 0),
     ('interface-abstract-retry-package', ['interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-reject-protected', ['interface-abstract-add', 'interface-abstract-protected'], 63),
+    ('interface-abstract-unimplemented-protected', ['interface-abstract-add', 'interface-abstract-protected'], 0),
     ('interface-abstract-retry-protected', ['interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-reject-static', ['interface-abstract-add', 'interface-abstract-static'], 63),
+    ('interface-abstract-unimplemented-static', ['interface-abstract-add', 'interface-abstract-static'], 0),
     ('interface-abstract-retry-static', ['interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-reject-bridge-missing', ['interface-abstract-bridge-missing', 'interface-abstract-bridge-missing'], 63),
-    ('interface-abstract-reject-conflict', ['interface-abstract-add'], 63),
-    ('interface-abstract-dependent-missing', ['interface-abstract-dependent', 'interface-abstract-dependent'], 63),
+    ('interface-abstract-unimplemented-bridge-missing', ['interface-abstract-bridge-missing', 'interface-abstract-bridge-missing'], 0),
+    ('interface-abstract-unimplemented-conflict', ['interface-abstract-add'], 0),
+    ('interface-abstract-dependent-missing', ['interface-abstract-dependent', 'interface-abstract-dependent'], 0),
     ('interface-abstract-dependent-owner', ['interface-abstract-dependent', 'interface-abstract-dependent', 'interface-abstract-dependent'], 0),
-    ('interface-abstract-probe-reject', ['interface-abstract-add'], 63),
-    ('interface-abstract-probe-retry', ['interface-abstract-add'], 0),
     ('interface-abstract-loader-identity', ['interface-abstract-add'], 0),
-    ('interface-abstract-reabstract-reject', ['interface-abstract-reabstract'], 63),
+    ('interface-abstract-reabstract-missing', ['interface-abstract-reabstract'], 0),
     ('interface-abstract-reabstract-retry', ['interface-abstract-reabstract', 'interface-abstract-reabstract'], 0),
-    ('interface-abstract-remove-last', ['interface-abstract-remove', 'interface-abstract-remove'], 63),
-    ('interface-abstract-remove-withdraw', ['interface-abstract-add'], 0),
-    ('interface-abstract-multi-group-reject', ['interface-abstract-add', 'interface-abstract-add'], 63),
+    ('interface-abstract-remove-last', ['interface-abstract-remove', 'interface-abstract-remove'], 0),
+    ('interface-abstract-remove-restore', ['interface-abstract-add', 'interface-abstract-original'], 0),
+    ('interface-abstract-multi-group-missing', ['interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-multi-group-retry', ['interface-abstract-add', 'interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-after-plan-failure', ['interface-abstract-add', 'interface-abstract-add'], 110),
     ('interface-abstract-after-plan-retry', ['interface-abstract-add', 'interface-abstract-add'], 0),
-    ('interface-abstract-late-missing', ['interface-abstract-add'], 63),
+    ('interface-abstract-late-missing', ['interface-abstract-add'], 0),
     ('interface-abstract-late-retry', ['interface-abstract-add', 'interface-abstract-add'], 0),
     ('interface-abstract-retries-exhausted', ['interface-abstract-add'], 113),
     ('interface-abstract-exhausted-withdraw', ['interface-abstract-original'], 0),
@@ -236,6 +234,8 @@ SCENARIOS = (
     ("narrowed-reference-interface-restore", ["narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original"], 0),
     ("narrowed-reference-late-holder", ["narrowed-reference-remove"], 0),
     ("narrowed-reference-late-holder-restore", ["narrowed-reference-original"], 0),
+    ("narrowed-reference-hook", ["narrowed-reference-original"], 0),
+    ("narrowed-reference-hook-restore", ["narrowed-reference-original"], 0),
 )
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
@@ -277,7 +277,26 @@ MAPPED_SCENARIOS.update({"interface-removal-batched", "interface-removal-batched
                          "interface-drop-parent", "interface-drop-parent-restore"})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
                         if code == 0 and (name.startswith("proxy-interface-group-") or name.startswith("static-narrow-")))
+MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "nested-interface-parents",
+                         "interface-kind-abstract-missing", "interface-parent-missing",
+                         "multi-interface-unimplemented", "interface-default-conflict"})
 VAR_HANDLE_API = 33
+# Up to this API, ART fails to link a package-private or protected
+# implementation of an interface method, so the transaction rejects with 63;
+# later releases link it and calls throw IllegalAccessError, also for a
+# private method.
+NON_PUBLIC_LINK_ERROR_API = 34
+LINK_ERROR_CHECKS = {"classNamed": True, "linkError": True, "oldBody": 11,
+                     "noDeclaration": "java.lang.NoSuchMethodException"}
+
+
+def release_expectation(name, code, required, api):
+    kind = name.removeprefix("interface-abstract-unimplemented-")
+    if kind in ("package", "protected") and api <= NON_PUBLIC_LINK_ERROR_API:
+        return 63, LINK_ERROR_CHECKS
+    if kind == "private" and api > NON_PUBLIC_LINK_ERROR_API:
+        return code, {**required, "interfaceCall": "java.lang.IllegalAccessError"}
+    return code, required
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
                    "newAddedMethod": 187, "oldValue": 10, "staticCounter": 7}
@@ -379,8 +398,8 @@ REQUIRED_CHECKS = {
     "interface-pointer-recovery": {"old": 52, "child": 52, "new": 52, "marker": 73},
     "multi-interface-unrelated": {"left": 12, "right": 22, "newLeft": 12, "newRight": 22,
         "leftMarker": 73, "rightMarker": 79, "allocatedOnce": 4},
-    "multi-interface-invalid": {"rejectionReason": True, "leftUnchanged": 12, "rightUnchanged": 22,
-        "newLeftUnchanged": 12, "newRightUnchanged": 22, "leftMarker": 73, "rightMarker": 79},
+    "multi-interface-unimplemented": {"left": 13, "right": 22, "abstractCall": "java.lang.AbstractMethodError",
+        "leftMarker": 73, "rightMarker": 79},
     "multi-interface-recovery": {"left": 13, "right": 23, "allocatedOnce": 4},
     "multi-interface-family": {"childArrivedFirst": 1, "parent": 32, "child": 42,
         "virtualParent": 32, "virtualChild": 42, "subclassParent": 32, "subclassChild": 42,
@@ -510,9 +529,11 @@ REQUIRED_CHECKS = {
         "cachedReflectionStatic": "java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError"},
     "nested-interface-body": {"innerStatic": True, "before": 41, "oldInterface": 42,
                               "oldVirtual": 42, "newInstance": 42, "marker": 73, "afterGc": 42},
-    **{"nested-interface-" + variant: {"unchanged": 42, "unchangedVirtual": 42,
-        "unchangedNew": 42, "marker": 73, "rejectionReason": True, "runtimeAvailable": True}
-       for variant in ("add", "modifiers", "parents")},
+    "nested-interface-add": {"addedCall": "java.lang.AbstractMethodError", "value": 42, "marker": 73},
+    "nested-interface-modifiers": {"interfaceCall": "java.lang.AbstractMethodError",
+        "virtualCall": "java.lang.AbstractMethodError", "newCall": "java.lang.AbstractMethodError", "marker": 73},
+    "nested-interface-parents": {"isRunnable": True, "parentCall": "java.lang.AbstractMethodError",
+        "value": 44, "virtualValue": 44, "newValue": 44, "marker": 73},
     "nested-interface-signature": {"newSignature": 45, "newSignatureVirtual": 46,
         "oldInterfaceCall": "java.lang.NoSuchMethodError", "oldVirtualCall": "java.lang.NoSuchMethodError",
         "oldReflection": "java.lang.NoSuchMethodError", "marker": 73, "newSignatureAfterGc": 45},
@@ -527,11 +548,12 @@ REQUIRED_CHECKS = {
     "nested-interface-restore-initializer": {"fieldRetired": 0, "restored": 42, "marker": 73},
     "interface-kind-default": {"requiredBefore": 41, "required": 12, "virtualRequired": 12, "newRequired": 12,
         "optional": 11, "defaultFlag": True, "marker": 7},
-    "interface-kind-abstract-missing": {"rejectionReason": True, "optionalUnchanged": 11,
-        "defaultUnchanged": True, "marker": 7},
+    "interface-kind-abstract-missing": {"abstractCall": "java.lang.AbstractMethodError", "abstractFlag": True,
+        "marker": 7},
     "interface-kind-abstract": {"optional": 51, "virtualOptional": 51, "abstractFlag": True, "required": 12,
         "marker": 7, "optionalAfterGc": 51},
-    "interface-parent-missing": {"rejectionReason": True, "notParent": False, "value": 11, "marker": 9},
+    "interface-parent-missing": {"contractExtends": True, "abstractCall": "java.lang.AbstractMethodError",
+        "parentDefault": 21, "completeRequired": 31, "value": 12, "marker": 9},
     "interface-parent-add": {"contractExtends": True, "instanceIsParent": True, "parentRequired": 41,
         "parentDefault": 21, "completeRequired": 31, "completeDefault": 21, "newRequired": 41, "value": 12,
         "marker": 9, "parentAfterGc": 41},
@@ -652,8 +674,9 @@ REQUIRED_CHECKS.update({
         "marker": 79, "childMarker": 83, "afterGc": 60, "childAfterGc": 70},
     "interface-miranda-prepare": {"before": 9, "miranda": "java.lang.AbstractMethodError", "stable": 7},
     "interface-miranda-add": {"oldMiranda": 99, "newMiranda": 99, "stable": 7, "afterGc": 99},
-    "interface-default-conflict": {"before": 21, "rejectionReason": True, "oldDispatch": 21,
-        "oldLeft": 11, "newDispatch": 21, "marker": 89, "afterGc": 21},
+    "interface-default-conflict": {"before": 21, "oldDispatch": "java.lang.IncompatibleClassChangeError",
+        "newDispatch": "java.lang.IncompatibleClassChangeError", "left": 12, "marker": 89,
+        "afterGc": "java.lang.IncompatibleClassChangeError"},
     **{"interface-hide-parent-" + kind: {"rejectionReason": True, "oldDispatch": 31,
         "newDispatch": 31, "afterGc": 31} for kind in ("static", "private")},
     "interface-hide-object": {"rejectionReason": True, "oldDispatch": 41, "newDispatch": 41, "afterGc": 41},
@@ -680,7 +703,6 @@ REQUIRED_CHECKS.update({
             for i in range(200) for kind in ("oldAdded", "newAdded", "oldDispatch", "oldMarker", "afterGc")}},
 })
 UNCHANGED_CHECKS = {
-    "interface-default-conflict": ("unchangedInterface", "unchangedImplementation"),
     **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-static', 'interface-shadow-private', 'interface-shadow-protected', 'interface-shadow-package']},
     "interface-overlap-superclass": ("unchangedParent",),
     **{name: ("unchangedSubject",) for name in ("kind-instance", "kind-static-rejected")},
@@ -689,9 +711,7 @@ UNCHANGED_CHECKS = {
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
     "interface-batch-unrelated-invalid": ("unchangedInterface", "unchangedUnrelated"),
-    **{"nested-interface-" + variant: ("unchangedMembers",)
-       for variant in ("add", "modifiers", "parents")},
-    **{"interface-parent-" + variant: ("unchangedMembers",) for variant in ("missing", "readd")},
+    "interface-parent-readd": ("unchangedMembers",),
     "atomic-modifier-public-class-interface": ("unchangedModifierMembers", "unchangedMembers"),
     "class-nonfinal": ("unchangedMembers",),
     "class-abstract-instances": ("unchangedMembers",),
@@ -712,15 +732,15 @@ class RunFailure(RuntimeError):
     """A safe failure message; raw command details stay in local evidence."""
 
 
-REMOVAL_TIMES = 200_000
-PROXY_TIMES = 200_000
+REMOVAL_TIMES = 30_000  # DISPATCH_CALLS in StructuralRedefineInstrumentation
+PROXY_TIMES = 30_000  # DISPATCH_CALLS in StructuralRedefineInstrumentation
 REQUIRED_CHECKS["proxy-interface"] = {
     "getBefore": 5, "twiceBefore": 77, "sumBefore": 5 * PROXY_TIMES, "interfaceIsNew": True, "get": 5,
     "handlerSeesNewMethod": True, "twice": 77, "sum": 5 * PROXY_TIMES, "removed": "java.lang.NoSuchMethodError",
     "added": "java.lang.AbstractMethodError", "extra": 40, "freshSameClass": True, "freshGet": 5, "afterGc": 5}
 REQUIRED_CHECKS["proxy-interface-restore"] = {
     "get": 5, "handlerSeesNewMethod": True, "removed": 6, "twice": 77, "sum": 5 * PROXY_TIMES}
-PARENT_TIMES = 200_000
+PARENT_TIMES = 30_000  # DISPATCH_CALLS in StructuralRedefineInstrumentation
 REQUIRED_CHECKS["interface-drop-parent"] = {
     "warmedUp": 0, "defaultBefore": 7, "parents": 0, "isBase": False, "isChild": True, "child": 12, "side": 22,
     "viaChild": "java.lang.IncompatibleClassChangeError", "compiledFailures": PARENT_TIMES,
@@ -764,8 +784,12 @@ for _mode in ("remove", "body", "method", "structural", "static", "interface"):
     REQUIRED_CHECKS["narrowed-reference-" + _mode + "-restore"] = {"restored": True}
 REQUIRED_CHECKS["narrowed-reference-method"].update({"addedMethod": 7, "staticMarker": 9})
 MAPPED_SCENARIOS.update({"narrowed-reference-late-holder", "narrowed-reference-late-holder-restore"})
+MAPPED_SCENARIOS.update({"narrowed-reference-hook", "narrowed-reference-hook-restore"})
 REQUIRED_CHECKS["narrowed-reference-late-holder"] = {"notLoaded": False, "hook": 0, "retried": 1, "removed": False}
 REQUIRED_CHECKS["narrowed-reference-late-holder-restore"] = {"restored": True}
+REQUIRED_CHECKS["narrowed-reference-hook"] = {"hook": 0, "retried": 1, "hookReplacements": 2,
+    "removed": False, "holderCleared": True, "kept": True, "afterGc": True}
+REQUIRED_CHECKS["narrowed-reference-hook-restore"] = {"restored": True, "clearedStillNull": True}
 REQUIRED_CHECKS["interface-removal-restore"] = {
     "restored": True, "viaRemoved": 11, "compiledFailures": 0, "held": 11, "copiedDefault": 7,
     "lateFailures": 0, "lateOwn": 33, "runRestored": 1, "freshRunRestored": 2}
@@ -774,113 +798,50 @@ REQUIRED_CHECKS["thread-subclass"] = {
     "runningFinished": False, "runningInterrupted": True, "runningSelf": True, "runningResult": 2,
     "idleKept": 23, "idleState": "NEW", "idleFinished": False, "idleSelf": True, "idleResult": 25,
     "newResult": 25, "afterGc": 17}
-REQUIRED_CHECKS.update({'interface-abstract-dependent-missing': {'methodNamed': True,
-                                          'classNamed': True,
-                                          'missingImplementation': True,
-                                          'oldBody': 11},
- 'interface-abstract-reject-conflict': {'classNamed': True,
-                                        'missingImplementation': True,
-                                        'oldBody': 11,
-                                        'noDeclaration': 'java.lang.NoSuchMethodException'},
- 'interface-abstract-probe-reject': {'armed': 0,
-                                     'probeReason': True,
-                                     'capabilityReason': True,
-                                     'oldBody': 11},
- 'interface-abstract-probe-retry': {'newCaller': 'existing'},
+REQUIRED_CHECKS.update({'interface-abstract-dependent-missing': {'abstractCall': 'java.lang.AbstractMethodError', 'newBody': 12},
+ 'interface-abstract-unimplemented-conflict': {'newBody': 12, 'interfaceCall': 'java.lang.IncompatibleClassChangeError'},
  'interface-abstract-batch-forward': {'newCaller': 'new',
                                       'singleton': True,
                                       'marker': 73,
                                       'counter': 79,
                                       'bodyUpdated': 'new',
-                                      'dispatchProbe': True,
                                       'afterGc': 'new'},
  'interface-abstract-batch-reverse': {'newCaller': 'new',
                                       'singleton': True,
                                       'marker': 73,
                                       'counter': 79,
                                       'bodyUpdated': 'new',
-                                      'dispatchProbe': True,
                                       'afterGc': 'new'},
  'interface-abstract-existing': {'implementation': 'existing', 'interfaceBody': 12},
  'interface-abstract-inherited': {'implementation': 'parent', 'interfaceBody': 12},
  'interface-abstract-defaultimplementation': {'implementation': 'default', 'interfaceBody': 12},
  'interface-abstract-bridge': {'implementation': 'bridge', 'interfaceBody': 12},
- 'interface-abstract-missing': {'methodNamed': True,
-                                'classNamed': True,
-                                'missingImplementation': True,
-                                'oldBody': 11,
-                                'noDeclaration': 'java.lang.NoSuchMethodException'},
+ 'interface-abstract-missing': {'abstractCall': 'java.lang.AbstractMethodError', 'newBody': 12, 'declared': 'required'},
  'interface-abstract-withdraw': {'oldBody': 11},
  'interface-abstract-retry': {'newCaller': 'new'},
- 'interface-abstract-partial': {'methodNamed': True,
-                                'classNamed': True,
-                                'missingImplementation': True,
-                                'oldBody': 11,
-                                'implementationUnchanged': 'old',
-                                'noDeclaration': 'java.lang.NoSuchMethodException'},
+ 'interface-abstract-partial': {'newCaller': 'new', 'implementationUpdated': 'new', 'otherAbstractCall': 'java.lang.AbstractMethodError'},
  'interface-abstract-partial-retry': {'newCaller': 'new', 'other': 'other'},
- 'interface-abstract-reject-signature': {'classNamed': True,
-                                         'missingImplementation': True,
-                                         'oldBody': 11,
-                                         'noDeclaration': 'java.lang.NoSuchMethodException'},
- 'interface-abstract-reject-wrong-return': {'classNamed': True,
-                                            'missingImplementation': True,
-                                            'oldBody': 11,
-                                            'noDeclaration': 'java.lang.NoSuchMethodException'},
- 'interface-abstract-reject-private': {'classNamed': True,
-                                       'missingImplementation': True,
-                                       'oldBody': 11,
-                                       'noDeclaration': 'java.lang.NoSuchMethodException'},
- 'interface-abstract-reject-package': {'classNamed': True,
-                                       'missingImplementation': True,
-                                       'oldBody': 11,
-                                       'noDeclaration': 'java.lang.NoSuchMethodException'},
- 'interface-abstract-reject-protected': {'classNamed': True,
-                                         'missingImplementation': True,
-                                         'oldBody': 11,
-                                         'noDeclaration': 'java.lang.NoSuchMethodException'},
- 'interface-abstract-reject-static': {'classNamed': True,
-                                      'missingImplementation': True,
-                                      'oldBody': 11,
-                                      'noDeclaration': 'java.lang.NoSuchMethodException'},
- 'interface-abstract-reject-bridge-missing': {'classNamed': True,
-                                              'missingImplementation': True,
-                                              'oldBody': 11,
-                                              'noDeclaration': 'java.lang.NoSuchMethodException'},
+ 'interface-abstract-unimplemented-signature': {'newBody': 12, 'interfaceCall': 'java.lang.AbstractMethodError'},
+ 'interface-abstract-unimplemented-wrong-return': {'newBody': 12, 'interfaceCall': 'java.lang.AbstractMethodError'},
+ 'interface-abstract-unimplemented-private': {'newBody': 12, 'interfaceCall': 'java.lang.AbstractMethodError'},
+ 'interface-abstract-unimplemented-package': {'newBody': 12, 'interfaceCall': 'java.lang.IllegalAccessError'},
+ 'interface-abstract-unimplemented-protected': {'newBody': 12, 'interfaceCall': 'java.lang.IllegalAccessError'},
+ 'interface-abstract-unimplemented-static': {'newBody': 12, 'interfaceCall': 'java.lang.AbstractMethodError'},
+ 'interface-abstract-unimplemented-bridge-missing': {'newBody': 12, 'interfaceCall': 'java.lang.AbstractMethodError'},
  'interface-abstract-dependent-owner': {'dependent': 'dependent',
                                         'ownerBody': 12,
                                         'siblingBody': 12},
  'interface-abstract-loader-identity': {'newCaller': 'existing',
                                         'otherLoaderOldBody': 11,
                                         'otherLoaderNoDeclaration': 'java.lang.NoSuchMethodException'}})
-REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': True,
-                                          'classNamed': True,
-                                          'missingImplementation': True,
-                                          'oldDefault': 'distant',
-                                          'oldJni': 'distant'},
+REQUIRED_CHECKS.update({'interface-abstract-reabstract-missing': {'cachedDefaultCall': 'java.lang.AbstractMethodError', 'cachedDefaultReflection': 'java.lang.AbstractMethodError', 'cachedDefaultJni': 'java.lang.AbstractMethodError'},
  'interface-abstract-reabstract-retry': {'newImplementation': 'implemented',
                                          'cachedDefaultCall': 'implemented',
                                          'cachedDefaultReflection': 'implemented',
                                          'cachedDefaultJni': 'implemented'},
- 'interface-abstract-remove-last': {'methodNamed': True,
-                                    'classNamed': True,
-                                    'missingImplementation': True,
-                                    'oldReflection': 'removable',
-                                    'oldJni': 'removable'},
- 'interface-abstract-remove-withdraw': {'newCaller': 'removable', 'cachedJni': 'removable'},
- 'interface-abstract-multi-group-reject': {'methodNamed': True,
-                                           'classNamed': True,
-                                           'missingImplementation': True,
-                                           'earlierGroupValidated': True,
-                                           'firstReflection': 11,
-                                           'firstHandle': 11,
-                                           'firstBytecode': 11,
-                                           'firstJni': 11,
-                                           'secondReflection': 11,
-                                           'secondHandle': 11,
-                                           'secondBytecode': 11,
-                                           'secondJni': 11,
-                                           'firstUnchanged': 'java.lang.NoSuchMethodException'},
+ 'interface-abstract-remove-last': {'abstractCall': 'java.lang.AbstractMethodError', 'retiredReflection': 'java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError'},
+ 'interface-abstract-remove-restore': {'newCaller': 'removable'},
+ 'interface-abstract-multi-group-missing': {'firstReflection': 12, 'firstHandle': 12, 'firstBytecode': 12, 'firstJni': 12, 'secondReflection': 12, 'secondHandle': 12, 'secondBytecode': 12, 'secondJni': 12, 'firstNewCaller': 'existing', 'secondAbstractCall': 'java.lang.AbstractMethodError'},
  'interface-abstract-multi-group-retry': {'firstReflection': 12,
                                           'firstHandle': 12,
                                           'firstBytecode': 12,
@@ -892,7 +853,6 @@ REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': 
                                           'firstNewCaller': 'existing',
                                           'secondNewCaller': 'new'},
  'interface-abstract-after-plan-failure': {'armed': 0,
-                                           'planned': True,
                                            'planFailure': True,
                                            'oldReflection': 11,
                                            'oldHandle': 11,
@@ -904,15 +864,7 @@ REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': 
                                          'newBytecode': 12,
                                          'newJni': 12,
                                          'newCaller': 'new'},
- 'interface-abstract-late-missing': {'hook': 0,
-                                     'methodNamed': True,
-                                     'classNamed': True,
-                                     'missingImplementation': True,
-                                     'retried': 1,
-                                     'oldReflection': 11,
-                                     'oldHandle': 11,
-                                     'oldBytecode': 11,
-                                     'oldJni': 11},
+ 'interface-abstract-late-missing': {'hook': 0, 'retried': 1, 'newReflection': 12, 'newHandle': 12, 'newBytecode': 12, 'newJni': 12, 'otherAbstractCall': 'java.lang.AbstractMethodError'},
  'interface-abstract-late-retry': {'newReflection': 12,
                                    'newHandle': 12,
                                    'newBytecode': 12,
@@ -945,9 +897,7 @@ REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': 
                                       'marker': 73,
                                       'counter': 79,
                                       'bodyUpdated': 'new',
-                                      'dispatchProbe': True,
                                       'afterGc': 'new',
-                                      'abstractCapability': True,
                                            'sameBatchCaller': 'new/12',
                                       'cachedReflection': 12,
                                       'cachedHandle': 12,
@@ -958,9 +908,7 @@ REQUIRED_CHECKS.update({'interface-abstract-reabstract-reject': {'methodNamed': 
                                       'marker': 73,
                                       'counter': 79,
                                       'bodyUpdated': 'new',
-                                      'dispatchProbe': True,
                                       'afterGc': 'new',
-                                      'abstractCapability': True,
                                            'sameBatchCaller': 'new/12',
                                       'cachedReflection': 12,
                                       'cachedHandle': 12,
@@ -1061,6 +1009,7 @@ def validate_report(report, scenario_group="full"):
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
         raise RunFailure("The device report does not contain the complete scenario sequence")
     for scenario, (name, variants, code) in zip(scenarios, expected_scenarios):
+        code, required = release_expectation(name, code, REQUIRED_CHECKS[name], device["api"])
         if not isinstance(scenario, dict) or scenario.get("name") != name:
             raise RunFailure("The device report has an unexpected scenario order")
         if scenario.get("variants") != variants:
@@ -1100,7 +1049,7 @@ def validate_report(report, scenario_group="full"):
                     or check["expected"] != check["actual"]):
                 raise RunFailure("Scenario " + name + " behavior check " + str(index + 1) + " failed")
         observed = {check["name"]: check for check in checks}
-        for check_name, expected in {"returnCode": code, **REQUIRED_CHECKS[name]}.items():
+        for check_name, expected in {"returnCode": code, **required}.items():
             if check_name.startswith("varHandle") and device["api"] < VAR_HANDLE_API:
                 continue
             check = observed.get(check_name)
