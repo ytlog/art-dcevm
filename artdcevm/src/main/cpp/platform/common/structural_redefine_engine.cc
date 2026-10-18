@@ -5,6 +5,7 @@
 #include <android/log.h>
 #include "shadowhook.h"
 #include "platform/common/imt_sealing.h"
+#include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
@@ -58,6 +59,7 @@ void PublishInterfaceBackend(interface_redefinition::Backend* backend) {
 
 bool RollBack(std::string* failure, size_t count = SIZE_MAX) {
   imt_sealing::Installed(false);
+  narrowed_references::Installed(false);
   bool removed_all = true;
   for (size_t i = std::min(count, process->hook_tokens.size()); i-- > 0;) {
     if (!process->hook_tokens[i]) continue;
@@ -131,7 +133,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   prepared.runtime_thread = runtime_thread::Available();
   class_layout::Prepare({});
   std::string retirement_note, interface_note, sealing_note, failure;
-  bool sealing_prepared = false;
+  bool sealing_prepared = false, references_prepared = false;
   size_t sealing_hook_begin = 0, sealing_hook_end = 0;
   JNIEnv* jni = nullptr;
   vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
@@ -169,8 +171,15 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     sealing_hook_end = retirement_hooks.size();
     if (!sealing_prepared)
       sealing_note = "interface removal unavailable: " + failure;
-    else if (!proxy_relink::Install(process->layout_services, &failure))
-      sealing_note = "Proxy implementations unavailable: " + failure;
+    else {
+      references_prepared = narrowed_references::Prepare(process->layout_services, &retirement_hooks, &failure);
+      if (!references_prepared)
+        sealing_note = "interface reference cleanup unavailable: " + failure;
+      if (!proxy_relink::Install(process->layout_services, &failure)) {
+        if (!sealing_note.empty()) sealing_note += "; ";
+        sealing_note += "Proxy implementations unavailable: " + failure;
+      }
+    }
     replacements = std::move(retirement_hooks);
     class_layout::Report("unverified");
   } else {
@@ -240,6 +249,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
         &replacements, &interface_note, &process->interface_runtime));
   }
   imt_sealing::Installed(prepared.retirement && sealing_prepared);
+  narrowed_references::Installed(prepared.retirement && references_prepared);
   // The engine's own environment carries no other events.
   jvmtiEventCallbacks callbacks{};
   callbacks.ClassPrepare = ClassPrepared;

@@ -222,6 +222,20 @@ SCENARIOS = (
     ("abstract-removal-repeat", ["abstract-remove-again"], 0),
     ("abstract-removal-group", ["abstract-remove"], 0),
     ("abstract-removal-restore", ["abstract-remove-original"], 0),
+    ("narrowed-reference-remove", ["narrowed-reference-remove"], 0),
+    ("narrowed-reference-remove-restore", ["narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original"], 0),
+    ("narrowed-reference-body", ["narrowed-reference-body", "narrowed-reference-body"], 0),
+    ("narrowed-reference-body-restore", ["narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original"], 0),
+    ("narrowed-reference-method", ["narrowed-reference-method", "narrowed-reference-method"], 0),
+    ("narrowed-reference-method-restore", ["narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original"], 0),
+    ("narrowed-reference-structural", ["narrowed-reference-structural", "narrowed-reference-structural"], 0),
+    ("narrowed-reference-structural-restore", ["narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original"], 0),
+    ("narrowed-reference-static", ["narrowed-reference-static", "narrowed-reference-static"], 0),
+    ("narrowed-reference-static-restore", ["narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original"], 0),
+    ("narrowed-reference-interface", ["narrowed-reference-interface", "narrowed-reference-interface"], 0),
+    ("narrowed-reference-interface-restore", ["narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original"], 0),
+    ("narrowed-reference-late-holder", ["narrowed-reference-remove"], 0),
+    ("narrowed-reference-late-holder-restore", ["narrowed-reference-original"], 0),
 )
 # Scenarios whose acceptance depends on a source-declared layout that the
 # runtime probes selected: the engine's member mapping, or the runtime class
@@ -720,26 +734,40 @@ REQUIRED_CHECKS["interface-removal"] = {
     "viaRemoved": "java.lang.IncompatibleClassChangeError", "compiledFailures": REMOVAL_TIMES,
     "held": "java.lang.IncompatibleClassChangeError", "copiedDefault": "java.lang.NoSuchMethodError",
     "childRemoved": False, "childKept": 22, "childFailures": REMOVAL_TIMES,
-    "bootDispatch": "java.lang.IncompatibleClassChangeError", "runAfter": 1, "spins": 1,
+    "bootDispatch": True, "runAfter": 1, "spins": 1,
     "lateKept": 22, "lateOwn": 33, "lateFailures": REMOVAL_TIMES,
     "overrideKept": 44, "parentCacheKept": 22, "overrideFailures": REMOVAL_TIMES, "afterGc": 5}
 REQUIRED_CHECKS["interface-removal-repeat"] = {"added": 0, "kept": 22,
     "failures": REMOVAL_TIMES, "childFailures": REMOVAL_TIMES}
 REQUIRED_CHECKS["interface-removal-group"] = {"kept": 22,
     "failures": REMOVAL_TIMES, "lateFailures": REMOVAL_TIMES}
-REQUIRED_CHECKS["abstract-removal-abort"] = {"armed": 0, "stillImplements": True, "failures": 0}
+REQUIRED_CHECKS["abstract-removal-abort"] = {"armed": 0, "stillImplements": True, "failures": 0,
+    "noCleanup": True, "threadStillHeld": 2}
 REQUIRED_CHECKS["abstract-removal"] = {"lateLoadedBefore": False, "removed": False,
     "existingFailures": REMOVAL_TIMES, "lateKept": 22, "lateOwn": 33, "lateFailures": REMOVAL_TIMES,
     "directKept": 55, "directFailures": REMOVAL_TIMES, "existingKept": 22,
     "lateBootFailures": REMOVAL_TIMES, "lateSpins": 0,
-    "existingBootDispatch": "java.lang.IncompatibleClassChangeError", "existingRuns": 1}
+    "existingBootDispatch": True, "existingRuns": 2}
 REQUIRED_CHECKS["abstract-removal-repeat"] = {"added": 0, "existingFailures": REMOVAL_TIMES,
     "lateFailures": REMOVAL_TIMES, "marker": 5}
 REQUIRED_CHECKS["abstract-removal-group"] = {"kept": 22, "lateFailures": REMOVAL_TIMES}
 REQUIRED_CHECKS["abstract-removal-restore"] = {"existingFailures": 0, "lateFailures": 0}
+for _mode in ("remove", "body", "method", "structural", "static", "interface"):
+    MAPPED_SCENARIOS.add("narrowed-reference-" + _mode)
+    MAPPED_SCENARIOS.add("narrowed-reference-" + _mode + "-restore")
+    REQUIRED_CHECKS["narrowed-reference-" + _mode] = {
+        "self": True, "selfDirect": True, "selfIndirect": True, "selfKept": True,
+        "holder": _mode not in ("body", "method"), "holderDirect": True, "holderInherited": True,
+        "holderIndirect": _mode not in ("body", "method"), "holderKept": True, "holderObject": True,
+        "visited": _mode not in ("body", "method"), "cleared": _mode not in ("body", "method"), "afterGc": True}
+    REQUIRED_CHECKS["narrowed-reference-" + _mode + "-restore"] = {"restored": True}
+REQUIRED_CHECKS["narrowed-reference-method"].update({"addedMethod": 7, "staticMarker": 9})
+MAPPED_SCENARIOS.update({"narrowed-reference-late-holder", "narrowed-reference-late-holder-restore"})
+REQUIRED_CHECKS["narrowed-reference-late-holder"] = {"notLoaded": False, "hook": 0, "retried": 1, "removed": False}
+REQUIRED_CHECKS["narrowed-reference-late-holder-restore"] = {"restored": True}
 REQUIRED_CHECKS["interface-removal-restore"] = {
     "restored": True, "viaRemoved": 11, "compiledFailures": 0, "held": 11, "copiedDefault": 7,
-    "lateFailures": 0, "lateOwn": 33, "runRestored": 2}
+    "lateFailures": 0, "lateOwn": 33, "runRestored": 1, "freshRunRestored": 2}
 REQUIRED_CHECKS["thread-subclass"] = {
     "runningKept": 17, "runningName": "dcevm-thread-running", "runningAlive": True, "runningAdded": 5,
     "runningFinished": False, "runningInterrupted": True, "runningSelf": True, "runningResult": 2,
@@ -972,8 +1000,10 @@ def scenario_sequence(scenario_group):
         return tuple(item for item in SCENARIOS if item[0].startswith("proxy-interface"))
     if scenario_group == "interface-drop-parent":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-drop-parent"))
+    if scenario_group == "narrowed-reference-method":
+        return tuple(item for item in SCENARIOS if item[0].startswith("narrowed-reference-method"))
     if scenario_group == "interface-removal":
-        return tuple(item for item in SCENARIOS if item[0].startswith(("interface-removal", "abstract-removal")))
+        return tuple(item for item in SCENARIOS if item[0].startswith(("interface-removal", "abstract-removal", "narrowed-reference")))
     if scenario_group == "ordinary":
         # Match the contiguous interface-target block in runScenarios. Ordinary
         # classes adding interfaces remain part of the ordinary suite.
@@ -1150,7 +1180,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
                         help="Debug-only canonical IMT capture path to verify before engine initialization")

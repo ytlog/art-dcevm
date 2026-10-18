@@ -36,6 +36,8 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native int configureCheckJni(boolean enabled);
     private static native int configureImtFallback(int mode);
     static native int validatedInterfaceGroups();
+    static native long referenceCleanupVisits();
+    static native long referenceCleanupClears();
     static int armMappingPlanFailure() { return armFailure(22); }
     static int armDispatchFailure() { return armFailure(21); }
     static int armPointerFailure(int stage) { return armFailure(stage); }

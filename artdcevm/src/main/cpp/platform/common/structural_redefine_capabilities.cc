@@ -1,6 +1,7 @@
 #include "platform/common/structural_redefine_internal.h"
 
 #include "platform/common/imt_sealing.h"
+#include "platform/common/narrowed_references.h"
 #include "platform/common/interface_dispatch.h"
 #include "support/json.h"
 
@@ -29,7 +30,7 @@ std::string Capabilities() {
       ",\"memberAddition\":" + supported + ",\"memberModifierChange\":" + supported +
       ",\"classModifierChange\":" + supported + ",\"interfaceAddition\":" + retirement + ",\"superclassWidening\":" +
           (methods && state.capabilities.superclass_change ? "true" : "false") +
-      ",\"interfaceRemoval\":" + (methods && imt_sealing::Available() ? "true" : "false") +
+      ",\"interfaceRemoval\":" + (methods && state.capabilities.subclass_watch && imt_sealing::Available() && narrowed_references::Available() ? "true" : "false") +
       ",\"interfaceDispatchSealing\":" + QuoteJsonMutf8(imt_sealing::State()) +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +

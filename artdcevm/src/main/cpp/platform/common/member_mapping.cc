@@ -20,6 +20,7 @@
 #include "platform/common/class_layout_table.h"
 #include "platform/common/member_retirement.h"
 #include "platform/common/proxy_relink.h"
+#include "platform/common/narrowed_references.h"
 #include "platform/common/transaction_context.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -570,7 +571,10 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
       if (const auto thread = runtime_thread::Ready()) layout->copy_retyped(*thread, data, *plan);
   }
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
-  reinterpret_cast<Function>(original_update)(self, data);
+  {
+    narrowed_references::UpdateScope references(self, data);
+    reinterpret_cast<Function>(original_update)(self, data);
+  }
   RestoreFieldArrays();
   if (plan && class_layout::Selected() >= 0)
     if (const auto thread = runtime_thread::Ready()) kPlanners[class_layout::Selected()].clear_narrowed(*thread, data, *plan);

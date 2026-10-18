@@ -90,6 +90,8 @@ public class RemovalOracle {
       checks++;
     }
     eq("abort-keeps", 0, AbstractRemovalFixture.failures(existing, TIMES));
+    before.run();
+    eq("abort-keeps-thread", 2, existingTask.runs);
     redefine("abstract-remove", AbstractRemovalFixture.Subject.class, AbstractRemovalFixture.Task.class);
     eq("abstract-existing", TIMES, AbstractRemovalFixture.failures(existing, TIMES));
     var indirect = (AbstractRemovalFixture.Subject) Class.forName(
@@ -106,7 +108,7 @@ public class RemovalOracle {
     icce("abstract-late-boot", after::run);
     eq("abstract-late-spins", 0, lateTask.spins);
     before.run();
-    eq("abstract-existing-runs", 1, existingTask.runs);
+    eq("abstract-existing-runs", 2, existingTask.runs);
     redefine("abstract-remove-again", AbstractRemovalFixture.Subject.class);
     eq("abstract-added", 0L, AbstractRemovalFixture.Subject.class.getField("added").getLong(existing));
     eq("abstract-repeat", TIMES, AbstractRemovalFixture.failures(indirect, TIMES));
@@ -116,6 +118,36 @@ public class RemovalOracle {
     eq("abstract-gc-marker", 5, indirect.marker);
     redefine("abstract-remove-original", AbstractRemovalFixture.Subject.class, AbstractRemovalFixture.Task.class);
     eq("abstract-restored", 0, AbstractRemovalFixture.failures(indirect, TIMES));
+    for (String variant : new String[]{"narrowed-reference-remove", "narrowed-reference-body", "narrowed-reference-method", "narrowed-reference-structural", "narrowed-reference-static", "narrowed-reference-interface"}) {
+      var value = new NarrowedReferenceFixture.Subject();
+      var directValue = new NarrowedReferenceFixture.Direct();
+      var indirectValue = new NarrowedReferenceFixture.Indirect();
+      var holder = new NarrowedReferenceFixture.HolderChild();
+      value.self = value; value.direct = directValue; value.indirect = indirectValue; value.retained = value;
+      holder.removed = value; holder.direct = directValue; holder.inherited = new NarrowedReferenceFixture.Inherited();
+      holder.indirect = indirectValue; holder.kept = value; holder.object = value;
+      if (variant.endsWith("remove")) redefine(variant, NarrowedReferenceFixture.Subject.class);
+      else if (variant.endsWith("interface")) redefine(variant, NarrowedReferenceFixture.Subject.class, NarrowedReferenceFixture.Kept.class);
+      else redefine(variant, NarrowedReferenceFixture.Subject.class, NarrowedReferenceFixture.Holder.class);
+      System.out.println("JBR refs " + variant + " self=" + (value.self == null)
+          + " selfIndirect=" + (value.indirect == null) + " holder=" + (holder.removed == null)
+          + " holderIndirect=" + (holder.indirect == null));
+      eq(variant + " self-cleared", variant.endsWith("interface"), value.self == null);
+      eq(variant + " self-direct", true, value.direct == directValue);
+      eq(variant + " self-indirect-cleared", variant.endsWith("interface"), value.indirect == null);
+      eq(variant + " self-kept", true, value.retained == value);
+      eq(variant + " holder-cleared", !(variant.endsWith("body") || variant.endsWith("method")), holder.removed == null);
+      eq(variant + " holder-direct", true, holder.direct == directValue);
+      eq(variant + " holder-inherited", true, holder.inherited != null);
+      eq(variant + " holder-indirect-cleared", !(variant.endsWith("body") || variant.endsWith("method")), holder.indirect == null);
+      eq(variant + " holder-kept", true, holder.kept == value);
+      eq(variant + " holder-object", true, holder.object == value);
+      if (variant.endsWith("method")) {
+        eq("method-added", 7, NarrowedReferenceFixture.Holder.class.getMethod("addedMethod").invoke(holder));
+        eq("method-static-preserved", 9, NarrowedReferenceFixture.Holder.staticMarker);
+      }
+      redefine("narrowed-reference-original", NarrowedReferenceFixture.Subject.class, NarrowedReferenceFixture.Holder.class, NarrowedReferenceFixture.Kept.class);
+    }
     System.out.println("JBR interface removal oracle PASS checks=" + checks);
   }
 }
@@ -129,7 +161,7 @@ def main():
     evidence = new_evidence_directory(ROOT / 'build/evidence/jbr-interface-removal')
     jbr = args.java_home.resolve()
     manifest = {'scenarios': ['batched-class-interface-removal', 'repeated-structure', 'interface-group', 'late-override',
-                             'abstract-direct-indirect', 'abstract-boot', 'abort-retry', 'restore'],
+                             'abstract-direct-indirect', 'abstract-boot', 'abort-retry', 'restore', 'instance-reference-compatibility'],
                 'sourceOracleRevision': 'cf1f197170a0', 'fixtureSha256': {}}
     with tempfile.TemporaryDirectory(prefix='oracle-', dir=evidence) as temp:
         work = Path(temp)
@@ -141,14 +173,22 @@ def main():
             return result.stdout + result.stderr
         manifest['runtimeVersion'] = run('version', [str(jbr / 'bin/java'), '-version']).strip()
         manifest['sourceMatchVerified'] = 'JBR-21.0.11+10-1163.116' in manifest['runtimeVersion']
+        if not manifest['sourceMatchVerified']:
+            raise RuntimeError('This oracle requires fixed JBR 21.0.11+10-b1163.116')
+        manifest['javaExecutableSha256'] = hashlib.sha256((jbr / 'bin/java').read_bytes()).hexdigest()
+        manifest['harnessSha256'] = hashlib.sha256(SOURCE.encode()).hexdigest()
         old = work / 'old'; old.mkdir()
         fixtures = ROOT / 'app/src/debug/java/com/github/ytlog/artdcevm/fixture'
-        names = ['InterfaceRemovalFixture.java', 'AbstractRemovalFixture.java']
+        names = ['InterfaceRemovalFixture.java', 'AbstractRemovalFixture.java', 'NarrowedReferenceFixture.java']
+        manifest['oldFixtureSha256'] = {name: hashlib.sha256((fixtures / name).read_bytes()).hexdigest() for name in names}
         run('compile-old', [str(jbr / 'bin/javac'), '--release', '11', '-d', str(old),
                             *[str(fixtures / name) for name in names]])
         patches = work / 'patches'; patches.mkdir()
         for variant in ['interface-remove', 'interface-remove-again', 'interface-remove-original',
-                        'abstract-remove', 'abstract-remove-again', 'abstract-remove-original']:
+                        'abstract-remove', 'abstract-remove-again', 'abstract-remove-original',
+                        'narrowed-reference-original', 'narrowed-reference-remove',
+                        'narrowed-reference-body', 'narrowed-reference-method', 'narrowed-reference-structural',
+                        'narrowed-reference-static', 'narrowed-reference-interface']:
             source = next((ROOT / 'fixtures' / variant).rglob('*.java'))
             manifest['fixtureSha256'][variant] = hashlib.sha256(source.read_bytes()).hexdigest()
             run('compile-' + variant, [str(jbr / 'bin/javac'), '--release', '11', '-d',

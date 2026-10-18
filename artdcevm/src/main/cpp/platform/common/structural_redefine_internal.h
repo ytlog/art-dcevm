@@ -90,6 +90,7 @@ struct Batch final : transaction::Part {
   bool retires_members = false;
   std::set<ClassRedefinitionPrefix*> no_instances;
   const std::atomic<bool>* subclass_loaded = nullptr;
+  std::atomic<bool>* any_class_loaded = nullptr;
   // The standard entry's GetLoadedClasses result, borrowed for the
   // transaction: invoke-kind changes scan the code of loaded classes.
   const jclass* loaded = nullptr;

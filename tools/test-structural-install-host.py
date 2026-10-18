@@ -29,6 +29,9 @@ SOURCE = r'''
 #include "platform/common/runtime_thread.h"
 #include "platform/common/transaction_context.h"
 #include "platform/common/imt_sealing.h"
+#include "platform/common/narrowed_references.h"
+#include "platform/common/proxy_relink.h"
+#include "platform/symbols/narrowed_reference_symbols.h"
 #include "platform/symbols/imt_sealing_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/runtime_thread_symbols.h"
@@ -46,6 +49,8 @@ int sealing_hooks = 0;
 bool failed_sealing_hook = false;
 int probe_loads = 0;
 std::set<void*> sealing_tokens;
+int reference_hooks = 0;
+bool failed_reference_hook = false;
 interface_redefinition::Backend* prepared_interface = nullptr;
 using Route = jvmtiError (*)(jvmtiEnv*, jint, const jvmtiClassDefinition*);
 Route routed = nullptr;
@@ -121,6 +126,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (key == symbols::runtime_thread::kUseReadBarrier.name) return nullptr;
   if (mode == 3 && key == symbols::structural::kCollectNewFieldAndMethodMappings.name) return nullptr;
   if (mode >= 6 && key == symbols::imt_sealing::kLinearAllocAllocKind.name) return nullptr;
+  if (mode == 19 && key == symbols::narrowed_references::kVisitReference.name) return nullptr;
   if ((mode == 6 || mode == 10 || mode == 11 || mode == 12 || mode == 13 || mode == 14 || mode >= 16) &&
       key == symbols::imt_sealing::kGetImtConflictMethod.name) return nullptr;
   if ((mode == 7 || mode == 12 || mode == 15) &&
@@ -151,6 +157,10 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
       target == &addresses[symbols::imt_sealing::kFillImtFromSuperClass.name]) {
     ++sealing_hooks;
     if (mode == 8 && !failed_sealing_hook) { failed_sealing_hook = true; return nullptr; }
+  }
+  if (target == &addresses[symbols::narrowed_references::kVisitReference.name]) {
+    ++reference_hooks;
+    if (mode == 20 && !failed_reference_hook) { failed_reference_hook = true; return nullptr; }
   }
   if (mode == 1 && hook_calls == 2) return nullptr;
   *original = target;
@@ -314,6 +324,21 @@ int main(int argc, char** argv) {
               "Failed inline install changed JNI table or retained hooks");
       Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE && set_calls == 1,
               "Retry after rollback did not reuse process state");
+    } else if (mode == 19) {
+      Require(result == JVMTI_ERROR_NONE && imt_sealing::Available() &&
+              !narrowed_references::Available() && proxy_relink::Available(),
+              "Missing reference visitor disabled unrelated Proxy or sealing services");
+      const auto caps = structural_redefine::Capabilities();
+      Require(caps.find("\"interfaceRemoval\":false") != std::string::npos &&
+              caps.find("\"methodDeletion\":true") != std::string::npos,
+              "Missing reference visitor advertised removal or disabled member editing");
+    } else if (mode == 20) {
+      Require(result == JVMTI_ERROR_INTERNAL && active.empty() &&
+              !narrowed_references::Available() && !imt_sealing::Available(),
+              "Failed reference hook retained hooks or advertised interface removal");
+      Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE &&
+              reference_hooks == 2 && narrowed_references::Available() && imt_sealing::Available(),
+              "Retry skipped the prepared reference visitor hook");
     } else if (mode >= 6) {
       if (mode == 8) {
         Require(result == JVMTI_ERROR_INTERNAL && !imt_sealing::Available() && active.empty(),
@@ -476,7 +501,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(19):
+        for case in range(21):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:

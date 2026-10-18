@@ -1,3 +1,4 @@
+#include "platform/common/narrowed_references.h"
 #include "platform/common/fault_injection.h"
 #include "platform/symbols/art_symbol_compat.h"
 #include <array>
@@ -120,3 +121,12 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_runtimeMark
   return static_cast<jlong>(marking_reads);
 }
 }  // namespace artdcevm::fault_injection
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_referenceCleanupVisits(JNIEnv*, jclass) {
+  return artdcevm::narrowed_references::Visits();
+}
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_referenceCleanupClears(JNIEnv*, jclass) {
+  return artdcevm::narrowed_references::Clears();
+}

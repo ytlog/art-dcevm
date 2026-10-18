@@ -6,6 +6,7 @@
 #include "platform/common/class_layout_table.h"
 #include "platform/common/fault_injection.h"
 #include "platform/common/imt_sealing.h"
+#include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
 #include "platform/common/interface_dispatch.h"
 #include "platform/common/member_mapping.h"
@@ -115,7 +116,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // target may evolve its members whenever the engine owns the mapping.
   abilities.interface_members = abilities.member_mapping;
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
-  abilities.interface_removal = abilities.member_mapping && imt_sealing::Available();
+  abilities.interface_removal = abilities.member_mapping && process->capabilities.subclass_watch &&
+      imt_sealing::Available() && narrowed_references::Available();
   abilities.batch_interfaces = interfaces && interfaces->Available();
   abilities.interface_abstract_methods =
       (snapshot.live.access & evolution::kAccInterface) && abilities.member_mapping &&
@@ -180,6 +182,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     Diagnose(incoming.descriptor + ": " + error, true);
     return false;
   }
+  context->narrowing |= decision.interfaces_removed;
   // Hand the accepted decision to the hooks on ART's transaction. When ART's
   // own mapping cannot commit the change, a later probe failure in this
   // transaction must reject it before ART's no-failure point.
@@ -286,7 +289,8 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
   if (ARTDCEVM_FAULT_IF(3, (interfaces && interfaces->IsTarget(self)) && data->Classes(true)))
     return context->Reject(self, JVMTI_ERROR_OUT_OF_MEMORY, named("injected instance allocation failure"));
   const Batch* batch = BatchOf(context);
-  if (batch && batch->subclass_loaded && batch->subclass_loaded->load())
+  if (batch && ((batch->subclass_loaded && batch->subclass_loaded->load()) ||
+                (context->narrowing && batch->any_class_loaded && batch->any_class_loaded->load())))
     return context->Reject(self, JVMTI_ERROR_INTERNAL,
         named("a subtype of a redefined class was loaded during the transaction"));
   using Function = bool (*)(ClassRedefinitionPrefix*, RedefinitionDataIter*);
@@ -314,6 +318,9 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
         !member_mapping::CheckDefaultConflicts(*data, &rejection))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                              std::move(rejection));
+    if (context->narrowing && !narrowed_references::Plan(*thread, self, *data, selected, &why))
+      return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                             named(("interface reference cleanup cannot be planned: " + why).c_str()));
     if (!proxy_relink::Plan(*thread, self, *data, selected, &why))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                              named(("Proxy implementation cannot be relinked: " + why).c_str()));

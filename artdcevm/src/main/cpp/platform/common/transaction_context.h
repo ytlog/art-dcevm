@@ -69,6 +69,8 @@ struct Context {
   std::unique_ptr<Part> dispatch;  // Pending interface dispatch obligations.
   std::unique_ptr<Part> verification;  // Current verification redirection scope.
   std::unique_ptr<Part> thread;  // Native-probed runtime thread services.
+  std::unique_ptr<Part> references;  // Planned JBR instance-reference compatibility.
+  bool narrowing = false;  // Actual accepted input removes an interface.
   std::unique_ptr<Part> proxies;  // Proxy classes of interface targets (proxy_relink.h).
   // Source-declared class layouts (class_layout.h) that every probe of this
   // transaction accepted, as a mask over the layout table; `probed` once any

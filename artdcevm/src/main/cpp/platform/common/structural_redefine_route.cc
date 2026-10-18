@@ -6,6 +6,7 @@
 #include "platform/common/art_hook.h"
 #include "platform/common/fault_injection.h"
 #include "platform/common/runtime_thread.h"
+#include "platform/common/narrowed_references.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/verification_redirect.h"
 
@@ -38,15 +39,17 @@ void RecordRetiredKinds(JNIEnv* jni, jclass klass, const std::vector<evolution::
 // reports after the engine's snapshot, on any thread.
 struct Watch {
   std::vector<jobject> targets;  // Global references.
-  std::atomic<bool> subclass_loaded{false};
+  std::atomic<bool> subclass_loaded{false}, any_class_prepared{false};
 };
 void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) noexcept {
   std::lock_guard<std::mutex> lock(process->watch_mutex);
-  for (Watch* watch : process->watches)
+  for (Watch* watch : process->watches) {
+    watch->any_class_prepared = true;
     for (jobject target : watch->targets)
       if (!jni->IsSameObject(klass, target) &&
           jni->IsAssignableFrom(klass, static_cast<jclass>(target)))
         watch->subclass_loaded = true;
+  }
 }
 
 // Registers a watch for one transaction attempt. Attempts are serialized by
@@ -68,6 +71,7 @@ class WatchScope {
     }
     if (first) process->snapshot_env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
     BatchOf(context)->subclass_loaded = &watch_.subclass_loaded;
+    BatchOf(context)->any_class_loaded = &watch_.any_class_prepared;
   }
   ~WatchScope() {
     if (!process->capabilities.subclass_watch) return;
@@ -83,6 +87,7 @@ class WatchScope {
   WatchScope(const WatchScope&) = delete;
   WatchScope& operator=(const WatchScope&) = delete;
   bool SubclassLoaded() const { return watch_.subclass_loaded; }
+  bool AnyClassPrepared() const { return watch_.any_class_prepared; }
 
  private:
   JNIEnv* jni_;
@@ -372,6 +377,9 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     process->snapshot_env->Deallocate(reinterpret_cast<unsigned char*>(direct));
     context->affected_types.push_back(std::move(type));
   }
+  std::string reference_error;
+  result = narrowed_references::Capture(process->snapshot_env, jni, loaded.count, loaded.classes, &reference_error);
+  if (result != JVMTI_ERROR_NONE) { Diagnose(reference_error, true); return result; }
   if (process->capabilities.retirement) {
     // Build the permanent roots while Native, before ART's no-failure point.
     // Root all affected loaded subclasses: each replacement ClassExt retains
@@ -388,7 +396,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
   }
   ARTDCEVM_TEST(fault_injection::SnapshotFinished(loaded_start, count, loaded.count));
   result = InvokeStructural(env, count, definitions, context);
-  *subclass_loaded = watch.SubclassLoaded();
+  *subclass_loaded = watch.SubclassLoaded() || (context->narrowing && watch.AnyClassPrepared());
   return result;
 }
 

@@ -57,6 +57,7 @@ import com.github.ytlog.artdcevm.fixture.SuperSubject;
 import com.github.ytlog.artdcevm.fixture.ThreadSubclassFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceRemovalFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractRemovalFixture;
+import com.github.ytlog.artdcevm.fixture.NarrowedReferenceFixture;
 import com.github.ytlog.artdcevm.fixture.ProxyFixture;
 import com.github.ytlog.artdcevm.fixture.ProxyGroupFixture;
 import com.github.ytlog.artdcevm.fixture.StaticNarrowingFixture;
@@ -161,6 +162,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
             else if ("thread-subclass".equals(isolated)) runThreadSubclassScenario();
+            else if ("narrowed-reference-method".equals(isolated)) {
+                runNarrowedReferenceScenarios("method");
+            }
             else if ("interface-removal".equals(isolated)) {
                 runInterfaceRemovalBatchScenario();
                 runInterfaceRemovalScenarios();
@@ -676,7 +680,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("childRemoved", false, InterfaceRemovalFixture.Removed.class.isInstance(child));
             scenario.check("childKept", 22, InterfaceRemovalFixture.kept(child));
             scenario.check("childFailures", times, InterfaceRemovalFixture.failures(child, times));
-            scenario.expectError("bootDispatch", IncompatibleClassChangeError.class, thread::run);
+            thread.run();
+            scenario.check("bootDispatch", true, true);
             scenario.check("runAfter", 1, task.runs);
             ((InterfaceRemovalFixture.Spinner) (Object) task).spin9();
             scenario.check("spins", 1, task.spins);
@@ -720,9 +725,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("lateFailures", 0, InterfaceRemovalFixture.failures(lateSubject, times));
             scenario.check("lateOwn", 33, ((InterfaceRemovalFixture.Late) lateChild[0]).late22());
             thread.run();
-            scenario.check("runRestored", 2, task.runs);
+            scenario.check("runRestored", 1, task.runs);
+            new Thread(task).run();
+            scenario.check("freshRunRestored", 2, task.runs);
         });
         runAbstractRemovalScenarios();
+        runNarrowedReferenceScenarios("remove", "body", "method", "structural", "static", "interface");
     }
 
     private void runAbstractRemovalScenarios() throws Exception {
@@ -734,11 +742,15 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         Class<?>[] batch = {AbstractRemovalFixture.Subject.class, AbstractRemovalFixture.Task.class};
         AbstractRemovalFixture.Subject[] late = new AbstractRemovalFixture.Subject[1];
         runScenario("abstract-removal-abort", 110, scenario -> {
+            long visits = InterfaceAbortInstrumentation.referenceCleanupVisits();
             scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
             scenario.expectRejectionBy(AbstractRemovalFixture.Subject.class);
             scenario.redefine(batch, "abstract-remove", "abstract-remove");
             scenario.check("stillImplements", true, AbstractRemovalFixture.Removed.class.isInstance(existing));
             scenario.check("failures", 0, AbstractRemovalFixture.failures(existing, times));
+            scenario.check("noCleanup", true, visits == InterfaceAbortInstrumentation.referenceCleanupVisits());
+            before.run();
+            scenario.check("threadStillHeld", 2, existingTask.runs);
         });
         runScenario("abstract-removal", 0, scenario -> {
             scenario.check("lateLoadedBefore", false, StandardJvmtiClient.isLoaded(
@@ -769,8 +781,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             }
             scenario.check("lateBootFailures", times, bootFailures);
             scenario.check("lateSpins", 0, lateTask.spins);
-            scenario.expectError("existingBootDispatch", IncompatibleClassChangeError.class, before::run);
-            scenario.check("existingRuns", 1, existingTask.runs);
+            before.run();
+            scenario.check("existingBootDispatch", true, true);
+            scenario.check("existingRuns", 2, existingTask.runs);
         });
         runScenario("abstract-removal-repeat", 0, scenario -> {
             scenario.redefine(new Class<?>[]{AbstractRemovalFixture.Subject.class}, "abstract-remove-again");
@@ -789,6 +802,75 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.redefine(new Class<?>[]{AbstractRemovalFixture.Subject.class}, "abstract-remove-original");
             scenario.check("existingFailures", 0, AbstractRemovalFixture.failures(existing, times));
             scenario.check("lateFailures", 0, AbstractRemovalFixture.failures(late[0], times));
+        });
+    }
+
+    private void runNarrowedReferenceScenarios(String... modes) throws Exception {
+        for (String mode : modes) {
+            NarrowedReferenceFixture.Subject value = new NarrowedReferenceFixture.Subject();
+            NarrowedReferenceFixture.Direct direct = new NarrowedReferenceFixture.Direct();
+            NarrowedReferenceFixture.Indirect indirect = new NarrowedReferenceFixture.Indirect();
+            NarrowedReferenceFixture.Holder holder = new NarrowedReferenceFixture.HolderChild();
+            value.self = value; value.direct = direct; value.indirect = indirect; value.retained = value;
+            holder.removed = value; holder.direct = direct; holder.inherited = new NarrowedReferenceFixture.Inherited();
+            holder.indirect = indirect; holder.kept = value; holder.object = value;
+            runScenario("narrowed-reference-" + mode, 0, scenario -> {
+                long visits = InterfaceAbortInstrumentation.referenceCleanupVisits();
+                long clears = InterfaceAbortInstrumentation.referenceCleanupClears();
+                if ("remove".equals(mode))
+                    scenario.redefine(new Class<?>[]{NarrowedReferenceFixture.Subject.class}, "narrowed-reference-remove");
+                else if ("interface".equals(mode))
+                    scenario.redefine(new Class<?>[]{NarrowedReferenceFixture.Subject.class, NarrowedReferenceFixture.Kept.class},
+                            "narrowed-reference-interface", "narrowed-reference-interface");
+                else scenario.redefine(new Class<?>[]{NarrowedReferenceFixture.Subject.class, NarrowedReferenceFixture.Holder.class},
+                        "narrowed-reference-" + mode, "narrowed-reference-" + mode);
+                scenario.check("self", true, "interface".equals(mode) ? value.self == null : value.self == value);
+                scenario.check("selfDirect", true, value.direct == direct);
+                scenario.check("selfIndirect", true, "interface".equals(mode) ? value.indirect == null : value.indirect == indirect);
+                scenario.check("selfKept", true, value.retained == value);
+                scenario.check("holder", !("body".equals(mode) || "method".equals(mode)), holder.removed == null);
+                scenario.check("holderDirect", true, holder.direct == direct);
+                scenario.check("holderInherited", true, holder.inherited != null);
+                scenario.check("holderIndirect", !("body".equals(mode) || "method".equals(mode)), holder.indirect == null);
+                scenario.check("holderKept", true, holder.kept == value);
+                scenario.check("holderObject", true, holder.object == value);
+                if ("method".equals(mode)) {
+                    scenario.check("addedMethod", 7, NarrowedReferenceFixture.Holder.class.getMethod("addedMethod").invoke(holder));
+                    scenario.check("staticMarker", 9, NarrowedReferenceFixture.Holder.staticMarker);
+                }
+                scenario.result.put("cleanupVisits", InterfaceAbortInstrumentation.referenceCleanupVisits() - visits);
+                scenario.result.put("cleanupClears", InterfaceAbortInstrumentation.referenceCleanupClears() - clears);
+                scenario.check("visited", !("body".equals(mode) || "method".equals(mode)),
+                        InterfaceAbortInstrumentation.referenceCleanupVisits() > visits);
+                scenario.check("cleared", !("body".equals(mode) || "method".equals(mode)),
+                        InterfaceAbortInstrumentation.referenceCleanupClears() > clears);
+                Runtime.getRuntime().gc();
+                scenario.check("afterGc", true, holder.object == value);
+            });
+            runScenario("narrowed-reference-" + mode + "-restore", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{NarrowedReferenceFixture.Subject.class, NarrowedReferenceFixture.Holder.class, NarrowedReferenceFixture.Kept.class},
+                        "narrowed-reference-original", "narrowed-reference-original", "narrowed-reference-original");
+                scenario.check("restored", true, NarrowedReferenceFixture.Removed.class.isInstance(value));
+            });
+        }
+        if (modes.length == 1) return;
+        NarrowedReferenceFixture.Subject subject = new NarrowedReferenceFixture.Subject();
+        runScenario("narrowed-reference-late-holder", 0, scenario -> {
+            scenario.check("notLoaded", false, StandardJvmtiClient.isLoaded(
+                    "Lcom/github/ytlog/artdcevm/fixture/NarrowedReferenceFixture$LateHolder;"));
+            long retries = DcevmRuntime.capabilities().getLong("subclassLoadRetries");
+            scenario.check("hook", 0, StandardJvmtiClient.setClassFileLoads(
+                    NarrowedReferenceFixture.Subject.class.getName().replace('.', '/'),
+                    NarrowedReferenceFixture.Subject.class.getClassLoader(),
+                    new String[]{"com.github.ytlog.artdcevm.fixture.NarrowedReferenceFixture$LateHolder"}));
+            try { scenario.redefine(new Class<?>[]{NarrowedReferenceFixture.Subject.class}, "narrowed-reference-remove"); }
+            finally { StandardJvmtiClient.setClassFileLoads(null, null, null); }
+            scenario.check("retried", 1L, DcevmRuntime.capabilities().getLong("subclassLoadRetries") - retries);
+            scenario.check("removed", false, NarrowedReferenceFixture.Removed.class.isInstance(subject));
+        });
+        runScenario("narrowed-reference-late-holder-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{NarrowedReferenceFixture.Subject.class}, "narrowed-reference-original");
+            scenario.check("restored", true, NarrowedReferenceFixture.Removed.class.isInstance(subject));
         });
     }
 
