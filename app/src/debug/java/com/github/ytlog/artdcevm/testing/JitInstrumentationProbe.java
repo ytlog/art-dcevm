@@ -13,8 +13,10 @@ final class JitInstrumentationProbe {
     static native int cycleJvmti();
     static native String blockers();
 
+    static void load() { System.loadLibrary("artdcevm_jit_probe"); }
+
     static void attach(Context context) throws Exception {
-        Debug.attachJvmtiAgent("libartdcevm_bench.so", null, context.getClassLoader());
+        Debug.attachJvmtiAgent("libartdcevm_jit_probe.so", null, context.getClassLoader());
     }
 
     static JSONObject state() throws Exception {

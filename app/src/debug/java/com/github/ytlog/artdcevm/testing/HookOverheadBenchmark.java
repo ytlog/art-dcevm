@@ -173,6 +173,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
         }
         if (client) StandardJvmtiClient.attach(context);
         if (!probe.equals("none")) {
+            JitInstrumentationProbe.load();
             int code = JitInstrumentationProbe.install();
             if (code != 0) throw new AssertionError("Cannot install ART 13 probe: " + code);
             if (probe.equals("jvmti")) JitInstrumentationProbe.attach(context);
