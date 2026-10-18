@@ -71,6 +71,19 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureCh
   return checked == (enabled != 0) ? JVMTI_ERROR_NONE : JVMTI_ERROR_INTERNAL;
 }
 extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_suspendJit(JNIEnv*, jclass) {
+  // Test-only process configuration for interpreter measurements. The fixed
+  // jit.h declaration holds one bool; this suspension is never ended, so the
+  // JIT workers stay stopped for the rest of the process.
+  using namespace symbols;
+  constexpr NamedSymbol suspend{Library::kArt, "_ZN3art3jit16ScopedJitSuspendC1Ev", SymbolTable::kAnyNamed};
+  alignas(16) static unsigned char scope[16];
+  auto construct = reinterpret_cast<void (*)(void*)>(Find(suspend));
+  if (!construct) return JVMTI_ERROR_NOT_AVAILABLE;
+  construct(scope);
+  return scope[0] ? JVMTI_ERROR_NONE : JVMTI_ERROR_NOT_AVAILABLE;  // was_on_: a JIT was running.
+}
+extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_primePointerId(
     JNIEnv* jni, jclass, jclass klass, jint kind) {
   // Called before agent initialization. ART may create its own marker when

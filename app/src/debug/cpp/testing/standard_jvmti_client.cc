@@ -279,9 +279,8 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_addToClassLoader(
   return result;
 }
 
-extern "C" JNIEXPORT jint JNICALL
-Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefine(
-    JNIEnv* jni, jclass, jobjectArray classes, jobjectArray dexes) {
+namespace {
+jint Redefine(JNIEnv* jni, jobjectArray classes, jobjectArray dexes, bool structural) {
   if (!client_env) return JVMTI_ERROR_INVALID_ENVIRONMENT;
   if (!classes || !dexes) return JVMTI_ERROR_NULL_POINTER;
   const jint count = jni->GetArrayLength(classes);
@@ -298,7 +297,24 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefine(
     jni->DeleteLocalRef(bytes);
     batch.push_back({klass, size, buffers[i].data()});
   }
-  return client_env->RedefineClasses(count, batch.data());
+  if (!structural) return client_env->RedefineClasses(count, batch.data());
+  static const jvmtiExtensionFunction redefine =
+      FindExtension("com.android.art.class.structurally_redefine_classes");
+  return redefine ? redefine(client_env, count, batch.data()) : JVMTI_ERROR_NOT_AVAILABLE;
+}
+}  // namespace
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefine(
+    JNIEnv* jni, jclass, jobjectArray classes, jobjectArray dexes) {
+  return Redefine(jni, classes, dexes, false);
+}
+
+// ART's own structural extension, bypassing the standard entry the engine routes.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_redefineStructurally(
+    JNIEnv* jni, jclass, jobjectArray classes, jobjectArray dexes) {
+  return Redefine(jni, classes, dexes, true);
 }
 
 extern "C" JNIEXPORT void JNICALL

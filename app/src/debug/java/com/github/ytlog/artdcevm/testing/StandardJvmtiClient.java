@@ -24,6 +24,8 @@ final class StandardJvmtiClient {
     static native int addToClassLoader(ClassLoader loader, String path);
     /** Standard JVMTI RedefineClasses on the whole batch; returns the JVMTI error code. */
     static native int redefine(Class<?>[] classes, byte[][] dexes);
+    /** ART's com.android.art.class.structurally_redefine_classes extension on the batch. */
+    static native int redefineStructurally(Class<?>[] classes, byte[][] dexes);
 
     /** Resolve IDs before redefinition; invocation deliberately retains those exact IDs. */
     static native void cacheMethodIds(Class<?> type);

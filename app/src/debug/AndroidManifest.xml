@@ -9,4 +9,9 @@
       android:targetPackage="dev.artdcevm.lab"
       android:label="Interface abort regression"
       android:functionalTest="true"/>
+  <instrumentation
+      android:name="com.github.ytlog.artdcevm.testing.HookOverheadBenchmark"
+      android:targetPackage="dev.artdcevm.lab"
+      android:label="Resident hook overhead benchmark"
+      android:functionalTest="true"/>
 </manifest>
