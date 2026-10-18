@@ -71,7 +71,8 @@ SCENARIOS = (
     ("interface-kind-abstract", ["interface-kind-abstract", "interface-kind-abstract"], 0),
     ("interface-parent-missing", ["interface-parent-missing"], 63),
     ("interface-parent-add", ["interface-parent-add", "interface-parent-add"], 0),
-    ("interface-parent-remove", ["interface-parent-original"], 66),
+    ("interface-parent-remove", ["interface-parent-original"], 0),
+    ("interface-parent-readd", ["interface-parent-add", "interface-parent-add"], 0),
     ("interface-parent-batch", ["interface-parent-batch", "interface-parent-batch"], 0),
     ("interface-parent-rebuilt", ["interface-parent-rebuilt", "interface-parent-rebuilt"], 0),
     ("interface-access", ["interface-access"], 0),
@@ -172,6 +173,8 @@ SCENARIOS = (
     ("interface-removal-batched", ["interface-remove", "interface-remove"], 66),
     ("proxy-interface", ["proxy-api-add"], 0),
     ("proxy-interface-restore", ["proxy-api-original"], 0),
+    ("interface-drop-parent", ["parent-remove"], 0),
+    ("interface-drop-parent-restore", ["parent-remove-original"], 0),
     ("interface-hidden", ["interface-hidden"], 62),
     ("interface-class", ["interface-class"], 62),
     ("interface-missing", ["interface-missing"], 62),
@@ -224,7 +227,7 @@ MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","mult
                     "interface-kind-default", "interface-kind-abstract", "interface-parent-add",
                     "interface-access", "interface-access-restore", "method-descriptive-flags",
                     "interface-kind-static", "interface-kind-static-restore",
-                    "interface-parent-batch", "interface-parent-rebuilt",
+                    "interface-parent-batch", "interface-parent-rebuilt", "interface-parent-remove", "interface-parent-readd",
                     "kind-instance-batch", "kind-private",
                     "interface-batch-unrelated", "interface-batch-after-rejection", "interface-batch-unrelated-reverse",
                     "interface-default-body", "copied-default-add", "interface-stress", "interface-add", "super-widen", "super-batch-child", "super-chain-body",
@@ -234,7 +237,8 @@ MAPPED_SCENARIOS.update({'interface-members-delete', 'interface-members-signatur
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS
                         if name.startswith("interface-abstract-") and code == 0)
 MAPPED_SCENARIOS.update({"interface-remove", "interface-removal", "interface-removal-restore",
-                         "proxy-interface", "proxy-interface-restore"})
+                         "proxy-interface", "proxy-interface-restore",
+                         "interface-drop-parent", "interface-drop-parent-restore"})
 VAR_HANDLE_API = 33
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
@@ -493,7 +497,9 @@ REQUIRED_CHECKS = {
     "interface-parent-add": {"contractExtends": True, "instanceIsParent": True, "parentRequired": 41,
         "parentDefault": 21, "completeRequired": 31, "completeDefault": 21, "newRequired": 41, "value": 12,
         "marker": 9, "parentAfterGc": 41},
-    "interface-parent-remove": {"rejectionReason": True, "stillParent": True, "value": 12},
+    "interface-parent-remove": {"notParent": False, "instanceIsParent": False,
+                                "cast": "java.lang.ClassCastException", "value": 11, "marker": 9},
+    "interface-parent-readd": {"contractExtends": True, "instanceIsParent": True, "parentRequired": 41, "value": 12},
     "interface-parent-batch": {"plainIsParent": True, "plainRequired": 51, "plainDefault": 22,
         "implementationDefault": 22, "plainDefaultAfterGc": 22},
     "interface-parent-rebuilt": {"extraLoaded": True, "instanceIsExtra": True, "extraDefault": 32, "value": 13,
@@ -645,7 +651,7 @@ UNCHANGED_CHECKS = {
     "interface-batch-unrelated-invalid": ("unchangedInterface", "unchangedUnrelated"),
     **{"nested-interface-" + variant: ("unchangedMembers",)
        for variant in ("add", "modifiers", "parents")},
-    **{"interface-parent-" + variant: ("unchangedMembers",) for variant in ("missing", "remove")},
+    **{"interface-parent-" + variant: ("unchangedMembers",) for variant in ("missing", "readd")},
     "atomic-modifier-public-class-interface": ("unchangedModifierMembers", "unchangedMembers"),
     "class-nonfinal": ("unchangedMembers",),
     "class-abstract-instances": ("unchangedMembers",),
@@ -674,6 +680,13 @@ REQUIRED_CHECKS["proxy-interface"] = {
     "added": "java.lang.AbstractMethodError", "extra": 40, "freshSameClass": True, "freshGet": 5, "afterGc": 5}
 REQUIRED_CHECKS["proxy-interface-restore"] = {
     "get": 5, "handlerSeesNewMethod": True, "removed": 6, "twice": 77, "sum": 5 * PROXY_TIMES}
+PARENT_TIMES = 200_000
+REQUIRED_CHECKS["interface-drop-parent"] = {
+    "warmedUp": 0, "defaultBefore": 7, "parents": 0, "isBase": False, "isChild": True, "child": 12, "side": 22,
+    "viaChild": "java.lang.IncompatibleClassChangeError", "compiledFailures": PARENT_TIMES,
+    "copiedDefault": "java.lang.NoSuchMethodError", "afterGc": 12}
+REQUIRED_CHECKS["interface-drop-parent-restore"] = {
+    "isBase": True, "viaChild": 11, "compiledFailures": 0, "copiedDefault": 7, "side": 22}
 REQUIRED_CHECKS["interface-removal-batched"] = {"stillRemoved": True, "viaRemoved": 11}
 REQUIRED_CHECKS["interface-removal"] = {
     "warmedUp": 0, "runBefore": 1, "lateLoadedBefore": False, "removed": False, "marker": 5, "kept": 22,
@@ -892,6 +905,8 @@ def scenario_sequence(scenario_group):
         return tuple(item for item in SCENARIOS if item[0] == "thread-subclass")
     if scenario_group == "proxy-interface":
         return tuple(item for item in SCENARIOS if item[0].startswith("proxy-interface"))
+    if scenario_group == "interface-drop-parent":
+        return tuple(item for item in SCENARIOS if item[0].startswith("interface-drop-parent"))
     if scenario_group == "interface-removal":
         return tuple(item for item in SCENARIOS if item[0] in ("interface-removal", "interface-removal-restore"))
     if scenario_group == "ordinary":
@@ -1068,7 +1083,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "proxy-interface"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "proxy-interface", "interface-drop-parent"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
                         help="Select and verify the Debug process JNI mode before engine installation")

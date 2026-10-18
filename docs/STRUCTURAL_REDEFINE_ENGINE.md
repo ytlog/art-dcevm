@@ -141,7 +141,7 @@ Thread 布局表位于 `platform/abi/arm64/runtime_thread_table.h`，编译期�
 
 ## 接口成员演进
 
-Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 的 arm64 接口目标在运行时与成员映射探测通过后，支持新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法，已有 public 实例方法在 abstract 与 default 之间切换，静态字段的增删与改类型，以及新增父接口。新增 native 以 63 拒绝；新增 `<clinit>` 与普通类一样接受但不会在已初始化的接口上执行；字段修饰符、移除父接口与其余方法修饰符变化仍分别拒绝 64、66、71。
+Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 的 arm64 接口目标在运行时与成员映射探测通过后，支持新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法，已有 public 实例方法在 abstract 与 default 之间切换，静态字段的增删与改类型，以及新增或移除父接口（移除见[移除接口](#移除接口)）。新增 native 以 63 拒绝；新增 `<clinit>` 与普通类一样接受但不会在已初始化的接口上执行；字段修饰符与其余方法修饰符变化仍分别拒绝 64、71。
 
 删除的 default/abstract 声明按普通退役映射到自身；重链接后的实现类不再携带的 copied default/miranda 走现有“消失的 copied 方法映射到声明类的 canonical 成员”路径，canonical 即已退役的旧声明，因此 DexCache 清除、重新解析抛 `NoSuchMethodError`，JNI、反射与 MethodHandle 由现有守卫拒绝。default 改为 abstract 复用新增 abstract 的待验证条件与 IfTable 验收；abstract 改为 default 复用新增 default 的 `subtype_shadows` 检查，冲突仍由映射计划拒绝。字段沿用普通类的字段退役与静态字段复制；接口在准入时已初始化，新增静态字段取默认值。
 
@@ -184,7 +184,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 接口目标的方法体更新 | 接受；需接口运行时探测与成员映射通过 |
 | 接口目标新增 public abstract/default/static/private 实例方法；删除或改签名任一方法；public 实例方法 abstract ↔ default；静态字段增删或改类型 | 成员映射与接口运行时可用、且继承／遮蔽／default 冲突与 abstract 分派检查通过时接受 |
 | 接口目标新增 native；新增 abstract 无有效实现或 IfTable 探测不通过；direct 遮蔽或 default 冲突 | 拒绝 `METHOD_ADDED`（63） |
-| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；移除父接口或新父接口方法遮蔽检查失败；类种类变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
+| 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；新父接口方法遮蔽检查失败；类种类变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
 | 接口运行时能力不可用（版本、命名服务或探测不支持） | 拒绝 `NOT_AVAILABLE`（98）；声明变化使用上述标准错误码 |
 | 新增字段、方法 | 接受 |
 | 已有成员的访问级别、final、volatile、transient、synchronized 变化（实例方法改为 private 除外）；Java → native；abstract ↔ concrete | 接受 |
@@ -198,7 +198,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 类的可见性、final、abstract、synthetic 或 InnerClass 标志变化 | 接受并走结构路径；加 final 而有已加载子类时拒绝 `CLASS_MODIFIERS_CHANGED`（70）；加 abstract 而该类自身仍有实例时，在 `CollectAndCreateNewInstances` 之后拒绝 70 |
 | 类在接口、注解、枚举之间变化 | 拒绝 70 |
 | 新增接口（可同时调整顺序） | 运行时标志可读取且解析与访问检查通过时接受，普通类不单独依赖成员映射，接口目标需要；该接口本身或其父接口同批重建时先完成该重建并链接其替换类；无法解析、不是接口或不可访问时拒绝 `FAILS_VERIFICATION`（62）；没有可用布局读取标志时拒绝 `HIERARCHY_CHANGED`（66）；使用自有映射时新产生的 default 冲突拒绝 63 |
-| 移除接口；重复接口 | 普通类在成员映射与分派封闭可用时接受，见[移除接口](#移除接口)；接口目标移除父接口、目标属于本批的接口组，或上述服务不可用时拒绝 66；重复拒绝 62 |
+| 移除接口；重复接口 | 普通类与接口目标（移除父接口）在成员映射与分派封闭可用时接受，见[移除接口](#移除接口)；普通类属于本批的接口组，或上述服务不可用时拒绝 66；重复拒绝 62 |
 | 父类变化 | 新父类扩展原父类时接受；其余按[放宽的父类变化](#放宽的父类变化)中的条件以 62、61 或 66 拒绝 |
 
 ## 运行时探测
@@ -309,7 +309,8 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 - **布局**：11–17 的 `Class::ImtPtrOffset` 都是 `RoundUp(sizeof(Class) + 4, 8)`，`sizeof(Class)` 来自各版本固定声明（11–16 以 `virtual_methods_offset_` 结尾，17 以 `status_` 结尾）。写入前核对嵌入 vtable 长度落在类大小之内、每个自有或拷贝的虚方法位于其 `method_index` 处，以及 IMT 每个槽位非空；不符时以 66 拒绝。LinearAlloc 分配使用命名 `LinearAlloc::Alloc`，ART 14 起的版本带 `LinearAllocKind::kNoGCRoots`。
 - **之后加载的子类**：11–17 的 `LinkClass` 从父类的 IMT 开始（`FillImtFromSuperClass`／`LinkMethods`），只对子类新实现所在的槽位调用 `SetIMTRef`。这些槽位已是运行时方法，结果为冲突方法，不会出现直接项；未重新设置的槽位沿用父类的冲突方法，其查找结果对子类同样成立。抽象类没有 IMT，它之后才加载的具体子类从 IfTable 重建 IMT，仍可能出现直接项，见[风险](#风险)。
 - **成员**：被移除接口的 copied default/miranda 从重链接的类中消失，沿用“消失的 copied 方法映射到声明类的 canonical 成员”路径，旧 `invoke-virtual` 重新解析时抛 `NoSuchMethodError`。因此移除需要自有成员映射。
-- **拒绝**：接口目标移除父接口仍为 66；目标属于本批某个接口组（实现了同批重建的接口，或是组成员的父类）时 66，因为接口组自行分配这些类而不封闭分派；成员映射或封闭服务不可用时 66。
+- **接口目标移除父接口**：接口 L 不再继承 M 时，L 的整个重建组（子接口、实现类及其子类）失去 M。接口组的替换类保存在拥有者条目的数组中，未必是 L 的条目，因此事务中只要有目标收窄，每个条目的替换类都被封闭；没有类数组的条目跳过。有 Proxy 实现类时仍以 66 拒绝（见 [Proxy 实现类](#proxy-实现类)）。
+- **拒绝**：普通类目标属于本批某个接口组（实现了同批重建的接口，或是组成员的父类）时 66，因为接口组自行分配这些类而不封闭分派；成员映射或封闭服务不可用时 66。
 - **已有引用**：字段、数组与局部变量中以 L 类型保存的 T 实例保持不变，经它们调用 L 的方法抛 `IncompatibleClassChangeError`。JBR 还会把被重定义类中声明为被移除接口类型、值已不兼容的字段置 null，本引擎尚未实现这一步。
 - **边界**：非 CheckJNI 的 JNI 调用与 `MethodHandle` 以不实现 L 的接收者调用 L 的方法时，ART 找不到实现即进入未定义行为，与 JVM 上对应的误用相同。
 

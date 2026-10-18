@@ -482,6 +482,17 @@ int main(int argc, char** argv) {
         auto sealing = abilities; sealing.interface_removal = true;
         Require(policy::Evaluate(parent, contract, {}, sealing).error ==
                 JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "interface parent removal with sealing");
+        if (mapped) {
+          // With the interface engine, an interface may drop a parent for its
+          // whole implementation group, whose dispatch the engine seals.
+          auto members = sealing; members.interface_members = true;
+          const auto dropped = policy::Evaluate(parent, contract, {}, members);
+          Require(dropped.error == JVMTI_ERROR_NONE && dropped.interfaces_removed &&
+                  dropped.requires_member_mapping, "interface parent removal with sealing and members");
+          members.interface_removal = false;
+          Require(policy::Evaluate(parent, contract, {}, members).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED, "interface parent removal needs sealing");
+        }
         // An interface's class modifiers evolve like a class's; its kind does not.
         next = contract; next.access |= acc::kAccSynthetic;
         Require(policy::Evaluate(contract, next, {}, abilities).error == JVMTI_ERROR_NONE,

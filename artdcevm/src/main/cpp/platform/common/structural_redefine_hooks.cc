@@ -149,7 +149,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   }
   // An interface group re-links its members and their ancestors in its own
   // allocation, which does not seal interface dispatch.
-  if (decision.error == JVMTI_ERROR_NONE && decision.interfaces_removed &&
+  if (decision.error == JVMTI_ERROR_NONE && decision.interfaces_removed && !interface_target &&
       interfaces && (interfaces->IsAffected(self) || interfaces->SharesImplementationGroup(self))) {
     decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
     decision.reason = "interface removal overlaps an interface group of the batch";
@@ -256,6 +256,11 @@ bool CheckInstances(const runtime_thread::VerifiedThread& thread,
   }
   return true;
 }
+bool SealsDispatch(const transaction::Context& context) {
+  for (const auto& [target, requirements] : context.targets)
+    if (requirements.seal_dispatch) return true;
+  return false;
+}
 bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDataIter* data) noexcept try {
   interface_redefinition::Backend* interfaces = InterfaceBackend();
   auto* context = transaction::Current();
@@ -299,7 +304,10 @@ bool CollectAndCreateNewInstances(ClassRedefinitionPrefix* self, RedefinitionDat
                              named(("Proxy implementation cannot be relinked: " + why).c_str()));
     // Last: every check above may still reject, and only the unpublished
     // replacements change here.
-    if (target && target->seal_dispatch && !imt_sealing::Seal(*thread, self, *data, selected, &why))
+    // An interface group's replacements sit in its owner entry's arrays, which
+    // need not be the entry of the interface that dropped a parent: once any
+    // target of the transaction narrows, every entry's replacements are sealed.
+    if (SealsDispatch(*context) && !imt_sealing::Seal(*thread, self, *data, selected, &why))
       return context->Reject(self, JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                              named(("interface dispatch cannot be sealed: " + why).c_str()));
     class_layout::Select(selected);

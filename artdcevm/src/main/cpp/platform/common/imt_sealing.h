@@ -26,7 +26,8 @@ bool Build(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefi
            void* klass, int selected, void*** table, std::string* why);
 void Publish(void* klass, int selected, void** table);
 // Before ART's no-failure point: seals every concrete replacement class of this
-// redefinition (the target and its loaded subclasses) under the selected layout.
+// redefinition (the target and its loaded subclasses, or an interface group's
+// members) under the selected layout.
 bool Seal(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self,
           const abi::arm64::RedefinitionDataIter& data, int selected, std::string* why);
 }  // namespace artdcevm::imt_sealing

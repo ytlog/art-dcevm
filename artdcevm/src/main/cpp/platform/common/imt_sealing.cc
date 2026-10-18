@@ -173,7 +173,7 @@ void Publish(void* klass, int selected, void** table) { kSealers[selected].publi
 bool Seal(const VerifiedThread& thread, abi::ClassRedefinitionPrefix* self,
           const abi::RedefinitionDataIter& data, int selected, std::string* why) {
   auto* classes = data.Classes(false);
-  if (!classes) return Fail(why, "no replacement classes");
+  if (!classes) return true;  // An interface group's other entries carry no arrays.
   for (int32_t i = 0; i < classes->length; ++i) {
     void* klass = class_layout::Element<void>(thread, classes, i);
     if (!klass) return Fail(why, "missing replacement class");

@@ -98,7 +98,10 @@ Decision CheckInterfaces(const ClassSchema& live, const ClassSchema& incoming,
   Decision decision;
   for (const auto& old : live.interfaces) {
     if (after.count(old)) continue;
-    if ((live.access & acc::kAccInterface) || !abilities.member_mapping || !abilities.interface_removal)
+    // An interface target drops a parent for its whole implementation group,
+    // which the interface engine re-links (interface_members).
+    if (!abilities.member_mapping || !abilities.interface_removal ||
+        ((live.access & acc::kAccInterface) && !abilities.interface_members))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                     "interface removed: " + old);
     decision.interfaces_removed = true;
