@@ -33,6 +33,7 @@ std::string probe_state = "unavailable";
 // Probes over one source-declared class layout.
 struct ProbeOps {
   int android;
+  void (*observe)(const VerifiedThread&, void*, void*);
   bool (*verify_target)(const VerifiedThread&, void* klass, void* class_type, const evolution::ClassSchema& live, std::string* why);
   bool (*verify_iter)(const VerifiedThread&, ClassRedefinitionPrefix* self, const RedefinitionDataIter& data,
                       std::string* why);
@@ -209,8 +210,19 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     *class_def = declared->dex_class_def_index;
     *type = declared->dex_type_index;
   }
+  static void Observe(const VerifiedThread& thread, void* klass, void* class_type) {
+    const auto* ext_field = art.find_instance_field(class_type, "extData", "Ldalvik/system/ClassExt;");
+    if (!ext_field || ext_field->offset != offsetof(Class, ext_data)) return;
+    auto* ext = Heap<abi::Object>(thread, static_cast<Class*>(klass)->ext_data);
+    if (!ext) return;
+    void* type = Heap<void>(thread, ext->klass);
+    const auto* methods = art.find_instance_field(type, "obsoleteMethods", "Ljava/lang/Object;");
+    if (methods)
+      invoke_kind::ObserveClassLayout(offsetof(Class, access_flags), offsetof(Class, dex_cache),
+                                     offsetof(Class, ext_data), methods->offset);
+  }
   static constexpr ProbeOps Make(int android) {
-    return {android, VerifyTarget, VerifyIter, HasInterpreted, KeepInterpreted, Access, Superclass, Origin};
+    return {android, Observe, VerifyTarget, VerifyIter, HasInterpreted, KeepInterpreted, Access, Superclass, Origin};
   }
 };
 
@@ -271,6 +283,7 @@ bool VerifyTarget(const std::optional<VerifiedThread>& thread, ClassRedefinition
   context->probed = true;
   context->layouts &= accepted;
   const int layout = Selected(context);
+  if (layout >= 0) kProbes[layout].observe(*thread, klass, class_type);
   Report(layout >= 0 ? "verified: android" + std::to_string(kProbes[layout].android) + " class layout"
                      : "rejected: " + why);
   return layout >= 0;

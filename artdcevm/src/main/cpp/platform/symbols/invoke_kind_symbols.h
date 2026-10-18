@@ -10,4 +10,12 @@ inline constexpr NamedSymbol kResolveCache{Library::kArt, "_ZN3art11ClassLinker1
 inline constexpr NamedSymbol kResolveMethodId{Library::kArt, "_ZN3art11ClassLinker15ResolveMethodIdEjPNS_9ArtMethodE", SymbolTable::kAnyNamed};
 // nterp.cc. Android 14+ also uses this cache-fill entry in the switch interpreter.
 inline constexpr NamedSymbol kNterpGetMethod{Library::kArt, "NterpGetMethod", SymbolTable::kAnyNamed};
+// entrypoint_utils-inl.h, Android 16--17: switch interpreter invocation selection.
+inline constexpr NamedSymbol kSelectVirtual{Library::kArt, "_ZN3art16FindMethodToCallILNS_10InvokeTypeE2EEEPNS_9ArtMethodEPNS_6ThreadES3_PNS_6ObjPtrINS_6mirror6ObjectEEERKNS_11InstructionEbPb", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kSelectInterface{Library::kArt, "_ZN3art16FindMethodToCallILNS_10InvokeTypeE4EEEPNS_9ArtMethodEPNS_6ThreadES3_PNS_6ObjPtrINS_6mirror6ObjectEEERKNS_11InstructionEbPb", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kMethodDescriptor{Library::kArt, "_ZN3art9ArtMethod27GetDeclaringClassDescriptorEv", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kMethodLoader{Library::kArt, "_ZN3art9ArtMethod14GetClassLoaderEv", SymbolTable::kAnyNamed};
+// art_method.cc: copied obsolete defaults live outside the declaring interface's array.
+inline constexpr NamedSymbol kObsoleteCacheRead{Library::kArt, "_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE0EEENS_6ObjPtrINS_6mirror8DexCacheEEEv", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kObsoleteCacheRaw{Library::kArt, "_ZN3art9ArtMethod19GetObsoleteDexCacheILNS_17ReadBarrierOptionE1EEENS_6ObjPtrINS_6mirror8DexCacheEEEv", SymbolTable::kAnyNamed};
 }  // namespace artdcevm::symbols::invoke_kind

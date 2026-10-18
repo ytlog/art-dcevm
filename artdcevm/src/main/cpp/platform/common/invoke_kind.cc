@@ -1,6 +1,10 @@
 #include "platform/common/invoke_kind.h"
 #include <atomic>
 #include <cstdint>
+#include <cstring>
+#include <mutex>
+#include "platform/common/runtime_roots.h"
+#include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/symbols/invoke_kind_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -21,6 +25,64 @@ void (*throw_exception)(void*, const char*, const char*) = nullptr;
 Nterp original_nterp = nullptr;
 std::atomic<void*> class_linker{nullptr};
 std::atomic<bool> installed{false}, enabled{false};
+// ObjPtr<Object> is one uintptr_t in the fixed release ART declarations.
+using Select = void* (*)(void*, void*, uintptr_t*, const uint16_t*, bool, bool*);
+Select original_virtual = nullptr, original_interface = nullptr;
+const char* (*method_descriptor)(void*) = nullptr;
+uintptr_t (*method_loader)(void*) = nullptr;
+abi::arm64::HandleScopeVisitors scope_visitors;
+std::mutex scope_mutex;
+std::atomic<bool> scope_verified{false};
+const abi::arm64::RuntimeThread* scope_thread_layout = nullptr;
+const abi::arm64::InterfaceRuntime* scope_layout = nullptr;
+using ObsoleteCache = uintptr_t (*)(void*);
+ObsoleteCache original_cache_read = nullptr, original_cache_raw = nullptr;
+void* (*mark)(void*) = nullptr;
+const bool* use_read_barrier = nullptr;
+std::atomic<bool> class_verified{false};
+size_t class_access = 0, class_dex_cache = 0, class_ext_data = 0, ext_obsolete_methods = 0;
+
+template <bool read_barrier>
+uintptr_t Reference(uint32_t reference) {
+  if constexpr (read_barrier)
+    if (reference && *use_read_barrier)
+      return reinterpret_cast<uintptr_t>(mark(reinterpret_cast<void*>(static_cast<uintptr_t>(reference))));
+  return reference;
+}
+
+template <bool read_barrier>
+uintptr_t CopiedObsoleteCache(void* method) noexcept {
+  const auto* prefix = static_cast<abi::arm64::ArtMethodPrefix*>(method);
+  constexpr uint32_t kCopiedObsolete = 0x01000000 | abi::arm64::kAccObsoleteMethod;
+  if (class_verified.load(std::memory_order_acquire) &&
+      (prefix->access_flags.load(std::memory_order_relaxed) & kCopiedObsolete) == kCopiedObsolete) {
+    // Class::Alloc creates nonmoving classes. An old frame roots its retained
+    // declaring interface; ART intentionally does not replace this reference.
+    void* declaring = reinterpret_cast<void*>(static_cast<uintptr_t>(prefix->declaring_class));
+    if (runtime_roots::Field<uint32_t>(declaring, class_access) & 0x00200000) { // kAccObsoleteObject.
+      // A frame from an earlier non-structural redefinition can still be in
+      // ART's normal obsolete map. Preserve that historical DEX selection.
+      void* ext = reinterpret_cast<void*>(Reference<read_barrier>(runtime_roots::Field<uint32_t>(declaring, class_ext_data)));
+      const auto* methods = ext ? reinterpret_cast<const abi::arm64::PointerArray*>(
+          Reference<read_barrier>(runtime_roots::Field<uint32_t>(ext, ext_obsolete_methods))) : nullptr;
+      for (int32_t i = 0; methods && i < methods->length; ++i)
+        if (methods->elements[i] == reinterpret_cast<uintptr_t>(method))
+          return (read_barrier ? original_cache_read : original_cache_raw)(method);
+      // The original structural copy lives outside the interface's method
+      // array, but its code still belongs to this retained interface's DEX.
+      // Match Class::GetDexCache's CC/CMC and no-barrier behavior.
+      return Reference<read_barrier>(runtime_roots::Field<uint32_t>(declaring, class_dex_cache));
+    }
+  }
+  return (read_barrier ? original_cache_read : original_cache_raw)(method);
+}
+
+bool OwnClass(void* caller, void* resolved) {
+  // Class identity includes the defining loader. Obsolete ART class objects
+  // deliberately survive reference replacement, so pointer equality is insufficient.
+  return method_loader(caller) == method_loader(resolved) &&
+      std::strcmp(method_descriptor(caller), method_descriptor(resolved)) == 0;
+}
 
 void* Check(void* self, void* resolved, int type) {
   if (resolved && enabled.load(std::memory_order_acquire)) {
@@ -32,10 +94,8 @@ void* Check(void* self, void* resolved, int type) {
                       "invoke kind changed by structural redefinition");
       return nullptr;
     }
-    // Verified virtual/super/interface sites outside the declaring class lose
-    // access when the declaration becomes private. Do not use its direct-method
-    // index as a vtable/IMT slot. New legal self calls use invoke-direct; active
-    // target frames that can still contain old self calls retain admission 71.
+    // External old sites cannot access a private declaration. The switch
+    // selector below handles obsolete self calls before vtable/IMT selection.
     if ((flags & 0x0002) && (type == 2 || type == 3 || type == 4)) {
       throw_exception(self ? self : current_thread(), "Ljava/lang/IllegalAccessError;",
                       "virtual target became private after structural redefinition");
@@ -76,6 +136,38 @@ uintptr_t GetMethod(void* self, void* caller, const uint16_t* instruction) noexc
   }
   return original_nterp(self, caller, instruction);
 }
+template <int type>
+void* SelectMethod(void* self, void* caller, uintptr_t* receiver,
+                   const uint16_t* instruction, bool lookup_only, bool* string_init) noexcept {
+  Select original = type == 2 ? original_virtual : original_interface;
+  if (!enabled.load(std::memory_order_acquire) || !scope_verified.load(std::memory_order_acquire) ||
+      !class_verified.load(std::memory_order_acquire) || !(static_cast<abi::arm64::ArtMethodPrefix*>(caller)->access_flags.load(std::memory_order_relaxed) &
+        abi::arm64::kAccObsoleteMethod))
+    return original(self, caller, receiver, instruction, lookup_only, string_init);
+  // Match ART's lookup-only contract: never trigger resolution on this path.
+  if (lookup_only) return nullptr;
+  void* resolved;
+  {
+    // ResolveMethodId may suspend. Preserve and refresh the exact ObjPtr local
+    // owned by ART's DoInvoke, using its probed HandleScope representation.
+    runtime_roots::Root root(self, *scope_thread_layout, *scope_layout, receiver);
+    resolved = resolve_method_id(class_linker.load(std::memory_order_acquire), instruction[1], caller);
+  }
+  if (!resolved) return nullptr;
+  const auto flags = static_cast<abi::arm64::ArtMethodPrefix*>(resolved)->access_flags.load(std::memory_order_relaxed);
+  if ((flags & 0x0002) && !(flags & 0x0008) && OwnClass(caller, resolved)) {
+    if (!*receiver) {
+      throw_exception(self, "Ljava/lang/NullPointerException;", "null receiver of obsolete private self call");
+      return nullptr;
+    }
+    // JBR selects the new private body directly, including on an overriding
+    // subclass receiver. A direct method index must never enter the vtable/IMT.
+    return resolved;
+  }
+  if (!Check(self, resolved, type)) return nullptr;
+  return original(self, caller, receiver, instruction, lookup_only, string_init);
+}
+
 }  // namespace
 
 bool Prepare(std::vector<Hook>* hooks) {
@@ -95,6 +187,25 @@ bool Prepare(std::vector<Hook>* hooks) {
   if (void* nterp = symbols::Find(kNterpGetMethod))
     prepared.push_back({nterp, HookAddress(GetMethod), HookSlot(&original_nterp), kNterpGetMethod.name});
   else if (resolve_method_id) return false;
+  // The self-call capability is independent of the older invocation guards.
+  // Missing or partial selection services retain conservative admission 71.
+  void* select_virtual = symbols::Find(kSelectVirtual);
+  void* select_interface = symbols::Find(kSelectInterface);
+  method_descriptor = reinterpret_cast<decltype(method_descriptor)>(symbols::Find(kMethodDescriptor));
+  method_loader = reinterpret_cast<decltype(method_loader)>(symbols::Find(kMethodLoader));
+  scope_visitors.unsigned_ids = reinterpret_cast<abi::arm64::HandleScopeVisitors::Unsigned>(
+      symbols::Find(symbols::interface_redefinition::kHandleScopeVisitRoots));
+  void* cache_read = symbols::Find(kObsoleteCacheRead);
+  void* cache_raw = symbols::Find(kObsoleteCacheRaw);
+  mark = reinterpret_cast<decltype(mark)>(symbols::Find(symbols::runtime_thread::kReadBarrierMark));
+  use_read_barrier = static_cast<const bool*>(symbols::Find(symbols::runtime_thread::kUseReadBarrier));
+  if (resolve_method_id && select_virtual && select_interface && method_descriptor && method_loader &&
+      scope_visitors.unsigned_ids && cache_read && cache_raw && mark && use_read_barrier) {
+    prepared.push_back({cache_read, HookAddress(CopiedObsoleteCache<true>), HookSlot(&original_cache_read), kObsoleteCacheRead.name});
+    prepared.push_back({cache_raw, HookAddress(CopiedObsoleteCache<false>), HookSlot(&original_cache_raw), kObsoleteCacheRaw.name});
+    prepared.push_back({select_virtual, HookAddress(SelectMethod<2>), HookSlot(&original_virtual), kSelectVirtual.name});
+    prepared.push_back({select_interface, HookAddress(SelectMethod<4>), HookSlot(&original_interface), kSelectInterface.name});
+  }
   hooks->insert(hooks->end(), prepared.begin(), prepared.end());
   return true;
 }
@@ -105,6 +216,29 @@ void KeepInterpreted(void* method, uint32_t precompiled_flag) {
   // and abstract methods have no bytecode to preserve in the interpreter.
   if (!(before & (0x80000000 | 0x0100 | 0x0400)))
     flags.store((before & ~precompiled_flag) | abi::arm64::kAccCompileDontBother, std::memory_order_relaxed);
+}
+void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
+                  const abi::arm64::InterfaceRuntime* layout, Handle target) {
+  if (!original_virtual || !original_interface || scope_verified.load(std::memory_order_acquire)) return;
+  if (!runtime_roots::VerifyScopes(*layout, *thread_layout, thread, target, scope_visitors)) return;
+  std::lock_guard<std::mutex> lock(scope_mutex);
+  if (scope_verified.load(std::memory_order_relaxed)) return;
+  scope_thread_layout = thread_layout;
+  scope_layout = layout;
+  scope_verified.store(true, std::memory_order_release);
+}
+void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods) {
+  std::lock_guard<std::mutex> lock(scope_mutex);
+  if (class_verified.load(std::memory_order_relaxed)) return;
+  class_access = access_flags;
+  class_dex_cache = dex_cache;
+  class_ext_data = ext_data;
+  ext_obsolete_methods = obsolete_methods;
+  class_verified.store(true, std::memory_order_release);
+}
+bool SelfCalls() {
+  return installed.load(std::memory_order_acquire) && scope_verified.load(std::memory_order_acquire) &&
+      class_verified.load(std::memory_order_acquire);
 }
 bool Protecting() { return enabled.load(std::memory_order_acquire); }
 void Installed(bool value) { installed.store(value, std::memory_order_release); }

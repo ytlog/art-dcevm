@@ -181,6 +181,28 @@ class ApkVerificationTests(unittest.TestCase):
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group=group)
 
+    def test_obsolete_self_calls_require_release_specific_results(self):
+        for api in (33, 36):
+            report = complete_report(api)
+            names = {item[0] for item in runner.scenario_sequence("method-private")}
+            report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+            runner.validate_report(report, scenario_group="method-private")
+            for kind in ("class", "interface"):
+                changed = next(item for item in report["scenarios"] if item["name"] == "method-private-self-" + kind)
+                self.assertEqual(changed["actualCode"], 0 if api == 36 else 71)
+                override = next(item for item in changed["checks"] if item["name"] == "overrideReceiver")
+                saved = dict(override)
+                override.update(expected=49, actual=49)
+                if api == 36 or kind == "class":
+                    with self.assertRaises(runner.RunFailure):
+                        runner.validate_report(report, scenario_group="method-private")
+                override.update(saved)
+                null = next(item for item in changed["checks"] if item["name"] == "nullReceiver")
+                null.update(expected="java.lang.IllegalAccessError", actual="java.lang.IllegalAccessError")
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report, scenario_group="method-private")
+                null.update(expected="java.lang.NullPointerException", actual="java.lang.NullPointerException")
+
     def test_tool_group_requires_append_and_later_redefinition(self):
         names = {item[0] for item in runner.scenario_sequence("tool")}
         self.assertEqual(names, {"tool-add-classes", "tool-redefine-added"})

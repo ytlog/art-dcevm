@@ -50,6 +50,7 @@ import com.github.ytlog.artdcevm.fixture.PreloadHookSubject;
 import com.github.ytlog.artdcevm.fixture.PreloadSubject;
 import com.github.ytlog.artdcevm.fixture.AccessCaller;
 import com.github.ytlog.artdcevm.fixture.AccessSubject;
+import com.github.ytlog.artdcevm.fixture.PrivateSelfFixture;
 import com.github.ytlog.artdcevm.fixture.AccessCallerBase;
 import com.github.ytlog.artdcevm.fixture.StorageCaller;
 import com.github.ytlog.artdcevm.fixture.StorageSubject;
@@ -3402,6 +3403,78 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
+    private void runPrivateSelfScenarios() throws Exception {
+        boolean supported = Build.VERSION.SDK_INT >= 36;
+        for (int round = 0; round < 2; round++) {
+            for (boolean iface : new boolean[]{false, true}) {
+                PrivateSelfFixture.Subject subject = new PrivateSelfFixture.Subject();
+                PrivateSelfFixture.Child child = new PrivateSelfFixture.Child();
+                PrivateSelfFixture.Impl impl = new PrivateSelfFixture.Impl();
+                PrivateSelfFixture.Override override = new PrivateSelfFixture.Override();
+                Class<?> target = iface ? PrivateSelfFixture.Contract.class : PrivateSelfFixture.Subject.class;
+                String name = "method-private-self-" + (iface ? "interface" : "class") + (round == 0 ? "" : "-again");
+                CountDownLatch open = new CountDownLatch(0);
+                for (int i = 0; i < 30000; i++) {
+                    if ((iface ? impl.await(open, open, 0) : subject.await(open, open, 0)) != (iface ? 11 : 7) ||
+                            (iface ? override.await(open, open, 0) : child.await(open, open, 0)) != (iface ? 49 : 47) ||
+                            (iface ? impl.await(open, open, 1) : subject.await(open, open, 1)) != (iface ? 6 : 11))
+                        throw new AssertionError("self warmup");
+                }
+                CountDownLatch ready = new CountDownLatch(4), resume = new CountDownLatch(1);
+                Thread[] workers = new Thread[4];
+                Object[] results = new Object[4];
+                boolean[] stepping = new boolean[4];
+                boolean singleStep = round == 1;
+                for (int i = 0; i < workers.length; i++) {
+                    final int slot = i;
+                    workers[i] = new Thread(() -> {
+                        try {
+                            stepping[slot] = !singleStep || StandardJvmtiClient.setThreadSingleStep(true) == 0;
+                            int mode = slot == 2 ? 1 : slot == 3 ? 2 : 0;
+                            results[slot] = iface ? (slot == 1 ? override : impl).await(ready, resume, mode)
+                                    : (slot == 1 ? child : subject).await(ready, resume, mode);
+                        } catch (Throwable error) { results[slot] = error.getClass().getName(); }
+                        finally { if (singleStep) stepping[slot] &= StandardJvmtiClient.setThreadSingleStep(false) == 0; }
+                    });
+                    workers[i].start();
+                }
+                try {
+                    if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("self frames not ready");
+                    runScenario(name, supported ? 0 : 71, scenario -> {
+                        scenario.redefine(new Class<?>[]{target}, "method-private-self");
+                        if (!supported)
+                            scenario.check("activeReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("active frame"));
+                        scenario.check("privateKind", supported, Modifier.isPrivate(target.getDeclaredMethod("target").getModifiers()));
+                        System.gc(); resume.countDown();
+                        for (Thread worker : workers) worker.join(10000);
+                        for (int i = 0; i < workers.length; i++) {
+                            scenario.check("completed" + i, true, !workers[i].isAlive());
+                            scenario.check("stepping" + i, true, stepping[i]);
+                        }
+                        scenario.check("self", supported ? (iface ? 31 : 25) : (iface ? 11 : 7), results[0]);
+                        scenario.check("overrideReceiver", supported ? (iface ? 31 : 25) : (iface ? 49 : 47), results[1]);
+                        scenario.check("range", supported ? (iface ? 36 : 41) : (iface ? 6 : 11), results[2]);
+                        scenario.check("nullReceiver", NullPointerException.class.getName(), results[3]);
+                        scenario.check("override", iface ? 49 : 47, iface ? override.target() : child.target());
+                        if (!iface) {
+                            scenario.check("entered", supported ? 3 : 0, PrivateSelfFixture.Subject.entered.get());
+                            scenario.check("value", 5, subject.value);
+                        }
+                    });
+                } finally {
+                    resume.countDown(); for (Thread worker : workers) worker.join(10000);
+                }
+                runScenario(name + "-restore", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{target}, "method-private-self-original");
+                    PrivateSelfFixture.Subject.entered.set(0);
+                    System.gc();
+                    scenario.check("self", iface ? 11 : 7, iface ? impl.await(open, open, 0) : subject.await(open, open, 0));
+                    scenario.check("overrideReceiver", iface ? 49 : 47, iface ? override.await(open, open, 0) : child.await(open, open, 0));
+                });
+            }
+        }
+    }
+
     private void runPrivateCallScenarios() throws Exception {
         AccessSubject subject = new AccessSubject();
         AccessCaller.Child child = new AccessCaller.Child();
@@ -3415,15 +3488,21 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         own.start();
         try {
             if (!selfReady.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("self not ready");
-            runScenario("method-private-active-target", 71, scenario -> {
+            runScenario("method-private-active-target", android.os.Build.VERSION.SDK_INT >= 36 ? 0 : 71, scenario -> {
                 scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private");
-                scenario.check("activeReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("active frame"));
-                scenario.check("publicKind", true, Modifier.isPublic(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
+                if (android.os.Build.VERSION.SDK_INT < 36)
+                    scenario.check("activeReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("active frame"));
+                scenario.check("privateKind", android.os.Build.VERSION.SDK_INT >= 36, Modifier.isPrivate(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
                 selfResume.countDown(); own.join(10000);
                 scenario.check("activeCompleted", true, !own.isAlive());
-                scenario.check("oldSelf", 7, selfResult[0]);
+                scenario.check("oldSelf", android.os.Build.VERSION.SDK_INT >= 36 ? 25 : 7, selfResult[0]);
             });
         } finally { selfResume.countDown(); own.join(10000); }
+        runScenario("method-private-active-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private-original");
+            AccessSubject.entered = 0;
+            scenario.check("restored", 7, subject.callTarget());
+        });
         for (int cycle = 0; cycle < 2; cycle++) {
             String suffix = cycle == 0 ? "" : "-again";
             for (int i = 0; i < 30000; i++) {
@@ -3527,10 +3606,11 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("interface", 11, AccessCaller.interfaceCall(impl));
             scenario.check("virtual", 11, AccessCaller.interfaceVirtual(impl));
         });
+        runPrivateSelfScenarios();
     }
 
     // Invocation guards cover old bytecode, including retired identities re-added
-    // as a different kind. Private target activity retains a separate 71 boundary.
+    // as a different kind. Obsolete self selection requires named runtime services.
     private void runMethodKindChangeScenarios() throws Exception {
         runPrivateCallScenarios();
         StorageSubject subject = new StorageSubject();

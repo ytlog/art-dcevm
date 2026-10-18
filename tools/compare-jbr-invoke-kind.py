@@ -18,6 +18,7 @@ import java.util.concurrent.*;
 import com.github.ytlog.artdcevm.fixture.InvokeKindFixture.*;
 import com.github.ytlog.artdcevm.fixture.InterfaceInvokeKindFixture;
 import com.github.ytlog.artdcevm.fixture.AccessSubject;
+import com.github.ytlog.artdcevm.fixture.PrivateSelfFixture;
 import com.github.ytlog.artdcevm.fixture.AccessCaller;
 import com.github.ytlog.artdcevm.fixture.AccessCallerBase;
 public class InvokeKindOracle {
@@ -42,6 +43,48 @@ public class InvokeKindOracle {
       checks++; return;
     }
     throw new AssertionError(name + " did not throw " + type.getName());
+  }
+  static void privateSelf() throws Exception {
+    for (int round = 0; round < 2; round++) {
+      for (boolean iface : new boolean[]{false, true}) {
+        var subject = new PrivateSelfFixture.Subject(); var child = new PrivateSelfFixture.Child();
+        var impl = new PrivateSelfFixture.Impl(); var over = new PrivateSelfFixture.Override();
+        Class<?> target = iface ? PrivateSelfFixture.Contract.class : PrivateSelfFixture.Subject.class;
+        CountDownLatch open = new CountDownLatch(0);
+        for (int i = 0; i < 30000; i++) {
+          if ((iface ? impl.await(open, open, 0) : subject.await(open, open, 0)) != (iface ? 11 : 7) ||
+              (iface ? over.await(open, open, 0) : child.await(open, open, 0)) != (iface ? 49 : 47) ||
+              (iface ? impl.await(open, open, 1) : subject.await(open, open, 1)) != (iface ? 6 : 11))
+            throw new AssertionError("own warmup");
+        }
+        CountDownLatch ready = new CountDownLatch(4), resume = new CountDownLatch(1);
+        Thread[] workers = new Thread[4]; Object[] results = new Object[4];
+        for (int i = 0; i < workers.length; i++) {
+          final int slot = i;
+          workers[i] = new Thread(() -> {
+            try {
+              int mode = slot == 2 ? 1 : slot == 3 ? 2 : 0;
+              results[slot] = iface ? (slot == 1 ? over : impl).await(ready, resume, mode)
+                  : (slot == 1 ? child : subject).await(ready, resume, mode);
+            } catch (Throwable error) { results[slot] = error.getClass().getName(); }
+          }); workers[i].start();
+        }
+        try {
+          if (!ready.await(10, TimeUnit.SECONDS)) throw new AssertionError("own not ready");
+          change("method-private-self", target); System.gc();
+        } finally { resume.countDown(); for (Thread worker : workers) worker.join(10000); }
+        for (Thread worker : workers) eq("own completed", false, worker.isAlive());
+        eq("own old frame", iface ? 31 : 25, results[0]);
+        eq("own ignores override", iface ? 31 : 25, results[1]);
+        eq("own range", iface ? 36 : 41, results[2]);
+        eq("own null", NullPointerException.class.getName(), results[3]);
+        eq("independent override", iface ? 49 : 47, iface ? over.target() : child.target());
+        if (!iface) { eq("own entered", 3, PrivateSelfFixture.Subject.entered.get()); eq("own field", 5, subject.value); }
+        change("method-private-self-original", target); PrivateSelfFixture.Subject.entered.set(0); System.gc();
+        eq("own restore", iface ? 11 : 7, iface ? impl.await(open, open, 0) : subject.await(open, open, 0));
+        eq("own override restore", iface ? 49 : 47, iface ? over.await(open, open, 0) : child.await(open, open, 0));
+      }
+    }
   }
   static void privateCalls() throws Exception {
     AccessSubject subject = new AccessSubject();
@@ -246,7 +289,7 @@ public class InvokeKindOracle {
     change("interface-kind-static-restore", InterfaceInvokeKindFixture.Caller.class);
     eq("interface restored virtual", 13, InterfaceInvokeKindFixture.Caller.call(impl));
     eq("interface restored", 13, InterfaceInvokeKindFixture.Caller.interfaceCall(impl));
-    privateCalls();
+    privateCalls(); privateSelf();
     System.out.println("JBR invoke kind oracle PASS checks=" + checks);
   }
 }
@@ -280,9 +323,10 @@ def main():
         manifest['fixtureSha256']['original'] = hashlib.sha256(source.read_bytes()).hexdigest()
         interface_source = source.with_name('InterfaceInvokeKindFixture.java')
         manifest['fixtureSha256']['original-interface'] = hashlib.sha256(interface_source.read_bytes()).hexdigest()
-        run('compile-old', [str(jbr / 'bin/javac'), '--release', '11', '-d', str(old), str(source), str(interface_source), *map(str, (ROOT / 'app/src/debug/java/com/github/ytlog/artdcevm/fixture').glob('Access*.java'))])
+        run('compile-old', [str(jbr / 'bin/javac'), '--release', '11', '-d', str(old), str(source), str(interface_source), *map(str, (ROOT / 'app/src/debug/java/com/github/ytlog/artdcevm/fixture').glob('Access*.java')), str(ROOT / 'app/src/debug/java/com/github/ytlog/artdcevm/fixture/PrivateSelfFixture.java')])
         for source in (ROOT / 'app/src/debug/java/com/github/ytlog/artdcevm/fixture').glob('Access*.java'):
             manifest['fixtureSha256']['original-' + source.name] = hashlib.sha256(source.read_bytes()).hexdigest()
+        manifest['fixtureSha256']['PrivateSelfFixture.java'] = hashlib.sha256((ROOT / 'app/src/debug/java/com/github/ytlog/artdcevm/fixture/PrivateSelfFixture.java').read_bytes()).hexdigest()
         patches = work / 'patches'
         for variant in ('invoke-kind-static', 'invoke-kind-instance', 'invoke-kind-original', 'invoke-kind-caller-rebuild', 'interface-kind-static', 'interface-kind-static-restore'):
             source = ROOT / 'fixtures' / variant / ('com/github/ytlog/artdcevm/fixture/InterfaceInvokeKindFixture.java' if variant.startswith('interface-') else 'com/github/ytlog/artdcevm/fixture/InvokeKindFixture.java')
@@ -290,7 +334,8 @@ def main():
             run('compile-' + variant, [str(jbr / 'bin/javac'), '--release', '11',
                                       '-d', str(patches / variant), str(source)])
         for variant in ('method-private', 'method-private-original', 'method-private-delete',
-                        'method-private-caller-rebuild', 'interface-kind-private', 'interface-kind-original'):
+                        'method-private-caller-rebuild', 'interface-kind-private', 'interface-kind-original',
+                        'method-private-self', 'method-private-self-original'):
             sources = sorted((ROOT / 'fixtures' / variant).rglob('*.java'))
             for source in sources:
                 manifest['fixtureSha256'][variant + '/' + source.name] = hashlib.sha256(source.read_bytes()).hexdigest()

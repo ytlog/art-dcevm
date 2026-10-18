@@ -48,6 +48,7 @@ SCENARIOS = (
     ("methods-retire-again", ["methods-delete"], 0),
     ("methods-restore-again", ["methods-original"], 0),
     ("method-private-active-target", ["method-private"], 71),
+    ("method-private-active-restore", ["method-private-original"], 0),
     ("method-private", ["method-private"], 0),
     ("method-private-caller-rebuild", ["method-private-caller-rebuild"], 0),
     ("method-private-delete", ["method-private-delete"], 0),
@@ -60,6 +61,14 @@ SCENARIOS = (
     ("method-private-restore-again", ["method-private-original", "method-private-original"], 0),
     ("method-private-interface", ["interface-kind-private"], 0),
     ("method-private-interface-restore", ["interface-kind-original"], 0),
+    ("method-private-self-class", ["method-private-self"], 71),
+    ("method-private-self-class-restore", ["method-private-self-original"], 0),
+    ("method-private-self-interface", ["method-private-self"], 71),
+    ("method-private-self-interface-restore", ["method-private-self-original"], 0),
+    ("method-private-self-class-again", ["method-private-self"], 71),
+    ("method-private-self-class-again-restore", ["method-private-self-original"], 0),
+    ("method-private-self-interface-again", ["method-private-self"], 71),
+    ("method-private-self-interface-again-restore", ["method-private-self-original"], 0),
     ("method-storage", ["method-storage"], 0),
     ("method-storage-delete", ["method-storage-delete"], 0),
     ("method-storage-readd", ["method-storage"], 0),
@@ -321,6 +330,16 @@ LINK_ERROR_CHECKS = {"classNamed": True, "linkError": True, "oldBody": 11,
 
 
 def release_expectation(name, code, required, api):
+    if name.startswith("method-private-self-") and not name.endswith("-restore") and api >= 36:
+        iface = "interface" in name
+        checks = {**required, "privateKind": True, "self": 31 if iface else 25,
+                  "overrideReceiver": 31 if iface else 25, "range": 36 if iface else 41}
+        checks.pop("activeReason", None)
+        if not iface: checks["entered"] = 3
+        return 0, checks
+    if name == "method-private-active-target" and api >= 36:
+        return 0, {"privateKind": True, "activeCompleted": True, "oldSelf": 25}
+
     kind = name.removeprefix("interface-abstract-unimplemented-")
     if kind in ("package", "protected") and api <= NON_PUBLIC_LINK_ERROR_API:
         return 63, LINK_ERROR_CHECKS
@@ -544,7 +563,8 @@ REQUIRED_CHECKS = {
     "methods-restore": METHOD_RESTORE_CHECKS,
     "methods-retire-again": METHOD_RETIRE_CHECKS,
     "methods-restore-again": METHOD_RESTORE_CHECKS,
-    "method-private-active-target": {"activeReason": True, "publicKind": True, "activeCompleted": True, "oldSelf": 7},
+    "method-private-active-target": {"activeReason": True, "privateKind": False, "activeCompleted": True, "oldSelf": 7},
+    "method-private-active-restore": {"restored": 7},
     "method-private-interface": {
         **{kind + str(i): ("java.lang.NoSuchMethodError" if kind == "virtual" else "java.lang.IllegalAccessError")
            for kind in ("interface", "interfaceOverride", "virtual") for i in range(32)},
@@ -990,6 +1010,23 @@ REQUIRED_CHECKS.update({'interface-abstract-reabstract-missing': {'cachedDefault
                                       'cachedHandle': 12,
                                       'cachedBytecode': 12,
                                       'cachedJni': 12}})
+
+for _suffix in ("", "-again"):
+    for _kind in ("class", "interface"):
+        _name = "method-private-self-" + _kind + _suffix
+        _iface = _kind == "interface"
+        REQUIRED_CHECKS[_name] = {
+            "activeReason": True, "privateKind": False,
+            "self": 11 if _iface else 7, "overrideReceiver": 49 if _iface else 47,
+            "range": 6 if _iface else 11, "nullReceiver": "java.lang.NullPointerException",
+            "override": 49 if _iface else 47,
+            **{"completed" + str(i): True for i in range(4)},
+            **{"stepping" + str(i): True for i in range(4)},
+        }
+        if not _iface: REQUIRED_CHECKS[_name].update(entered=0, value=5)
+        REQUIRED_CHECKS[_name + "-restore"] = {"self": 11 if _iface else 7, "overrideReceiver": 49 if _iface else 47}
+        MAPPED_SCENARIOS.update({_name, _name + "-restore"})
+MAPPED_SCENARIOS.add("method-private-active-target")
 
 for _name, _, _code in SCENARIOS:
     if _name.startswith("proxy-interface-group-"):

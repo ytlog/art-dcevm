@@ -45,9 +45,8 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
       protected_change = (bool(access & evolution::kAccStatic) != next.IsStatic() || private_change) &&
           invoke_kind::Enable();
     }
-    // ART still indexes old self invokes through the vtable/IMT. A target's
-    // obsolete self frame cannot directly select the new private declaration.
-    if (batch.active_frame && (!protected_change || private_change))
+    // Old self frames require a probed selector that bypasses the vtable/IMT.
+    if (batch.active_frame && (!protected_change || (private_change && !invoke_kind::SelfCalls())))
       return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
     transaction::Current()->protect_invocations |= protected_change;
     std::map<const abi::arm64::DexFilePrefix*, std::vector<uint32_t>> ids;

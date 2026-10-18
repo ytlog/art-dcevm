@@ -183,7 +183,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | 方法新增 final，且已加载的子类覆写它 | 拒绝 `METHOD_MODIFIERS_CHANGED`（71） |
 | 新增或改变访问级别的实例方法，可能顶替已加载子类的 copied default/miranda | 可退役时接受，由自有映射处理；否则新增拒绝 `METHOD_ADDED`（63），访问级别变化拒绝 71 |
 | native → Java | 可退役时接受（引擎处理 JNI 入口复制）；否则拒绝 71 |
-| 方法在 static 与实例之间变化，实例方法改为 private；已退役的方法以另一种调用方式重新加入 | static／实例互换在命名调用方式保护可用时接受，旧字节码调用抛 ICCE；virtual 改为 private 可保留无访问权的外部旧调用方，调用时抛 IAE；检测到目标活动帧仍拒绝 71；旧声明退役，新调用方式的声明是新成员（见[调用方式变化](#调用方式变化)） |
+| 方法在 static 与实例之间变化，实例方法改为 private；已退役的方法以另一种调用方式重新加入 | static／实例互换在命名调用方式保护可用时接受，旧字节码调用抛 ICCE；virtual 改为 private 可保留无访问权的外部旧调用方，调用时抛 IAE；目标自身旧活动帧在命名调用选择与布局探测通过后可直接调用新 private 方法，其余路径保留 71；旧声明退役，新调用方式的声明是新成员（见[调用方式变化](#调用方式变化)） |
 | 方法的 bridge、varargs、strict、synthetic 标志变化 | 接受并走结构路径，新方法带新标志（这些标志只供反射与链接描述方法） |
 | 删除方法、改签名（含 native、abstract、构造器、类初始化器） | 可退役时接受；否则拒绝 `METHOD_DELETED`（67） |
 | 删除字段，字段类型或 static 属性变化 | 可退役且字段守卫可用时接受；否则拒绝 `SCHEMA_CHANGED`（64） |
@@ -346,7 +346,9 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 
 virtual 改 private 后，无访问权的外部旧 virtual/super/interface 调用在读取或缓存直接方法索引为分派槽之前抛 `IllegalAccessError`。经实现类命名、且该类不再继承此 default 的旧虚调用保持解析失败并抛 `NoSuchMethodError`。子类自身声明的覆写仍可按自己的符号身份调用；新编译的自身调用使用 invoke-direct，能进入 private 方法体。同样的调用方编译保护覆盖这些切换，以及退役后以 private 方式重新加入的身份。
 
-JBR 还允许自身 obsolete 帧直接调用新 private 方法体，并忽略子类覆写。ART 的旧 virtual/interface 指令仍按 vtable/IMT 槽分派，命名解析 Hook 不能将它转换为直接调用。这条路径仍不支持：检测到批次类活动帧时保留 71；解析守卫继续阻止 private 索引进入虚分派，也覆盖快照后才出现的不受支持自身旧帧。共享 JBR/设备样例分别覆盖新的自身调用和外部调用方活动帧。ClassFile nest 的访问权与外部调用不同；访问对照使用没有 private 访问权的独立顶层调用方。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
+JBR 还允许自身 obsolete 帧直接调用新 private 方法体，并忽略子类覆写。Android 16 的命名 `FindMethodToCall<kVirtual/kInterface>` 是 switch 解释器的调用选择入口：旧目标帧先解析方法，按声明描述符和定义加载器确认自身访问权，然后直接选择新 private 声明，不把直接方法索引送入 vtable/IMT。解析失败保持原异常；合法自身访问的 null 接收者抛 NPE，外部旧调用仍抛 IAE。`runtime_roots` 复用接口准入的命名根访问器和 Class/Thread/HandleScope 探测，在解析可能挂起时保护并更新 ART 的接收者局部变量。此路径已在 API 36 验证；API 33 缺少独立选择入口，保留活动帧拒绝 71。
+
+接口 default 的旧活动帧可能来自实现类中的方法副本。ART 将副本标为 obsolete 后，原 `GetObsoleteDexCache` 要求它位于声明接口的方法数组中，从而中止事务。对应的两种命名入口现在对结构退役接口的副本选择该接口保留的旧 DEX；若方法已在正常 obsolete map 中，仍交回 ART，以保留更早方法体重定义的 DEX。Class 与 ClassExt 字段经已有声明探测和命名字段表确认；带读屏障路径遵循 CC/CMC 选择，不带屏障的栈访问路径保持原语义。迁移、引用替换、去优化和缓存清理仍由 ART 原事务负责。共享 JBR/设备样例覆盖类与接口自身旧帧、覆盖接收者、range、null、GC、两轮恢复及 single-step。ClassFile nest 的访问权与外部调用不同；访问对照使用没有 private 访问权的独立顶层调用方。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
 
 ## 活动帧
 
