@@ -169,7 +169,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | `interfaceDispatchSealing` | `available: ...` 或 `unavailable: 原因`；记录经实际探测的发布前链接边界及 canonical 来源，还需要命名分配服务与类加载器分配器读取 |
 | `hierarchyChange`、`fullDcevmComplete` | 始终为 false：父类收窄不支持，完整 DCEVM 尚未完成 |
 | `interfaceRedefinition` | 布尔值；安装且 Class/Thread/HandleScope/holder 全部探测通过时为 true。初始化后尚未探测、版本或服务不可用、进程级探测停用时为 false；单个目标拒绝不清除此值 |
-| `interfaceRuntime` | `unavailable`、`unverified: interface runtime declarations`、`verified: androidNN Class/Thread/HandleScope/holder probes` 或 `disabled: 原因`；可用版本仅 API 33–36，其他版本禁用并说明原因 |
+| `interfaceRuntime` | `unavailable`、`unverified: interface runtime declarations`、`verified: androidNN Class/Thread/HandleScope/holder probes` 或 `disabled: 原因`；准入 API 30–37；源码对齐的版本（API 30–32、37）探测通过后追加 `; declarations not yet device-validated`；其他版本禁用并说明原因 |
 | `interfaceSnapshotTypes` | 当前事务线程最近一次接口快照的类型数（目标、子接口、实现类及其子类） |
 | `interfaceSnapshotNanos`、`interfaceAllocationNanos` | 同一线程最近一次快照（含 GetLoadedClasses）和接口分配的单调时钟耗时，单位纳秒；仅供诊断，无接口事务时可为零 |
 | `memberMapping` | 安装不可用原因或最近一次探测结果（可能来自 Native Thread 探测）：`unavailable`（可附原因）、`unverified`、`verified: androidNN class layout` 或 `rejected: 原因` |
@@ -181,7 +181,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 
 1. 两种 JNI 模式先运行 `--scenario-group ordinary` 与失败仪器的 `-e scenario ordinary`。在退役场景执行后确认 `memberMapping` 已完成探测，证明没有把降级当作通过；Android 14 及以上分别核对实际 CC/CMC 配置。
 2. 每次只核对一个版本：固定 Class、Thread、HandleScope、holder、ClassRedefinition 标志、IfTable/PointerArray 与命名原型。先做声明/离线核对，不以编译或云端设备目录条目代替执行。
-3. 完整接口套件、abort 恢复与 android-compose-hotreload 的 `interface abstract batch` 在真实设备通过后，才单独提交该版本的启用；未取得完整证据的条目保持 `kPreparedOnly`。
+3. 固定声明核对完毕，且该版本全部已存设备运行库都提供所需命名服务（`check-interface-abi-preparation.py`）后，可以 `kSourceAligned` 准入；完整接口套件、abort 恢复与 android-compose-hotreload 的 `interface abstract batch` 在真实设备通过后，才单独提交改为 `kDeviceVerified`。
 
 ## 证据与公开结论
 

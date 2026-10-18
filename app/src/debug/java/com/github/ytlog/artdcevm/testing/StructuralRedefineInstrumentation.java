@@ -3403,8 +3403,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
+    // The runtime reports whether named switch-interpreter selectors are installed;
+    // a runtime that inlines them keeps rejection 71 for active self frames.
+    private static boolean privateSelfSelection() throws Exception {
+        return DcevmRuntime.capabilities().optBoolean("privateSelfSelection", false);
+    }
+
     private void runPrivateSelfScenarios() throws Exception {
-        boolean supported = Build.VERSION.SDK_INT >= 36;
+        boolean supported = privateSelfSelection();
         for (int round = 0; round < 2; round++) {
             for (boolean iface : new boolean[]{false, true}) {
                 PrivateSelfFixture.Subject subject = new PrivateSelfFixture.Subject();
@@ -3486,16 +3492,17 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             catch (Throwable t) { selfResult[0] = t.getClass().getName(); }
         });
         own.start();
+        boolean supported = privateSelfSelection();
         try {
             if (!selfReady.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("self not ready");
-            runScenario("method-private-active-target", android.os.Build.VERSION.SDK_INT >= 36 ? 0 : 71, scenario -> {
+            runScenario("method-private-active-target", supported ? 0 : 71, scenario -> {
                 scenario.redefine(new Class<?>[]{AccessSubject.class}, "method-private");
-                if (android.os.Build.VERSION.SDK_INT < 36)
+                if (!supported)
                     scenario.check("activeReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("active frame"));
-                scenario.check("privateKind", android.os.Build.VERSION.SDK_INT >= 36, Modifier.isPrivate(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
+                scenario.check("privateKind", supported, Modifier.isPrivate(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
                 selfResume.countDown(); own.join(10000);
                 scenario.check("activeCompleted", true, !own.isAlive());
-                scenario.check("oldSelf", android.os.Build.VERSION.SDK_INT >= 36 ? 25 : 7, selfResult[0]);
+                scenario.check("oldSelf", supported ? 25 : 7, selfResult[0]);
             });
         } finally { selfResume.countDown(); own.join(10000); }
         runScenario("method-private-active-restore", 0, scenario -> {

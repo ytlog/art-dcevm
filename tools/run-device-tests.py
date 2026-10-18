@@ -329,15 +329,16 @@ LINK_ERROR_CHECKS = {"classNamed": True, "linkError": True, "oldBody": 11,
                      "noDeclaration": "java.lang.NoSuchMethodException"}
 
 
-def release_expectation(name, code, required, api):
-    if name.startswith("method-private-self-") and not name.endswith("-restore") and api >= 36:
+def release_expectation(name, code, required, api, self_selection):
+    """Expected code and checks given the API and reported privateSelfSelection."""
+    if name.startswith("method-private-self-") and not name.endswith("-restore") and self_selection:
         iface = "interface" in name
         checks = {**required, "privateKind": True, "self": 31 if iface else 25,
                   "overrideReceiver": 31 if iface else 25, "range": 36 if iface else 41}
         checks.pop("activeReason", None)
         if not iface: checks["entered"] = 3
         return 0, checks
-    if name == "method-private-active-target" and api >= 36:
+    if name == "method-private-active-target" and self_selection:
         return 0, {"privateKind": True, "activeCompleted": True, "oldSelf": 25}
 
     kind = name.removeprefix("interface-abstract-unimplemented-")
@@ -1126,12 +1127,15 @@ def validate_report(report, scenario_group="full"):
     for name in ("hierarchyChange", "fullDcevmComplete"):
         if capabilities.get(name) is not False:
             raise RunFailure("The engine capabilities claim unimplemented hierarchy changes")
+    self_selection = capabilities.get("privateSelfSelection")
+    if type(self_selection) is not bool:
+        raise RunFailure("The initialization report is missing privateSelfSelection")
     expected_scenarios = scenario_sequence(scenario_group)
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
         raise RunFailure("The device report does not contain the complete scenario sequence")
     for scenario, (name, variants, code) in zip(scenarios, expected_scenarios):
-        code, required = release_expectation(name, code, REQUIRED_CHECKS[name], device["api"])
+        code, required = release_expectation(name, code, REQUIRED_CHECKS[name], device["api"], self_selection)
         if not isinstance(scenario, dict) or scenario.get("name") != name:
             raise RunFailure("The device report has an unexpected scenario order")
         if scenario.get("variants") != variants:

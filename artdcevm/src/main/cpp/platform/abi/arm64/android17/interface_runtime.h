@@ -6,8 +6,8 @@
 #include "platform/abi/arm64/android17/redefinition.h"
 
 namespace artdcevm::abi::arm64::android17 {
-// Source preparation only. RuntimeFor deliberately does not select this profile.
-inline constexpr InterfaceRuntime kPreparedInterfaceRuntime =
+// Source-aligned with the stored runtimes; not yet device-validated.
+inline constexpr InterfaceRuntime kInterfaceRuntime =
     InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder>(offsetof(HandleScopeHeader, size),
         offsetof(Class, clinit_thread_id_or_hash));
 inline constexpr bool kHandleScopeThreadIdSigned = false;

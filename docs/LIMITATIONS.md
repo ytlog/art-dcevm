@@ -24,7 +24,7 @@
 
 接口目标支持 default、static、private 方法体修改，新增 public abstract、default、static（任意访问级别，含 synthetic）、private 实例方法，删除或改签名任一方法（含 default/abstract），已有 public 实例方法在 abstract 与 default 之间切换，方法在 default/abstract、static、private 之间改变调用方式（规则同普通类，见下表 71），新增、删除或改类型静态字段，以及新增或移除父接口。顶层与嵌套接口可与实现类、实现类子类或无关类同批，也可提交多个接口和父子接口；任一目标失败时整批保持旧定义。lambda 等新合成类须由热重载端先追加到加载器，发生变化的已有合成类须在同批重定义。
 
-此能力仅在 Android 13（API 33）、Android 14（API 34）、Android 15（API 35）和 Android 16（API 36）的 arm64 设备上可用；其他版本停用并在 `capabilities()` 中说明原因。运行时声明仍须通过探测，版本号本身不保证可用。
+此能力在 Android 11–17（API 30–37）的 arm64 设备上可用。API 33–36 已经真机验证；API 30–32 与 37 依固定 AOSP 声明及这些版本全部已存设备运行库中的命名服务启用，尚未在设备上运行接口套件，探测通过后 `interfaceRuntime` 会注明这一点。运行时声明仍须通过探测，版本号本身不保证可用。
 
 | 接口目标的拒绝情况 | JVMTI 错误码 |
 | --- | --- |
@@ -60,7 +60,7 @@
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到批次类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法；API 36 在命名选择服务和 Class/Thread/HandleScope 探测通过后支持此行为。API 33 缺少选择入口，仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
+| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到批次类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。导出命名 `FindMethodToCall<kVirtual/kInterface>` 选择入口的运行时在 Class/Thread/HandleScope 探测通过后支持此行为，以 `privateSelfSelection` 报告：API 36（已经真机验证）与多数 API 34–35 运行库（依固定源码，尚未上机）。API 30–33 以及部分 API 34、37 模块内联了选择逻辑，仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
 | 类在接口、注解、枚举之间变化 | `UNSUPPORTED_REDEFINITION_CLASS_MODIFIERS_CHANGED`（70） | |
 | 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 | 移除接口时成员映射或分派保护不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
@@ -148,7 +148,7 @@
 | 持有动态代理的实例字段改类型 | 新类型是直接声明接口或 `Proxy` 父类时保留；仅间接实现接口时清空 | 目标与继承字段按同一规则处理，见[字段改型对照](TESTING.md#jbr-对照) |
 | 接口新增 abstract 方法，而已加载的实现类只有同签名的非 public 方法 | 接受；private 调用时抛 `AbstractMethodError`，package-private／protected 抛 `IllegalAccessError` | 按 ART 的选择：Android 15、16 接受，调用均抛 `IllegalAccessError`；Android 13、14 的 package-private／protected 实现无法链接，拒绝 63 |
 | 普通类方法在 static 与实例之间切换，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 命名调用方式保护可用时接受，旧调用抛 ICCE；旧调用方禁止 JIT 编译及内联，ART 仍执行原有去优化。Android 13、16 覆盖普通／CheckJNI、热调用、活动帧、GC 与隐式重建；入口不可用时保留 71 |
-| 普通类虚方法改为 private，批次外仍有无访问权的旧调用方 | 接受；旧 virtual/super 调用抛 `IllegalAccessError`，自身旧帧可调用新 private 方法 | 接受并保护外部旧调用，抛 IAE；旧调用方禁止 JIT 编译及内联。API 36 支持自身旧帧直接选择 private 方法并忽略覆写，含接口 default 副本；缺少命名服务或运行时探测不匹配时拒绝 71（API 33 保留此边界） |
+| 普通类虚方法改为 private，批次外仍有无访问权的旧调用方 | 接受；旧 virtual/super 调用抛 `IllegalAccessError`，自身旧帧可调用新 private 方法 | 接受并保护外部旧调用，抛 IAE；旧调用方禁止 JIT 编译及内联。有命名选择服务时（`privateSelfSelection`：API 36 已经真机验证，多数 API 34–35 运行时依源码对齐），自身旧帧直接选择 private 方法并忽略覆写，含接口 default 副本；选择逻辑被内联（API 30–33）或运行时探测不匹配时拒绝 71 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
 | 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 持久发布前保护与后续结构重建共同保留正确分派，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口) |
 | 类在普通类与接口等种类之间变化 | 接受 | 拒绝 70 |

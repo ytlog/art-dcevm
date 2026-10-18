@@ -17,8 +17,9 @@ std::string RuntimeBackend::RuntimeState() {
   if (const char* reason = process->disabled_reason.load()) return std::string("disabled: ") + reason;
   if (!process->available) return "unavailable";
   const int release = process->verified_release.load();
-  return release ? "verified: android" + std::to_string(release) + " Class/Thread/HandleScope/holder probes"
-                 : "unverified: interface runtime declarations";
+  if (!release) return "unverified: interface runtime declarations";
+  return "verified: android" + std::to_string(release) + " Class/Thread/HandleScope/holder probes" +
+      (IsDeviceVerifiedInterfaceRelease(release) ? "" : "; declarations not yet device-validated");
 }
 Timing RuntimeBackend::LastTiming() { return timing; }
 std::string RuntimeBackend::TakeRejection() {
@@ -81,18 +82,22 @@ void PrepareProcess(const Services& services, std::vector<Hook>* hooks, std::str
     *note = reason;
   };
   const int api = android_get_device_api_level();
-  if (!IsDeviceVerifiedInterfaceApi(api)) {
-    // Preserve the public diagnostic while deriving the list from the registry.
+  if (!IsAdmittedInterfaceApi(api)) {
+    // Derive the admitted API ranges from the registry, merging adjacent releases.
     static const std::string reason = [] {
-      std::string value = "interface redefinition is device-verified only on ";
-      bool first = true;
+      std::string value = "interface redefinition is available only on API ";
+      int first = 0, last = -1;
+      const auto flush = [&] {
+        if (last < first) return;
+        if (value.back() != ' ') value += ", ";
+        value += std::to_string(first) + (last != first ? "–" + std::to_string(last) : "");
+      };
       for (const auto& entry : kInterfaceRuntimes) {
-        if (entry.status != InterfaceRuntimeStatus::kDeviceVerified) continue;
-        value += (first ? "" : " and ") + std::string("Android ") +
-            std::to_string(entry.release) + "/API " + std::to_string(entry.first_api);
-        if (entry.last_api != entry.first_api) value += "–" + std::to_string(entry.last_api);
-        first = false;
+        if (!IsAdmitted(entry.status)) continue;
+        if (entry.first_api != last + 1) { flush(); first = entry.first_api; }
+        last = entry.last_api;
       }
+      flush();
       return value;
     }();
     reject(reason.c_str());

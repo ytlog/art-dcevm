@@ -79,7 +79,7 @@ jvmtiError Admit(Handle klass, std::string* message, bool structural, size_t spe
   if (auto thread = runtime_thread::Ready()) {
     for (const auto& entry : abi::arm64::kInterfaceRuntimes) {
       const auto* layout = runtime_thread::LayoutFor(*thread, entry.release);
-      if (layout && entry.status == abi::arm64::InterfaceRuntimeStatus::kDeviceVerified)
+      if (layout && abi::arm64::IsAdmitted(entry.status))
         invoke_kind::ObserveScope(runtime_thread::Current(*thread), layout, entry.runtime, klass);
     }
   }

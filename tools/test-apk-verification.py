@@ -21,7 +21,9 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 
 
-def complete_report(api=36):
+def complete_report(api=36, self_selection=None):
+    if self_selection is None:
+        self_selection = api >= 36
     def rejection_check(code):
         if code == 0:
             return {"name": "lastRejection", "expected": "", "actual": "", "passed": True}
@@ -39,7 +41,8 @@ def complete_report(api=36):
             "methodDeletion": True, "methodSignatureChange": True,
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,
-            "hierarchyChange": False, "fullDcevmComplete": False}},
+            "hierarchyChange": False, "fullDcevmComplete": False,
+            "privateSelfSelection": self_selection}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
                        "capabilities": {"memberMapping": "verified: android16 class layout",
@@ -57,7 +60,7 @@ def complete_report(api=36):
                                   rejection_check(code)]}
                       for name, variants, base_code in runner.SCENARIOS
                       for code, required in [runner.release_expectation(
-                          name, base_code, runner.REQUIRED_CHECKS[name], api)]],
+                          name, base_code, runner.REQUIRED_CHECKS[name], api, self_selection)]],
     }
 
 
@@ -181,19 +184,19 @@ class ApkVerificationTests(unittest.TestCase):
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group=group)
 
-    def test_obsolete_self_calls_require_release_specific_results(self):
-        for api in (33, 36):
-            report = complete_report(api)
-            names = {item[0] for item in runner.scenario_sequence("method-private")}
+    def test_obsolete_self_calls_follow_reported_selection_services(self):
+        names = {item[0] for item in runner.scenario_sequence("method-private")}
+        for api, selection in ((33, False), (35, True), (35, False), (36, True)):
+            report = complete_report(api, selection)
             report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
             runner.validate_report(report, scenario_group="method-private")
             for kind in ("class", "interface"):
                 changed = next(item for item in report["scenarios"] if item["name"] == "method-private-self-" + kind)
-                self.assertEqual(changed["actualCode"], 0 if api == 36 else 71)
+                self.assertEqual(changed["actualCode"], 0 if selection else 71)
                 override = next(item for item in changed["checks"] if item["name"] == "overrideReceiver")
                 saved = dict(override)
                 override.update(expected=49, actual=49)
-                if api == 36 or kind == "class":
+                if selection or kind == "class":
                     with self.assertRaises(runner.RunFailure):
                         runner.validate_report(report, scenario_group="method-private")
                 override.update(saved)
@@ -202,6 +205,12 @@ class ApkVerificationTests(unittest.TestCase):
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group="method-private")
                 null.update(expected="java.lang.NullPointerException", actual="java.lang.NullPointerException")
+
+    def test_self_selection_capability_is_required(self):
+        report = complete_report(35, True)
+        del report["initialization"]["capabilities"]["privateSelfSelection"]
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report)
 
     def test_tool_group_requires_append_and_later_redefinition(self):
         names = {item[0] for item in runner.scenario_sequence("tool")}

@@ -9,7 +9,7 @@ namespace artdcevm::abi::arm64::android12 {
 // object_array.h also declares Alloc(Thread*, ObjPtr<Class>, int32_t, gc::AllocatorType).
 // AllocatorType is an int-sized enum; the selector must come from ART, never a guess.
 using ArrayAllocWithAllocator = ObjectArray* (*)(void*, void*, int32_t, int32_t);
-// Source preparation only. RuntimeFor deliberately does not select this profile.
-inline constexpr InterfaceRuntime kPreparedInterfaceRuntime =
+// Source-aligned with the stored runtimes; not yet device-validated.
+inline constexpr InterfaceRuntime kInterfaceRuntime =
     InterfaceRuntimeFor<Class, HandleScopeHeader, RedefinitionDataHolder>(InterfaceRuntime::kAbsent);
 }  // namespace artdcevm::abi::arm64::android12

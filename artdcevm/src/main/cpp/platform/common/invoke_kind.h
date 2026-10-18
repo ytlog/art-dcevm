@@ -18,6 +18,9 @@ bool Protecting();
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, abi::arm64::Handle target);
 void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods);
+// Named switch-interpreter selectors are installed; each transaction still
+// needs the Class/Thread/HandleScope probes that SelfCalls reports.
+bool SelectionServices();
 bool SelfCalls();
 // Commit under ART suspend-all/JIT suspension; IsCompilable gates both JIT and inlining.
 void KeepInterpreted(void* method, uint32_t precompiled_flag);

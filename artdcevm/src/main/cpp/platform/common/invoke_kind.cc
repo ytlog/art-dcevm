@@ -104,13 +104,29 @@ void* Check(void* self, void* resolved, int type) {
   }
   return resolved;
 }
+// Set while ResolveUnchecked runs on this thread: the fixed Android 11--15
+// ResolveMethod<kNoChecks>(Thread*, ...) continues into the hooked cache
+// overload on a DEX cache miss, which must not apply Check for the caller.
+thread_local bool unchecked_resolution = false;
+// Resolution without ART's invoke-kind checks, as the fixed sources use it:
+// Android 16--17 ResolveMethodId, Android 11--15 ResolveMethod<kNoChecks>.
+// May suspend; the caller roots any ObjPtr it keeps.
+void* ResolveUnchecked(void* self, uint32_t index, void* caller, int type) {
+  void* linker = class_linker.load(std::memory_order_acquire);
+  if (resolve_method_id) return resolve_method_id(linker, index, caller);
+  const bool enclosing = unchecked_resolution;
+  unchecked_resolution = true;
+  void* resolved = original_caller(linker, self, index, caller, type);
+  unchecked_resolution = enclosing;
+  return resolved;
+}
 void* ResolveCaller(void* linker, void* self, uint32_t index, void* caller, int type) noexcept {
   return Check(self, original_caller(linker, self, index, caller, type), type);
 }
 void* ResolveCache(void* linker, uint32_t index, Handle cache, Handle loader,
                    void* caller, int type) noexcept {
   void* resolved = original_cache(linker, index, cache, loader, caller, type);
-  return Check(nullptr, resolved, type);
+  return unchecked_resolution ? resolved : Check(nullptr, resolved, type);
 }
 uintptr_t GetMethod(void* self, void* caller, const uint16_t* instruction) noexcept {
   if (enabled.load(std::memory_order_acquire)) {
@@ -126,10 +142,7 @@ uintptr_t GetMethod(void* self, void* caller, const uint16_t* instruction) noexc
       case 0x72: case 0x78: type = 4; break;  // interface
       default: return original_nterp(self, caller, instruction);
     }
-    void* linker = class_linker.load(std::memory_order_acquire);
-    void* resolved = resolve_method_id ? resolve_method_id(linker, instruction[1], caller)
-        : original_caller(linker, self, instruction[1], caller, type);
-    resolved = Check(self, resolved, type);
+    void* resolved = Check(self, ResolveUnchecked(self, instruction[1], caller, type), type);
     // Resolution or Check has installed the exception. Do not let
     // nterp cache a direct method's index as a virtual dispatch slot.
     if (!resolved) return 0;
@@ -148,10 +161,10 @@ void* SelectMethod(void* self, void* caller, uintptr_t* receiver,
   if (lookup_only) return nullptr;
   void* resolved;
   {
-    // ResolveMethodId may suspend. Preserve and refresh the exact ObjPtr local
+    // Resolution may suspend. Preserve and refresh the exact ObjPtr local
     // owned by ART's DoInvoke, using its probed HandleScope representation.
     runtime_roots::Root root(self, *scope_thread_layout, *scope_layout, receiver);
-    resolved = resolve_method_id(class_linker.load(std::memory_order_acquire), instruction[1], caller);
+    resolved = ResolveUnchecked(self, instruction[1], caller, type);
   }
   if (!resolved) return nullptr;
   const auto flags = static_cast<abi::arm64::ArtMethodPrefix*>(resolved)->access_flags.load(std::memory_order_relaxed);
@@ -199,7 +212,9 @@ bool Prepare(std::vector<Hook>* hooks) {
   void* cache_raw = symbols::Find(kObsoleteCacheRaw);
   mark = reinterpret_cast<decltype(mark)>(symbols::Find(symbols::runtime_thread::kReadBarrierMark));
   use_read_barrier = static_cast<const bool*>(symbols::Find(symbols::runtime_thread::kUseReadBarrier));
-  if (resolve_method_id && select_virtual && select_interface && method_descriptor && method_loader &&
+  // Android 14--16 share FindMethodToCall<type>; 14--15 resolve through the
+  // hooked ResolveMethod<kNoChecks> original instead of ResolveMethodId.
+  if ((resolve_method_id || caller) && select_virtual && select_interface && method_descriptor && method_loader &&
       scope_visitors.unsigned_ids && cache_read && cache_raw && mark && use_read_barrier) {
     prepared.push_back({cache_read, HookAddress(CopiedObsoleteCache<true>), HookSlot(&original_cache_read), kObsoleteCacheRead.name});
     prepared.push_back({cache_raw, HookAddress(CopiedObsoleteCache<false>), HookSlot(&original_cache_raw), kObsoleteCacheRaw.name});
@@ -235,6 +250,9 @@ void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, 
   class_ext_data = ext_data;
   ext_obsolete_methods = obsolete_methods;
   class_verified.store(true, std::memory_order_release);
+}
+bool SelectionServices() {
+  return installed.load(std::memory_order_acquire) && original_virtual && original_interface;
 }
 bool SelfCalls() {
   return installed.load(std::memory_order_acquire) && scope_verified.load(std::memory_order_acquire) &&

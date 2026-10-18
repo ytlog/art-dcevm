@@ -16,14 +16,14 @@ Every “passed” entry covers normal and CheckJNI modes. “Interfaces” incl
 
 | Android / API | Ordinary classes and Thread | Interface targets | Collector evidence and boundaries |
 | --- | --- | --- | --- |
-| 11 / 30 | Complete ordinary suite and Thread rejection/recovery checks passed | Inactive; fixed declarations prepared | Ordinary results do not establish interface scope/holder or failure cleanup |
-| 12 / 31 | Complete ordinary suite and Thread rejection/recovery checks passed | Inactive; fixed declarations prepared | Same boundary |
-| 12L / 32 | Complete ordinary suite and Thread rejection/recovery checks passed | Inactive; uses the prepared Android 12 declarations | Same boundary |
+| 11 / 30 | Complete ordinary suite and Thread rejection/recovery checks passed | Enabled from fixed sources and stored-library names; not device-validated | Ordinary results do not establish interface scope/holder or failure cleanup |
+| 12 / 31 | Complete ordinary suite and Thread rejection/recovery checks passed | Enabled from fixed sources and stored-library names; not device-validated | Same boundary |
+| 12L / 32 | Complete ordinary suite and Thread rejection/recovery checks passed | Enabled with the Android 12 declarations; not device-validated | Same boundary |
 | 13 / 33 | Passed | Complete suite and failure recovery passed; active | Tested configuration; no additional claim of both CC and CMC coverage here |
 | 14 / 34 | Passed | Complete suite and failure recovery passed; active | Separate CC and CMC coverage; Compose `interface abstract batch` passed |
 | 15 / 35 | Passed | Complete suite and failure recovery passed; active | Separate CC and CMC coverage; Compose `interface abstract batch` passed |
 | 16 / 36 | Passed | Complete suite and failure recovery passed; active | Tested configuration; no additional claim of both CC and CMC coverage here |
-| 17 / 37 | Existing first stage passed under both collectors and JNI modes; corrected pressure fixture needs a rerun | Inactive; fixed declarations prepared | CC and generational CMC ran; CC marking overlap was not established |
+| 17 / 37 | Existing first stage passed under both collectors and JNI modes; corrected pressure fixture needs a rerun | Enabled from fixed sources and stored-library names; not device-validated | CC and generational CMC ran; CC marking overlap was not established |
 
 Existing API 34 full runs covered 146 scenarios each and the older HandleScope/holder. API 35 covered the same full scenarios, 16-byte scopes and three holder flags. Those historical results used the earlier 63 rejection for missing implementations; the current JBR call-time error semantics have not been re-run on API 34/35.
 
@@ -46,7 +46,8 @@ Existing compilation with Kotlin 2.3.21 (`-jvm-default=enable`, JVM target 1.8) 
 
 - Android 11 and 12/12L still need device validation of complete interface transactions, actual root traversal, scope/holder and cleanup. Native JNI array preallocation and exact signature adaptation only remove the corresponding preparation obstacles.
 - Merged rebuilds (intersecting interface groups and joined structural superclasses) are device-verified only on API 33/36; API 34/35 use the same common implementation but have not been re-run.
-- Android 17 still needs the complete interface suite, abort recovery and Compose under the correct JNI ID mode. Interfaces remain inactive.
+- Android 17 still needs the complete interface suite, abort recovery and Compose under the correct JNI ID mode. Its interface profile is enabled from fixed sources and stored-library names only.
+- Private self-frame selection on API 34–35 runtimes that export both `FindMethodToCall` selectors follows the fixed sources but has not run on a device; only API 36 is device-verified.
 - The old API 37 pressure fixture could coalesce `System.gc()` requests, and its total GC count included ART transaction GC. It did not establish independent worker pressure or CC marking overlap. The direct-request fixture that checks pre-transaction increments still needs device execution on that release. Earlier zero-overlap observations do not establish a Thread-offset error.
 - GC completion logs do not establish marking intervals or object forwarding. Zero CC marking reads under CMC establish neither failure nor CMC coverage. A pressure run does not prove overlap in every transaction.
 - Injected allocation failures do not establish recovery from real Java/native memory exhaustion. Other ART module updates, untested OEMs and releases require independent validation. One passing Compose scenario does not establish complete-app or all hot-reload behavior.

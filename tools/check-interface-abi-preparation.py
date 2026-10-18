@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Compile source-only arm64 interface profiles and inventory named services.
+"""Compile the arm64 interface profiles and inventory named services.
 
-Never executes target code, disassembles libraries or enables runtime profiles.
+Never executes target code or disassembles libraries.
 Detailed reports and compiler output remain under ignored build/evidence.
 """
 import argparse
@@ -26,7 +26,7 @@ def read_runtime_table():
     table = RUNTIME_TABLE.read_text()
     entries = re.findall(
         r'\{(\d+),\s*(\d+),\s*(\d+),\s*&android(\d+)::(\w+),\s*'
-        r'InterfaceRuntimeStatus::(kPreparedOnly|kDeviceVerified)\}', table)
+        r'InterfaceRuntimeStatus::(kPreparedOnly|kSourceAligned|kDeviceVerified)\}', table)
     versions = [int(entry[0]) for entry in entries]
     declared = sorted(int(path.parent.name.removeprefix('android'))
                       for path in ABI.glob('android*/interface_runtime.h'))
@@ -35,14 +35,18 @@ def read_runtime_table():
     for release, first, last, namespace, name, status in entries:
         if release != namespace or int(first) > int(last):
             raise ValueError('Interface runtime table has an invalid release/API entry')
-        if name not in ('kInterfaceRuntime', 'kPreparedInterfaceRuntime'):
+        expected_name = 'kPreparedInterfaceRuntime' if status == 'kPreparedOnly' else 'kInterfaceRuntime'
+        if name != expected_name:
             raise ValueError('Interface runtime table must reference a fixed runtime declaration')
-    active = [int(release) for release, _, _, _, _, status in entries
-              if status == 'kDeviceVerified']
-    active_apis = [api for _, first, last, _, _, status in entries if status == 'kDeviceVerified'
+    active = [int(release) for release, _, _, _, _, status in entries if status != 'kPreparedOnly']
+    verified = [int(release) for release, _, _, _, _, status in entries if status == 'kDeviceVerified']
+    active_apis = [api for _, first, last, _, _, status in entries if status != 'kPreparedOnly'
                    for api in range(int(first), int(last) + 1)]
-    if active != [13, 14, 15, 16] or active_apis != [33, 34, 35, 36]:
-        raise ValueError('Unverified source preparation was added to runtime selection')
+    # 11, 12 and 17 are admitted from fixed sources and stored-runtime names;
+    # only device runs may move a release into the verified set.
+    if (active != list(range(11, 18)) or active_apis != list(range(30, 38))
+            or verified != [13, 14, 15, 16]):
+        raise ValueError('Interface runtime admission differs from the reviewed release set')
     return entries, versions, active
 
 
@@ -72,8 +76,10 @@ def main():
         offsets = expected[v]
         profile = f'kInterfaceRuntimes[{index}]'
         lines.append(f'static_assert({profile}.runtime == &android{v}::{name});')
-        selected = f'{profile}.runtime' if status == 'kDeviceVerified' else 'nullptr'
+        selected = f'{profile}.runtime' if status != 'kPreparedOnly' else 'nullptr'
         lines.append(f'static_assert(RuntimeFor({v}) == {selected});')
+        lines.append(f'static_assert(IsDeviceVerifiedInterfaceRelease({v}) == '
+                     f'{str(status == "kDeviceVerified").lower()});')
         for member, value in zip(('tid', 'is_gc_marking', 'jni_env', 'top_handle_scope'), offsets[:4]):
             lines.append(f'static_assert(RuntimeThreadFor<android{v}::Thread>().{member} == {value});')
         lines.append(f'static_assert({profile}.runtime->scope_header_size == {offsets[4]});')
@@ -84,8 +90,8 @@ def main():
     for release in (-1, 0, 10, 18, 99):
         lines.append(f'static_assert(RuntimeFor({release}) == nullptr);')
     for api in range(-1, 41):
-        lines.append(f'static_assert(IsDeviceVerifiedInterfaceApi({api}) == '
-                     f'{str(api in (33, 34, 35, 36)).lower()});')
+        lines.append(f'static_assert(IsAdmittedInterfaceApi({api}) == '
+                     f'{str(30 <= api <= 37).lower()});')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(123) == 123);')
     lines.append('static_assert(android17::Class::DecodeClinitThreadId(0xff000123) == 0);')
     source = out / 'profiles.cc'

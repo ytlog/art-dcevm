@@ -111,7 +111,7 @@ jvmtiError JNICALL Structural(jvmtiEnv*, jint count, const jvmtiClassDefinition*
   }
   return JVMTI_ERROR_NONE;
 }
-extern "C" int android_get_device_api_level() { return mode == 5 ? 32 : 33; }
+extern "C" int android_get_device_api_level() { return mode == 5 ? 29 : 33; }
 extern "C" int __android_log_write(int, const char*, const char*) { return 0; }
 extern "C" int __android_log_print(int, const char*, const char*, ...) { return 0; }
 void* Current() { return nullptr; }
@@ -434,7 +434,7 @@ int main(int argc, char** argv) {
         Require(set_calls == 1 && hooks_at_set == hook_calls && active.size() > 4,
                 "JNI installation was not the final hook operation");
         Require(caps.find("\"methodDeletion\":true") != std::string::npos, "Retirement disabled");
-        Require(caps.find(mode == 5 ? "disabled: interface redefinition is device-verified only on "
+        Require(caps.find(mode == 5 ? "disabled: interface redefinition is available only on "
                                     : "unverified: interface runtime declarations") != std::string::npos,
                 "Optional interface backend changed the runtime report");
         Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE && set_calls == 1,

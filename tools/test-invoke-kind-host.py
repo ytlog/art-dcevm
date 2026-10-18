@@ -70,8 +70,12 @@ void* Resolve(void* l, uint32_t index, void* caller) {
   }
   return missing_method ? nullptr : &method;
 }
-void* Caller(void* l, void* thread, uint32_t index, void* caller, int) {
-  Require(thread == self, "incorrect caller Thread"); return Resolve(l, index, caller);
+// Android 14--15 ResolveMethod<kNoChecks>(Thread*, ...) continues into the
+// cache overload on a DEX cache miss, which production also hooks.
+void* (*cache_hook)(void*, uint32_t, Handle, Handle, void*, int) = nullptr;
+void* Caller(void* l, void* thread, uint32_t index, void* caller, int type) {
+  Require(thread == self, "incorrect caller Thread");
+  return cache_hook ? cache_hook(l, index, {}, {}, caller, type) : Resolve(l, index, caller);
 }
 void* Cache(void* l, uint32_t index, Handle cache, Handle loader, void* caller, int) {
   Require(cache.reference == nullptr && loader.reference == nullptr, "incorrect Handle ABI");
@@ -87,9 +91,10 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (mode == 0) return nullptr;
   if (name == std::string(symbols::runtime_thread::kCurrentThread.name)) return HookAddress(Current);
   if (name == std::string(symbols::structural::kThrowNewException.name)) return HookAddress(Throw);
-  if ((mode == 1 || mode == 4 || mode >= 6) && name == std::string(kResolveMethodId.name)) return HookAddress(Resolve);
-  if ((mode == 2 || mode == 3 || mode == 5) && name == std::string(kResolveCaller.name)) return HookAddress(Caller);
-  if ((mode == 2 || mode == 3) && name == std::string(kResolveCache.name)) return HookAddress(Cache);
+  // Case 10 is the Android 14--15 shape: selectors without ResolveMethodId.
+  if ((mode == 1 || mode == 4 || (mode >= 6 && mode != 10)) && name == std::string(kResolveMethodId.name)) return HookAddress(Resolve);
+  if ((mode == 2 || mode == 3 || mode == 5 || mode == 10) && name == std::string(kResolveCaller.name)) return HookAddress(Caller);
+  if ((mode == 2 || mode == 3 || mode == 10) && name == std::string(kResolveCache.name)) return HookAddress(Cache);
   if ((mode == 1 || mode == 2 || mode == 5 || mode >= 6) && name == std::string(kNterpGetMethod.name)) return HookAddress(Nterp);
   if (mode >= 6) {
     if (name == std::string(kSelectVirtual.name)) return HookAddress(Selection);
@@ -202,8 +207,10 @@ int main(int argc, char** argv) {
         invoke_kind::ObserveScope(&fake_thread,&thread_layout,&layout,{&admission.root});
         Require(!invoke_kind::SelfCalls(), "unprobed Class enabled self calls");
         invoke_kind::ObserveClassLayout(0,4,8,8);
-        Require(invoke_kind::SelfCalls() == (mode == 6), "partial selection services enabled self calls");
-        if (mode == 6) {
+        const bool complete = mode == 6 || mode == 10;
+        Require(invoke_kind::SelfCalls() == complete && invoke_kind::SelectionServices() == complete,
+                "partial selection services enabled self calls");
+        if (complete) {
           void* klass = mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
           Require(klass != MAP_FAILED, "unable to allocate low-address class fixture");
           auto* fields = static_cast<uint32_t*>(klass); fields[0] = 0x00200000; fields[1] = 0x9000;
@@ -234,6 +241,10 @@ int main(int argc, char** argv) {
           self = &fake_thread; referrer = &own_caller;
           own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);
           uint16_t inst[]{0x6e,9,0}; bool string_init = false;
+          for (const auto& hook : hooks)
+            if (std::string(hook.name) == symbols::invoke_kind::kResolveCache.name)
+              cache_hook = reinterpret_cast<decltype(cache_hook)>(hook.replacement);
+          Require((cache_hook != nullptr) == (mode == 10), "unexpected cache overload hook");
           for (const auto& hook : hooks) {
             if (std::string(hook.name) != symbols::invoke_kind::kSelectVirtual.name &&
                 std::string(hook.name) != symbols::invoke_kind::kSelectInterface.name) continue;
@@ -292,7 +303,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(10):
+        for case in range(11):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')
