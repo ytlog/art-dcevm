@@ -285,11 +285,17 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   imt_sealing::Installed(prepared.retirement && sealing_prepared);
   narrowed_references::Installed(prepared.retirement && references_prepared);
   invoke_kind::Installed(prepared.retirement && invoke_kind_prepared);
-  // The engine's own environment carries no other events.
+  // ThreadEnd runs on the ending attachment; clear TLS before ART can reuse
+  // its Thread/JNIEnv on this OS thread. Failure leaves per-link probing intact.
   jvmtiEventCallbacks callbacks{};
   callbacks.ClassPrepare = ClassPrepared;
+  callbacks.ThreadStart = [](jvmtiEnv*, JNIEnv*, jthread) { runtime_thread::ThreadStarted(); };
+  callbacks.ThreadEnd = [](jvmtiEnv*, JNIEnv*, jthread) { runtime_thread::ThreadEnded(); };
   prepared.subclass_watch = prepared.instance_check &&
       env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE;
+  runtime_thread::CacheProofs(prepared.subclass_watch &&
+      env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_THREAD_START, nullptr) == JVMTI_ERROR_NONE &&
+      env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_THREAD_END, nullptr) == JVMTI_ERROR_NONE);
   std::string field_note;
   if (prepared.retirement)
     member_retirement::ResolveFieldPlaceholders(env, placeholders, &field_note);

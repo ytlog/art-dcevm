@@ -3,6 +3,7 @@
 #include <android/log.h>
 #include <android/api-level.h>
 #include <cstdlib>
+#include <atomic>
 #include <sys/syscall.h>
 #include <unistd.h>
 #include "platform/abi/arm64/release_order.h"
@@ -22,10 +23,20 @@ template <class T> T Load(void* thread, size_t offset) noexcept {
 }
 struct State final : transaction::Part {
   void* thread = nullptr;
+  JNIEnv* jni = nullptr;
   const RuntimeThread* layout = nullptr;
   uint32_t accepted = 0;
   const char* rejection = "runtime Thread declaration did not match JNI environment/tid/marking flag";
 };
+struct CachedProof {
+  void* thread = nullptr;
+  JNIEnv* jni = nullptr;
+  const RuntimeThread* layout = nullptr;
+  uint32_t accepted = 0;
+};
+std::atomic<bool> cache_enabled{false};
+thread_local CachedProof cached;
+thread_local bool ending = false;
 State* Get() noexcept {
   return transaction::PartOf<State>(transaction::Current(), &transaction::Context::thread);
 }
@@ -45,6 +56,8 @@ void Probe(JNIEnv* jni) {
   auto* context = transaction::Current();
   if (!context) return;
   auto next = std::make_unique<State>();
+  cached = {};
+  next->jni = jni;
   if (!Available()) {
     next->rejection = "runtime Thread/ReadBarrier named services unavailable";
   } else {
@@ -65,7 +78,29 @@ void Probe(JNIEnv* jni) {
     next->accepted = 0;
     next->rejection = "runtime Thread probe rejected injected mismatch";
   }
+  if (next->layout && !ending && cache_enabled.load(std::memory_order_acquire))
+    cached = {next->thread, jni, next->layout, next->accepted};
   context->thread = std::move(next);
+}
+void CacheProofs(bool enabled) noexcept {
+  cached = {};
+  cache_enabled.store(enabled, std::memory_order_release);
+}
+void ThreadStarted() noexcept { cached = {}; ending = false; }
+void ThreadEnded() noexcept { cached = {}; ending = true; }
+bool Restore(void* current) noexcept {
+  auto* context = transaction::Current();
+  if (!context || !cache_enabled.load(std::memory_order_acquire) || !cached.layout ||
+      !current || current != cached.thread || !current_thread || current_thread() != current) return false;
+  auto next = std::unique_ptr<State>(new (std::nothrow) State);
+  if (!next) return false;
+  next->thread = cached.thread;
+  next->jni = cached.jni;
+  next->layout = cached.layout;
+  next->accepted = cached.accepted;
+  next->rejection = nullptr;
+  context->thread = std::move(next);
+  return true;
 }
 std::optional<VerifiedThread> Ready() noexcept {
   const auto* state = Get();
@@ -79,6 +114,10 @@ void* Current(const VerifiedThread& thread) noexcept {
   const auto* state = Get();
   if (!state || state != thread.state_ || !state->layout) UnverifiedRead();
   return state->thread;
+}
+JNIEnv* Environment(const VerifiedThread& thread) noexcept {
+  Current(thread);
+  return Get()->jni;
 }
 const RuntimeThread& Layout(const VerifiedThread& thread) noexcept {
   Current(thread);

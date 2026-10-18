@@ -80,6 +80,9 @@ public final class InterfaceEvolutionFixture {
     public interface ShadowParent { default int shadow() { return 7; } }
     public static class ProtectedPlain implements ProtectedShadow {}
     public static class ProtectedLate extends ProtectedBase implements ProtectedShadow {}
+    public static class ProtectedWorkerFirst extends ProtectedBase implements ProtectedShadow {}
+    public static class ProtectedWorkerSecond extends ProtectedBase implements ProtectedShadow {}
+    public static class ProtectedWorkerNext extends ProtectedBase implements ProtectedShadow {}
     public static class PackageLate extends PackageBase implements PackageShadow {}
     public static class OtherPackageLate extends com.github.ytlog.artdcevm.fixture.other.OtherPackageBase
             implements OtherPackageShadow {}

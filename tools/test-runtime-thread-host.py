@@ -29,6 +29,7 @@ SOURCE = r'''
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 using namespace artdcevm;
 namespace target_abi = artdcevm::abi::arm64;
 void* thread = nullptr;
@@ -83,6 +84,8 @@ template <class Thread> void Check(int release) {
   marking = &fake.tls32.is_gc_marking;
   platform_api = release == 11 ? 30 : release == 12 ? 31 : release + 20;
   transaction::Scope scope;
+  runtime_thread::ThreadStarted();
+  runtime_thread::CacheProofs(true);
   for (bool exported : {false, true}) {
     export_config = exported;
     cc = true;
@@ -105,6 +108,39 @@ template <class Thread> void Check(int release) {
               "LayoutFor collapsed the selected release into the first accepted layout");
     }
     Require(runtime_thread::Current(*ready) == &fake, "Wrong current thread");
+    Require(runtime_thread::Environment(*ready) == jni, "Wrong verified environment");
+    {
+      transaction::Scope linking;
+      Require(!runtime_thread::Restore(reinterpret_cast<void*>(1)) && !runtime_thread::Ready(),
+              "Cache accepted a different attachment");
+      Require(runtime_thread::Restore(&fake), "Native thread proof was not cached");
+      auto restored = runtime_thread::Ready();
+      Require(restored && runtime_thread::Current(*restored) == &fake &&
+              runtime_thread::Environment(*restored) == jni &&
+              runtime_thread::LayoutFor(*restored, release), "Cache lost accepted layout facts");
+    }
+    bool foreign_restored = true;
+    std::thread foreign([&] {
+      transaction::Scope linking;
+      foreign_restored = runtime_thread::Restore(&fake);
+    });
+    foreign.join();
+    Require(!foreign_restored, "Cache crossed OS threads");
+    runtime_thread::ThreadEnded();
+    {
+      transaction::Scope detached;
+      Require(!runtime_thread::Restore(&fake), "Detached attachment reused Thread/JNIEnv addresses");
+      runtime_thread::Probe(jni);
+      Require(runtime_thread::Ready().has_value(), "New attachment could not establish a fresh Native proof");
+      {
+        transaction::Scope end_callback;
+        Require(!runtime_thread::Restore(&fake), "A later agent's ThreadEnd callback repopulated the cache");
+      }
+      runtime_thread::ThreadStarted();
+      runtime_thread::Probe(jni);
+      transaction::Scope reattached;
+      Require(runtime_thread::Restore(&fake), "ThreadStart did not permit a new attachment's proof");
+    }
     marks = 0;
     *marking = 0;
     Require(runtime_thread::Read(*ready, 0) == nullptr && marks == 0, "Null reference reached Mark");
@@ -127,6 +163,7 @@ template <class Thread> void Check(int release) {
       runtime_thread::Probe(jni);
       Require(!runtime_thread::Ready() && std::string(runtime_thread::Rejection()).find("JNI environment/tid") != std::string::npos,
               "Wrong tid did not reject mapping");
+      Require(!runtime_thread::Restore(&fake), "Rejected Native probe retained a cached proof");
       fake.tls32.tid = 42;
       fake.tls_ptr.jni_env = nullptr;
       runtime_thread::Probe(jni);
@@ -148,6 +185,14 @@ template <class Thread> void Check(int release) {
     }
     Require(runtime_thread::Ready() && runtime_thread::Current(*ready) == &fake,
             "Nested transaction lost outer Thread state");
+    runtime_thread::CacheProofs(false);
+    {
+      transaction::Scope no_lifecycle;
+      runtime_thread::Probe(jni);
+      transaction::Scope linking;
+      Require(!runtime_thread::Restore(&fake), "Cache enabled without ThreadEnd notification");
+    }
+    runtime_thread::CacheProofs(true);
   }
 }
 int main() {

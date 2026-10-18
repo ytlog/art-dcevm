@@ -3200,6 +3200,27 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                     scenario.check("hotFailures", 0, hot.invoke(null, receiver, 30000));
                 }
                 if (index == 2) {
+                    Object[] workerValues = new Object[3];
+                    Throwable[] workerFailure = new Throwable[1];
+                    for (int attachment = 0; attachment < 2; ++attachment) {
+                        final int first = attachment == 0 ? 0 : 2, end = attachment == 0 ? 2 : 3;
+                        Thread worker = new Thread(() -> {
+                            try {
+                                String[] names = {"ProtectedWorkerFirst", "ProtectedWorkerSecond", "ProtectedWorkerNext"};
+                                for (int j = first; j < end; ++j)
+                                    workerValues[j] = Class.forName(InterfaceEvolutionFixture.class.getName() + "$" + names[j],
+                                            true, receiver.getClass().getClassLoader()).getConstructor().newInstance();
+                            } catch (Throwable failure) { workerFailure[0] = failure; }
+                        });
+                        worker.start(); worker.join(30000);
+                        if (worker.isAlive()) throw new AssertionError("Late linking worker did not finish");
+                        if (workerFailure[0] != null) throw new AssertionError("Late linking worker failed", workerFailure[0]);
+                    }
+                    for (int j = 0; j < workerValues.length; ++j) {
+                        final Object value = workerValues[j];
+                        scenario.expectError("worker" + j, IllegalAccessError.class, () -> caller.invoke(null, value));
+                        scenario.check("workerClass" + j, 72, value.getClass().getMethod("oldCall").invoke(value));
+                    }
                     Object publicOverride = Class.forName(InterfaceEvolutionFixture.class.getName() + "$ProtectedPublic",
                             true, receiver.getClass().getClassLoader()).getConstructor().newInstance();
                     scenario.check("publicOverride", 103, caller.invoke(null, publicOverride));

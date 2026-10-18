@@ -549,12 +549,17 @@ bool LinkClass(LinkClassFunction original, void* linker, void* thread, const cha
     if (!release || !runtime.load()) return original(linker, thread, descriptor, klass, interfaces, output);
     transaction::Scope scope;
     JNIEnv* jni = nullptr;
-    if (services.vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
-      return original(linker, thread, descriptor, klass, interfaces, output);
-    jni->CallStaticVoidMethod(services.probe_class, services.probe);
-    if (jni->ExceptionCheck()) return false;
+    if (!runtime_thread::Restore(thread)) {
+      if (services.vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6) != JNI_OK || !jni)
+        return original(linker, thread, descriptor, klass, interfaces, output);
+      // First link on an unprobed attachment: the preinitialized native method
+      // supplies the Native proof. Subsequent links reuse its thread-local facts.
+      jni->CallStaticVoidMethod(services.probe_class, services.probe);
+      if (jni->ExceptionCheck()) return false;
+    }
     auto proof = runtime_thread::Ready();
     if (!proof || runtime_thread::Current(*proof) != thread) return false;
+    jni = runtime_thread::Environment(*proof);
     auto next = std::make_unique<iface::detail::State>(jni, nullptr, 0, nullptr);
     next->runtime = abi::RuntimeFor(release);
     next->selected_release = release;

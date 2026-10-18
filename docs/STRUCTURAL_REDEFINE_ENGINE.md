@@ -68,6 +68,10 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 
 `Check*` 等 ART 内部阶段不调用 JNI/JVMTI 进行类加载、遍历、可赋值比较或策略计算。例外包括类种类转换的 Collect 前置检查：ART 已暂停类加载与分配，公开 JVMTI 精确实例堆枚举在原实例分配之前拒绝不安全转换，回调不分配、不改 tag、不调用 JNI；详见[类种类演进](CLASS_KIND_EVOLUTION.md)。另一例外是分配 Hook 在当前线程上对本事务私有数组和 holder 使用 JNI `SetObjectArrayElement`（含命名局部引用桥接和异常检查）：ART 13/14/15/16 的 `ScopedThreadStateChange` 在新旧状态同为 Runnable 时不切换状态；该元素写入执行 ART 自己的写屏障，不分配托管对象且没有挂起点。局部引用容量在 Native 状态预留。这一例外禁止用于任何 ART 回调或持有 ART 锁的区域，也不适用于已发布数组。
 
+接口选择还有一个受限的 JNI 上调例外：首次选择事务激活后，后续普通 `LinkClass` 在当前附着线程没有 Native 探测证明时，调用安装阶段已经加载、初始化并注册的 `InterfaceLinkProbe.probe`，只进入真实 Native 帧核对 Thread/JNIEnv/tid 和声明候选，不执行应用代码或 JVMTI。每次成功的 Native 探测把无托管引用的声明事实记入本线程 TLS；命中时为本次链接创建独立证明，不再上调或重新探测。自有 JVMTI 环境启用 `ThreadStart` 和 `ThreadEnd` 后才允许缓存；结束事件清空 TLS 并禁止之后的 Agent 结束回调重新填充，下一附着的开始事件才恢复缓存资格，防止同一 OS 线程重新附着或 Thread/JNIEnv 地址复用。任一事件安装失败时继续逐次探测。失败探测也清空缓存，不复用外层事务的证明。
+
+这一上调发生在原 `LinkClass` 主体之前。固定 [ART 13](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/class_linker.cc) 与 [ART 16](https://android.googlesource.com/platform/art/+/refs/tags/android-16.0.0_r1/runtime/class_linker.cc) 的普通 DefineClass 调用方可持有目标 Class 的对象 monitor，线程为 Runnable、持有共享 mutator 权限；尚未取得 LinkClass 后部的 `classlinker_classes_lock_`，增强库也不持有 registry/bridge 锁或线程列表／挂起计数锁。JNI 的 `ScopedObjectAccess` 对 Runnable→Runnable 不切换状态，ART 的 JNI 调用桥在进入 native 探针时负责真实 Native 转换并恢复；CheckJNI 仍检查当前 JNIEnv、方法与 pending exception。类与接口由调用方 Handle 保活，上调可能挂起，返回后只重新解引用 Handle，不保留跨上调的裸堆指针。此例外不能推广为在链接中执行任意 Java 回调。
+
 ### RetransformClasses
 
 arm64 Android 11–17（API 30–37，含 Android 12L/API 32）复用标准入口的 Native 快照、校验、映射和退役路径。安装时选择固定声明，并核对公开 JVMTI 表指向命名 `JvmtiFunctions::RetransformClasses`；先 Hook `Redefiner::RedefineClassesDirect`，再 Hook 该包装器，最后安装标准重定义入口。11–12L 还要求命名 `ArtClassDefinition::InitializeMemory`。缺少服务、声明或公开表不匹配时不安装这组 Hook，`retransformRouted` 为 false。该诊断只报告安装，不能将原生拒绝算作增强结构变化成功。11–12L 当前只有源码、真实符号和宿主验证，尚缺对应 arm64 设备执行证据。
@@ -184,7 +188,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 `interface_method_selection.cc` 共用现有 `LinkMethods` 钩子，并从外层 `LinkClass` 保存真实 ClassLinker 接收者，避免把模板 helper 当作链接器。它用独立有效 DEX 暂时隐藏私有替换类自身的接口列表，保留全部 ID、签名与代码；包括普通类加载在内，先分配仅属于待链接类的私有 DexCache；仅在原链接调用期间替换该私有 cache 的 DexFile，并通过可移动 Handle 恢复，不切换共享 cache。ART 照常分配类方法 vtable 索引。另一个不发布到 ClassTable 的空抽象类实现最终接口图，借用 ART 的默认方法、miranda 与冲突选择；然后将选中方法复制进接收类，填好私有 vtable/IfTable，仍由外层 ART 完成类布局和发布。
 
-非 public 错误入口采用真实接口签名的 public abstract copied miranda，清除代码和可执行 default 标志，保留原类方法与其虚调用槽。JIT 无法将这个不可执行入口内联为原类方法或 default。命名的 invocation-time/abstract 错误服务为登记入口选择 IAE/AME；旧版 MethodHandle 跳过抽象检查时，由命名的 interpreter-to-interpreter 调用入口在执行前抛出相同错误；普通 ART miranda 也必须在此交回原 invocation-time 服务，不能进入不存在的 CodeItem。普通解释器方法直接经过标志快路径。登记在类发布前完成；失败删除登记和根，成功时像退役成员一样保留类加载器根至进程结束，避免原生方法地址重用。后续普通类加载通过预加载的 JNI native 探针获得本线程的真实 Native 声明证明，沿用已验证 Class 布局；不修改线程状态、不推算地址。`interfaceMethodSelection` 单独报告服务可用性。
+非 public 错误入口采用真实接口签名的 public abstract copied miranda，清除代码和可执行 default 标志，保留原类方法与其虚调用槽。JIT 无法将这个不可执行入口内联为原类方法或 default。命名的 invocation-time/abstract 错误服务为登记入口选择 IAE/AME；旧版 MethodHandle 跳过抽象检查时，由命名的 interpreter-to-interpreter 调用入口在执行前抛出相同错误；普通 ART miranda 也必须在此交回原 invocation-time 服务，不能进入不存在的 CodeItem。普通解释器方法直接经过标志快路径。登记在类发布前完成；失败删除登记和根，成功时像退役成员一样保留类加载器根至进程结束，避免原生方法地址重用。后续普通类加载复用本线程已验证的 Native 声明事实，仅缓存未命中时调用预加载的 JNI native 探针，沿用已验证 Class 布局；缓存与上调边界见“标准入口”。`interfaceMethodSelection` 单独报告服务可用性。
 
 接口 direct 方法退役使用现有 `{old, old, kRetired}` 映射、DexCache 清理与访问守卫：字节码、JNI、MethodHandle 调用抛 `NoSuchMethodError`，缓存反射调用抛包装它的 `InvocationTargetException`；活动旧帧继续执行。标准入口的保活根已覆盖接口及整组子类型，发生退役时保留至进程结束；每个目标独立记录 retired kinds，因此之后以另一种调用方式恢复同名同描述符时，仍按原调用方式检查，采用与直接切换相同的调用保护或 71 限制。接口不需要新的访问守卫。
 

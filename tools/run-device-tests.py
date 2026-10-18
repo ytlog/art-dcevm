@@ -1243,6 +1243,9 @@ REQUIRED_CHECKS["static-narrow-loaders"] = {
     "distinctClasses": False, **{name + str(i): value for i in range(2)
         for name, value in (("selfCleared", None), ("compatibleKept", True), ("retypedKept", True), ("ownLoader", True))}}
 
+REQUIRED_CHECKS["interface-shadow-protected"].update({
+    **{"worker" + str(i): "java.lang.IllegalAccessError" for i in range(3)},
+    **{"workerClass" + str(i): 72 for i in range(3)}})
 REQUIRED_CHECKS["interface-shadow-protected-abort"] = {"armed": 0, "stable": 71, "oldShadow": 72,
     "noDeclaration": "java.lang.NoSuchMethodException"}
 REQUIRED_CHECKS["interface-shadow-protected-abstract"] = {"nonPublic": "java.lang.IllegalAccessError",

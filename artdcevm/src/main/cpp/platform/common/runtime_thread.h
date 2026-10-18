@@ -10,6 +10,14 @@ void Prepare();
 bool Available();
 void Probe(JNIEnv* jni);
 const char* Rejection() noexcept;
+// Enable only after the engine's own ThreadStart/ThreadEnd events are installed. The cache
+// is native TLS, contains no heap references, and is invalidated on detach.
+void CacheProofs(bool enabled) noexcept;
+void ThreadStarted() noexcept;
+void ThreadEnded() noexcept;
+// Establish a fresh transaction proof from this attached thread's last Native
+// probe. Never borrows an enclosing transaction's proof or reads a new layout.
+bool Restore(void* current) noexcept;
 
 // Only Ready can construct this transaction-scoped proof. Passing an outer or
 // expired proof is still a fatal invariant failure; it never permits raw reads.
@@ -25,6 +33,7 @@ class VerifiedThread {
 };
 std::optional<VerifiedThread> Ready() noexcept;
 void* Current(const VerifiedThread& thread) noexcept;
+JNIEnv* Environment(const VerifiedThread& thread) noexcept;
 const abi::arm64::RuntimeThread& Layout(const VerifiedThread& thread) noexcept;
 // Only candidates accepted by this thread's Native probe can be selected.
 const abi::arm64::RuntimeThread* LayoutFor(const VerifiedThread& thread, int release) noexcept;
