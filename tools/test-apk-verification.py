@@ -122,6 +122,21 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_interface_shadow_rejects_unsafe_defaults_on_every_release(self):
+        for api in (30, 33, 34, 35, 36, 37):
+            report = complete_report(api)
+            report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("interface-shadow-")]
+            self.assertEqual(len(report["scenarios"]), 5)
+            runner.validate_report(report, scenario_group="interface-shadow")
+            for name in ("interface-shadow-protected", "interface-shadow-package"):
+                scenario = next(s for s in report["scenarios"] if s["name"] == name)
+                self.assertEqual(scenario["actualCode"], 63)
+                broken = copy.deepcopy(report)
+                target = next(s for s in broken["scenarios"] if s["name"] == name)
+                target["checks"] = [c for c in target["checks"] if c["name"] != "unchangedMembers"]
+                with self.subTest(api=api, scenario=name), self.assertRaises(runner.RunFailure):
+                    runner.validate_report(broken, scenario_group="interface-shadow")
+
     def test_non_public_interface_calls_require_release_specific_evidence(self):
         for api in (33, 34, 35, 36):
             with self.subTest(api=api):

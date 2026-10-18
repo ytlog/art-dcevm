@@ -28,7 +28,7 @@
 
 | 接口目标的拒绝情况 | JVMTI 错误码 |
 | --- | --- |
-| 新增 native；direct 方法遮蔽继承的接口／Object 方法；default 与实现类在另一运行时包中、因而不继承的类链 package-private 方法同签名；Android 13、14 上已加载类以 package-private／protected 方法实现新增的 abstract（ART 链接失败） | `METHOD_ADDED`（63） |
+| 新增 native；direct 方法遮蔽继承的接口／Object 方法；default 与类链 protected/package-private 实例方法同签名，或改变另一运行时包的 package-private 类方法解析；Android 13、14 上已加载类以 package-private／protected 方法实现新增的 abstract（ART 链接失败） | `METHOD_ADDED`（63） |
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
 | 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
@@ -47,6 +47,8 @@
 接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。不能仅切换模式来修复此前缓存的指针 ID。普通类仍按其原有规则验收。
 
 与 JBR 相同，新增 public abstract 方法不要求已加载的实现类提供实现：已有实现、父类继承的实现、同批补齐的实现和 ART 选中的更具体 default 照常分派；缺少实现的类（包括没有实例、没有提交 DEX 的类）调用时抛 `AbstractMethodError`。更具体的 abstract 重声明遮住远处的 default，同批移除最后一个实现也是如此。泛型与协变返回依赖真实 bridge，不把相同名称或不同返回类型当作实现。实现类只有同签名的非 public 方法时遵循 ART 的选择：Android 15、16 链接成功，调用抛 `IllegalAccessError`（API 36 实测，只有 private 方法时同样）；Android 13、14 链接 package-private／protected 实现即抛 `IllegalAccessError`，类无法链接，整批以 63 拒绝，`lastRejection` 写明实现类、方法与接口。
+
+新增 default 与类链非 public 实例方法同签名时，Android 11–17 均在提交前以 63 拒绝，并保留旧定义。JBR 在接口调用时抛 IllegalAccessError；ART 15–17 会复制并执行 default，故不接受该不等价行为。更具体的 public 覆写可接受，static/private 的兼容场景继续支持。
 
 多个接口组共同提交。快照后加载的相关类型触发现有有界重试，达到上限时整批拒绝 113，撤回或修正后可重新提交。失败不改写旧定义、已缓存的反射／MethodHandle／JNI method ID 或预热调用点。
 

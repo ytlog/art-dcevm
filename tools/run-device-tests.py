@@ -144,8 +144,8 @@ SCENARIOS = (
     ('interface-hide-object', ['interface-hide-object'], 63),
     ('interface-shadow-static', ['interface-shadow-static'], 0),
     ('interface-shadow-private', ['interface-shadow-private'], 0),
-    ('interface-shadow-protected', ['interface-shadow-protected'], 0),
-    ('interface-shadow-package', ['interface-shadow-package'], 0),
+    ('interface-shadow-protected', ['interface-shadow-protected'], 63),
+    ('interface-shadow-package', ['interface-shadow-package'], 63),
     ('interface-shadow-other-package', ['interface-shadow-other-package'], 63),
     ('interface-bridge-add', ['interface-bridge-add', 'interface-bridge-add'], 0),
     ('interface-lambda-first', ['interface-lambda-first'], 0),
@@ -345,12 +345,6 @@ def release_expectation(name, code, required, api, self_selection):
     if name == "method-private-active-target" and self_selection:
         return 0, {"privateKind": True, "activeCompleted": True, "oldSelf": 25}
 
-    # A protected or package-private class-chain method a new default shares
-    # its identity with is that default's non-public implementation.
-    if name in ("interface-shadow-protected", "interface-shadow-package") and api <= NON_PUBLIC_LINK_ERROR_API:
-        i = 2 if name.endswith("protected") else 3
-        return 63, {"rejectionReason": True, "oldDispatch": 51 + 10 * i, "newDispatch": 51 + 10 * i,
-                    "oldShadow": 52 + 10 * i, "afterGc": 51 + 10 * i}
     kind = name.removeprefix("interface-abstract-unimplemented-")
     if kind in ("package", "protected") and api <= NON_PUBLIC_LINK_ERROR_API:
         return 63, LINK_ERROR_CHECKS
@@ -791,8 +785,8 @@ REQUIRED_CHECKS.update({
     "interface-hide-object": {"rejectionReason": True, "oldDispatch": 41, "newDispatch": 41, "afterGc": 41},
     **{"interface-shadow-" + kind: {"interfaceShadow": 1, "oldDispatch": 0, "newDispatch": 0,
         "oldShadow": 52 + 10 * i, "afterGc": 0} for i, kind in enumerate(("static", "private"))},
-    **{"interface-shadow-" + kind: {"interfaceShadow": "java.lang.IllegalAccessError", "oldDispatch": 0,
-        "newDispatch": 0, "oldShadow": 52 + 10 * i, "afterGc": 0}
+    **{"interface-shadow-" + kind: {"rejectionReason": True, "oldDispatch": 51 + 10 * i,
+        "newDispatch": 51 + 10 * i, "oldShadow": 52 + 10 * i, "afterGc": 51 + 10 * i}
         for i, kind in enumerate(("protected", "package"), 2)},
     "interface-shadow-other-package": {"rejectionReason": True, "oldDispatch": 91, "newDispatch": 91,
         "oldShadow": 92, "afterGc": 91},
@@ -816,7 +810,7 @@ REQUIRED_CHECKS.update({
             for i in range(200) for kind in ("oldAdded", "newAdded", "oldDispatch", "oldMarker", "afterGc")}},
 })
 UNCHANGED_CHECKS = {
-    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-other-package']},
+    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-protected', 'interface-shadow-package', 'interface-shadow-other-package']},
     "interface-overlap-superclass": ("unchangedParent",),
     **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
@@ -1068,6 +1062,8 @@ REQUIRED_CHECKS["static-narrow-loaders"] = {
         for name, value in (("selfCleared", None), ("compatibleKept", True), ("retypedKept", True), ("ownLoader", True))}}
 
 def scenario_sequence(scenario_group):
+    if scenario_group == "interface-shadow":
+        return tuple(item for item in SCENARIOS if item[0].startswith("interface-shadow-"))
     if scenario_group == "full":
         return SCENARIOS
     if scenario_group == "interface-abstract":
@@ -1275,7 +1271,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool", "interface-shadow"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
                         help="Debug-only canonical IMT capture path to verify before engine initialization")

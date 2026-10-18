@@ -55,6 +55,8 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
 
 `ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，`thread-subclass` 单独运行应用 `Thread` 子类场景，`interface-removal` 运行接口移除、重复重建、抽象父类晚加载、JBR 引用字段清理与恢复场景，`proxy-interface` 单独运行 Proxy 实现类场景，`interface-drop-parent` 单独运行接口移除父接口场景，`static-narrow` 检查静态字段的 JBR 复制规则，`field-retype` 检查字段改类型；这些都不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
 
+`--scenario-group interface-shadow` 单独验证接口新增 default 与类链方法同签名的边界：static/private 场景成功；protected/package-private 实例及跨包 package-private 场景提交前返回 63，检查声明类拒绝原因、旧成员不变、旧实例与新实例分派及 GC。主机快照回归另查更具体的 public 覆写和不同加载器。
+
 ## 失败恢复与故障隔离
 
 完整仪器在同一进程检查失败后的旧行为、后续父类/接口事务和 GC：

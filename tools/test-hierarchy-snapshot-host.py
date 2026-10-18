@@ -23,6 +23,8 @@ struct Type : _jclass {
   jint hash;
   jobject loader = nullptr;
   jclass implemented = nullptr;
+  const char* descriptor = "Lsame/Name;";
+  std::vector<evolution::Member> methods;
   Type(Type* p = nullptr, bool itf = false, jint state = JVMTI_CLASS_STATUS_PREPARED,
        jint identity_hash = 7) : parent(p), interface(itf), status(state), hash(identity_hash) {}
 };
@@ -58,17 +60,18 @@ jvmtiError JNICALL Status(jvmtiEnv*, jclass c, jint* status) {
 jvmtiError JNICALL Loader(jvmtiEnv*, jclass c, jobject* loader) {
   *loader = static_cast<Type*>(c)->loader; return JVMTI_ERROR_NONE;
 }
-jvmtiError JNICALL Signature(jvmtiEnv*, jclass, char** signature, char**) {
-  *signature = static_cast<char*>(std::malloc(20));
-  std::strcpy(*signature, "Lsame/Name;"); return JVMTI_ERROR_NONE;
+jvmtiError JNICALL Signature(jvmtiEnv*, jclass klass, char** signature, char**) {
+  const char* value = static_cast<Type*>(klass)->descriptor;
+  *signature = static_cast<char*>(std::malloc(std::strlen(value) + 1));
+  std::strcpy(*signature, value); return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Interfaces(jvmtiEnv*, jclass, jint* n, jclass** classes) {
   *n = 0; *classes = nullptr; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Deallocate(jvmtiEnv*, unsigned char* p) { std::free(p); return JVMTI_ERROR_NONE; }
 namespace artdcevm::live_schema {
-int ReadLiveMethods(jvmtiEnv*, jclass, std::vector<evolution::Member>* out, std::string*) {
-  ++method_reads; out->push_back({"work", "()I", evolution::kAccPublic}); return JVMTI_ERROR_NONE;
+int ReadLiveMethods(jvmtiEnv*, jclass klass, std::vector<evolution::Member>* out, std::string*) {
+  ++method_reads; *out = static_cast<Type*>(klass)->methods; return JVMTI_ERROR_NONE;
 }
 }
 int main() {
@@ -133,6 +136,41 @@ int main() {
     fail_status = nullptr;
     Require(build({}) == JVMTI_ERROR_NONE && index.affected.empty() && index.subtypes.empty(),
             "empty targets retained a previous index");
+    // Default selection must include same-package ancestors, retaining the
+    // most specific public implementation and each loader's declarations.
+    object.descriptor = "Ljava/lang/Object;";
+    Type base(&object), implementation(&base);
+    base.descriptor = "Lsame/Base;"; implementation.descriptor = "Lsame/Implementation;";
+    contract.descriptor = "Lsame/Contract;";
+    implementation.implemented = &contract;
+    const auto shadows = [&]() {
+      hierarchy_snapshot::Snapshot snapshot;
+      snapshot.live.access = evolution::kAccInterface;
+      Require(hierarchy_snapshot::CollectSubclasses(&env, &jni, &contract, {{&implementation, true}},
+                                                    &snapshot, &reason) == JVMTI_ERROR_NONE,
+              "Default-shadow snapshot failed");
+      return snapshot.hierarchy.subtype_shadows;
+    };
+    const structural_policy::MemberKey key{"shadow", "()I"};
+    for (uint32_t access : {0u, evolution::kAccProtected}) {
+      base.methods = {{"shadow", "()I", access}};
+      Require(shadows().at(key) == "Lsame/Base;", "Same-package non-public ancestor was omitted");
+      implementation.methods = {{"shadow", "()I", evolution::kAccPublic}};
+      Require(!shadows().count(key), "A public implementation was masked by a non-public ancestor");
+      implementation.methods.clear();
+    }
+    for (uint32_t access : {evolution::kAccPublic, evolution::kAccPrivate, evolution::kAccStatic}) {
+      base.methods = {{"shadow", "()I", access}};
+      Require(!shadows().count(key), "A compatible class-chain method blocked a default");
+    }
+    base.descriptor = "Lother/Base;";
+    base.methods = {{"shadow", "()I", evolution::kAccStatic}};
+    Require(shadows().at(key) == "Lother/Base;", "Cross-package package member lost its guard");
+    base.descriptor = "Lsame/Base;";
+    base.loader = reinterpret_cast<jobject>(0x1000);
+    Require(shadows().at(key) == "Lsame/Base;", "Same-named packages from different loaders were conflated");
+    implementation.methods = {{"shadow", "()I", evolution::kAccPublic}};
+    Require(!shadows().count(key), "A public override lost class-chain selection across loaders");
     std::cout << "Hierarchy snapshot identity, status, retention and traversal PASS\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

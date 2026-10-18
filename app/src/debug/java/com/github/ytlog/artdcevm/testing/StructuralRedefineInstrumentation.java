@@ -183,6 +183,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("invoke-kind".equals(isolated)) runInvokeKindScenarios();
             else if ("method-private".equals(isolated)) runPrivateCallScenarios();
             else if ("tool".equals(isolated)) runToolScenarios();
+            else if ("interface-shadow".equals(isolated)) runInterfaceShadowScenarios();
             else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
                 runAbstractUnimplementedScenario(isolated.substring("interface-abstract-unimplemented-".length()));
@@ -2501,6 +2502,48 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
+    private void runInterfaceShadowScenarios() throws Exception {
+        // Static/private shadows preserve JBR resolution. Non-public virtual
+        // implementations and cross-package package members cannot preserve
+        // JBR dispatch when ART copies a new default; reject before commit.
+        Object[] shadows = {new InterfaceEvolutionFixture.StaticImpl(), new InterfaceEvolutionFixture.PrivateImpl(),
+                new InterfaceEvolutionFixture.ProtectedImpl(), new InterfaceEvolutionFixture.PackageImpl(),
+                new InterfaceEvolutionFixture.OtherPackageImpl()};
+        Class<?>[] contracts = {InterfaceEvolutionFixture.StaticShadow.class, InterfaceEvolutionFixture.PrivateShadow.class,
+                InterfaceEvolutionFixture.ProtectedShadow.class, InterfaceEvolutionFixture.PackageShadow.class,
+                InterfaceEvolutionFixture.OtherPackageShadow.class};
+        String[] kinds = {"static", "private", "protected", "package", "other-package"};
+        for (int i = 0; i < kinds.length; ++i) {
+            final int index = i;
+            String name = "interface-shadow-" + kinds[i];
+            Class<?> type = contracts[i]; Object receiver = shadows[i];
+            Method stable = type.getMethod("stable");
+            String schema = memberSchema(type);
+            int code = index >= 2 ? 63 : 0;
+            runScenario(name, code, scenario -> {
+                scenario.redefine(new Class<?>[]{type}, name);
+                int old = 51 + 10 * index;
+                if (code != 0) {
+                    String reason = DcevmRuntime.capabilities().getString("lastRejection");
+                    String owner = index == 2 ? "ProtectedBase" : index == 3 ? "PackageBase" : "OtherPackageBase";
+                    scenario.check("rejectionReason", true, reason.contains(owner + ";: shadow()I"));
+                    scenario.check("unchangedMembers", schema, memberSchema(type));
+                } else {
+                    old = 0;
+                    scenario.check("interfaceShadow", 1, type.getMethod("shadow").invoke(receiver));
+                }
+                scenario.check("oldDispatch", old, stable.invoke(receiver));
+                Object fresh = receiver.getClass().getConstructor().newInstance();
+                scenario.check("newDispatch", old, stable.invoke(fresh));
+                scenario.check("oldShadow", 52 + 10 * index, index == 0
+                        ? InterfaceEvolutionFixture.StaticBase.shadow()
+                        : receiver.getClass().getMethod("oldCall").invoke(receiver));
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.check("afterGc", old, stable.invoke(receiver));
+            });
+        }
+    }
+
     private void runInterfaceEvolutionScenarios() throws Exception {
         InterfaceEvolutionFixture.Implementation instance = new InterfaceEvolutionFixture.Implementation();
         instance.marker = 73;
@@ -2634,51 +2677,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             System.gc(); System.runFinalization(); System.gc();
             scenario.check("afterGc", 41, object.stable());
         });
-        // As on JBR, a new default may share its identity with a class-chain
-        // method. Static and private ones keep resolving as before; a
-        // protected or package-private one inherited by the implementation is
-        // its non-public implementation (see NON_PUBLIC_LINK_ERROR_API). A
-        // package-private method of another runtime package would resolve
-        // differently on ART and still rejects.
-        Object[] shadows = {new InterfaceEvolutionFixture.StaticImpl(), new InterfaceEvolutionFixture.PrivateImpl(),
-                new InterfaceEvolutionFixture.ProtectedImpl(), new InterfaceEvolutionFixture.PackageImpl(),
-                new InterfaceEvolutionFixture.OtherPackageImpl()};
-        Class<?>[] contracts = {InterfaceEvolutionFixture.StaticShadow.class, InterfaceEvolutionFixture.PrivateShadow.class,
-                InterfaceEvolutionFixture.ProtectedShadow.class, InterfaceEvolutionFixture.PackageShadow.class,
-                InterfaceEvolutionFixture.OtherPackageShadow.class};
-        String[] kinds = {"static", "private", "protected", "package", "other-package"};
-        for (int i = 0; i < kinds.length; ++i) {
-            final int index = i;
-            String name = "interface-shadow-" + kinds[i];
-            Class<?> type = contracts[i]; Object receiver = shadows[i];
-            Method stable = type.getMethod("stable");
-            String schema = memberSchema(type);
-            boolean nonPublic = index == 2 || index == 3;
-            int code = index == 4 ? 63 : abstractUnimplementedCode(nonPublic ? "package" : "static");
-            runScenario(name, code, scenario -> {
-                scenario.redefine(new Class<?>[]{type}, name);
-                int old = 51 + 10 * index;
-                if (code != 0) {
-                    String reason = DcevmRuntime.capabilities().getString("lastRejection");
-                    scenario.check("rejectionReason", true, index == 4
-                            ? reason.contains("OtherPackageBase;: shadow()I") : reason.contains("links non-public implementation"));
-                    scenario.check("unchangedMembers", schema, memberSchema(type));
-                } else {
-                    old = 0;
-                    if (nonPublic) scenario.expectError("interfaceShadow", IllegalAccessError.class,
-                            () -> type.getMethod("shadow").invoke(receiver));
-                    else scenario.check("interfaceShadow", 1, type.getMethod("shadow").invoke(receiver));
-                }
-                scenario.check("oldDispatch", old, stable.invoke(receiver));
-                Object fresh = receiver.getClass().getConstructor().newInstance();
-                scenario.check("newDispatch", old, stable.invoke(fresh));
-                scenario.check("oldShadow", 52 + 10 * index, index == 0
-                        ? InterfaceEvolutionFixture.StaticBase.shadow()
-                        : receiver.getClass().getMethod("oldCall").invoke(receiver));
-                System.gc(); System.runFinalization(); System.gc();
-                scenario.check("afterGc", old, stable.invoke(receiver));
-            });
-        }
+        runInterfaceShadowScenarios();
         InterfaceEvolutionFixture.BridgeImpl bridge = new InterfaceEvolutionFixture.BridgeImpl();
         InterfaceEvolutionFixture.BridgeParent<Integer> erased = bridge;
         runScenario("interface-bridge-add", 0, scenario -> {

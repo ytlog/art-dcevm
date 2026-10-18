@@ -117,31 +117,36 @@ jvmtiError CollectInheritedInterface(jvmtiEnv* env, JNIEnv* jni, jclass target, 
   return JVMTI_ERROR_NONE;
 }
 
-// Package-private methods of `methods`, declared by `descriptor`, that a
-// subtype in another runtime package does not inherit
-// (LoadedHierarchy::subtype_shadows). The first declarer names the shadow in
-// a rejection. ART's Class::FindClassMethod (11--17) skips such a method for
-// the subtype and finds an added default copied into it instead, where JBR
-// still resolves the declaration. Public, protected and private methods,
-// static or not, resolve as on JBR.
+// Class-chain declarations incompatible with a new default
+// (LoadedHierarchy::subtype_shadows). A new default must preserve both
+// class-chain resolution and interface selection. ART 15--17 ignores
+// non-public virtual implementations and copies the default where JBR would
+// throw IllegalAccessError; older ART rejects these while linking. A package
+// member in another runtime package also changes class-chain resolution.
+// Track the most specific virtual declaration so a public override remains
+// admissible even when an ancestor has a non-public method.
+using ShadowKeys = std::set<structural_policy::MemberKey>;
+using BootMethods = std::map<std::string, std::vector<evolution::Member>>;
 void AddShadows(const std::vector<evolution::Member>& methods, const std::string& descriptor,
-                bool other_package, Snapshot* snapshot) {
-  if (!other_package) return;
+                bool other_package, ShadowKeys* resolved, Snapshot* snapshot) {
   constexpr uint32_t kAccess = evolution::kAccPublic | evolution::kAccProtected | evolution::kAccPrivate;
-  for (const auto& method : methods)
-    if (method.name != "<init>" && method.name != "<clinit>" && !(method.access & kAccess))
-      snapshot->hierarchy.subtype_shadows.emplace(
-          structural_policy::MemberKey{method.name, method.descriptor}, descriptor);
+  for (const auto& method : methods) {
+    if (method.name == "<init>" || method.name == "<clinit>") continue;
+    const structural_policy::MemberKey key{method.name, method.descriptor};
+    if (resolved->count(key)) continue;
+    const bool virtual_method = Virtual(method);
+    if ((virtual_method && !(method.access & evolution::kAccPublic)) ||
+        (other_package && !(method.access & kAccess)))
+      snapshot->hierarchy.subtype_shadows.emplace(key, descriptor);
+    if (virtual_method) resolved->insert(key);
+  }
 }
 
-// Shadows declared by the superclasses of an interface target's loaded
-// implementation, up to the first superclass that is itself a subtype (the
-// caller visits that one). Boot classes have unique descriptors, so each is
-// read once per transaction; other loaders may reuse a name.
+// Non-boot descriptors may repeat across loaders. Only boot declarations are
+// cached; their effective selection is still evaluated for each implementation.
 jvmtiError CollectSuperclassShadows(jvmtiEnv* env, JNIEnv* jni, jclass target, jclass implementation,
-                                    const std::string& implementation_descriptor,
-                                    std::set<std::string>* boot_visited, Snapshot* snapshot,
-                                    std::string* error) {
+                                    const std::string& implementation_descriptor, ShadowKeys* resolved,
+                                    BootMethods* boot_methods, Snapshot* snapshot, std::string* error) {
   LocalReference implementation_loader(jni);
   jvmtiError loaded = env->GetClassLoader(implementation, &implementation_loader.value);
   if (loaded != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return loaded; }
@@ -160,12 +165,15 @@ jvmtiError CollectSuperclassShadows(jvmtiEnv* env, JNIEnv* jni, jclass target, j
     env->Deallocate(reinterpret_cast<unsigned char*>(signature));
     const bool other_package = Package(descriptor) != Package(implementation_descriptor) ||
         !jni->IsSameObject(loader.value, implementation_loader.value);
-    if (other_package && (loader.value || boot_visited->insert(descriptor).second)) {
-      std::vector<evolution::Member> methods;
+    std::vector<evolution::Member> methods;
+    const auto cached = boot_methods->find(descriptor);
+    if (!loader.value && cached != boot_methods->end()) methods = cached->second;
+    else {
       const int read = live_schema::ReadLiveMethods(env, klass, &methods, error);
       if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
-      AddShadows(methods, descriptor, true, snapshot);
+      if (!loader.value) boot_methods->emplace(descriptor, methods);
     }
+    AddShadows(methods, descriptor, other_package, resolved, snapshot);
     jclass next = jni->GetSuperclass(klass);
     jni->DeleteLocalRef(current.value);
     current.value = next;
@@ -178,7 +186,7 @@ jvmtiError CollectSuperclassShadows(jvmtiEnv* env, JNIEnv* jni, jclass target, j
 jvmtiError CollectFacts(jvmtiEnv* env, JNIEnv* jni, jclass target, const std::vector<LoadedType>& candidates,
                              Snapshot* snapshot, std::string* error) {
   const bool interface_target = snapshot->live.access & evolution::kAccInterface;
-  std::set<std::string> boot_visited;
+  BootMethods boot_methods;
   LocalReference target_loader(jni);
   jvmtiError result = env->GetClassLoader(target, &target_loader.value);
   if (result != JVMTI_ERROR_NONE) { *error = "GetClassLoader failed"; return result; }
@@ -219,12 +227,13 @@ jvmtiError CollectFacts(jvmtiEnv* env, JNIEnv* jni, jclass target, const std::ve
     if (!interface_target) continue;
     // Its own package-private methods may be skipped for its subclasses in
     // other packages, which the walk below does not compare against it.
-    AddShadows(methods, descriptor, true, snapshot);
+    ShadowKeys resolved;
+    AddShadows(methods, descriptor, true, &resolved, snapshot);
     jboolean is_interface = JNI_FALSE;
     result = env->IsInterface(candidate, &is_interface);
     if (result != JVMTI_ERROR_NONE) { *error = "IsInterface failed"; return result; }
     if (is_interface) continue;
-    result = CollectSuperclassShadows(env, jni, target, candidate, descriptor, &boot_visited, snapshot, error);
+    result = CollectSuperclassShadows(env, jni, target, candidate, descriptor, &resolved, &boot_methods, snapshot, error);
     if (result != JVMTI_ERROR_NONE) return result;
   }
   if (interface_target) return CollectInheritedInterface(env, jni, target, snapshot, error);

@@ -55,6 +55,8 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
 
 `ordinary` retains ordinary classes adding interfaces, skipping only interface targets; use it when interfaces remain inactive. `interface-abstract` isolates abstract additions; `thread-subclass` covers application `Thread` subclasses. `interface-removal` covers removal, repeated rebuilds, late descendants of abstract ancestors, JBR reference-field cleanup and restoration. `proxy-interface` covers Proxy implementations and grouped updates; `interface-drop-parent` covers an interface dropping a parent. `static-narrow` checks JBR static copying and `field-retype` checks field retyping. These groups do not replace full regression. `--timeout` controls instrumentation timeout; `--evidence-root` must stay under ignored `build/evidence/`. Require every expected scenario, error code, old definition and subsequent operation, not just the instrumentation process exit code.
 
+`--scenario-group interface-shadow` isolates defaults sharing class-chain signatures: static/private cases succeed; protected/package-private instance declarations and cross-package package members reject with 63 before commit. Checks cover the declaring-class reason, unchanged members, old/new instance dispatch and GC. Host snapshot regressions also cover more specific public overrides and distinct loaders.
+
 ## Recovery and fault isolation
 
 Full instrumentation checks old behavior, subsequent superclass/interface transactions and GC after failures in the same process:
