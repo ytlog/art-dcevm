@@ -38,6 +38,9 @@ SOURCE = r'''
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/runtime_thread_symbols.h"
 #include "platform/symbols/interface_selection_symbols.h"
+// Keep the invocation registry visible to this host-only failure harness.
+// All code under test is the production implementation.
+#include "platform/common/interface_method_selection.cc"
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
@@ -55,6 +58,16 @@ int api_override = 0, initialize_calls = 0;
 bool missing_initializer = false;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 int probe_registration_calls = 0;
+int bridge_attempts = 0, bridge_calls = 0, invocation_calls = 0, thread_end_enables = 0;
+std::string thrown;
+using BridgeCall = void (*)(void*, const void*, interface_method_selection::ShadowFramePrefix*, uint64_t*);
+BridgeCall bridge_entry = nullptr;
+void BridgeOriginal(void*, const void*, interface_method_selection::ShadowFramePrefix*, uint64_t* result) {
+  ++bridge_calls;
+  if (result) *result = 97;
+}
+void InvocationOriginal(void*) { ++invocation_calls; }
+void ThrowOriginal(void*, const char* type, const char*) { thrown = type; }
 const jclass selection_probe = reinterpret_cast<jclass>(0x1900);
 bool route_hooked = false;
 using RetransformEntry = jvmtiError (*)(jvmtiEnv*, jint, const jclass*);
@@ -250,6 +263,8 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
       std::strstr(name, "ClassLinker15ResolveMethodId") ||
       std::strcmp(name, "NterpGetMethod") == 0) return nullptr;
   const std::string key(name);
+  if (mode >= 38 && key == symbols::interface_selection::kInterpreterCall.name)
+    return reinterpret_cast<void*>(BridgeOriginal);
   if (key == symbols::interface_selection::kOpenDex.name && mode < 29) return nullptr;
   if (key == symbols::retransform::kInitializeDefinitionMemory.name)
     return missing_initializer ? nullptr : reinterpret_cast<void*>(InitializeDefinition);
@@ -283,7 +298,12 @@ extern "C" int shadowhook_get_errno() { return 1; }
 extern "C" const char* shadowhook_to_errmsg(int) { return "injected hook error"; }
 extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void** original) {
   ++hook_calls;
-  if (target == reinterpret_cast<void*>(Redefine)) {
+  if (target == reinterpret_cast<void*>(BridgeOriginal)) {
+    std::cout << "HOOK lazy-interpreter\n";
+    ++bridge_attempts;
+    if (mode == 39 && bridge_attempts == 1) return nullptr;
+    bridge_entry = reinterpret_cast<BridgeCall>(replacement);
+  } else if (target == reinterpret_cast<void*>(Redefine)) {
     const auto* layout = abi::arm64::ClassDefinitionsFor(android_get_device_api_level());
     if (mode >= 23 && mode != 26 && layout && (!layout->lazy_memory || !missing_initializer))
       Require(direct_hook_order < retransform_hook_order && retransform_hook_order < hook_calls,
@@ -391,7 +411,7 @@ jmethodID JNICALL GetMethodID(JNIEnv*, jclass klass, const char*, const char*) {
 jint JNICALL RegisterNatives(JNIEnv*, jclass klass, const JNINativeMethod*, jint count) {
   Require(!pending_exception && klass == selection_probe && count == 1, "Native registration ran after a pending exception");
   ++probe_registration_calls;
-  return JNI_ERR;  // No Java exception: the return value must still reject the feature.
+  return mode >= 38 ? JNI_OK : JNI_ERR;  // A return-code failure needs no Java exception.
 }
 jvmtiError JNICALL Potential(jvmtiEnv*, jvmtiCapabilities* caps) {
   *caps = {}; caps->can_redefine_classes = 1; return JVMTI_ERROR_NONE;
@@ -407,7 +427,9 @@ jvmtiError JNICALL SetJni(jvmtiEnv*, const jniNativeInterface*) {
   hooks_at_set = hook_calls;
   return (mode == 2 || mode == 9 || mode == 28) ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE;
 }
-jvmtiError JNICALL Callbacks(jvmtiEnv*, const jvmtiEventCallbacks*, jint) {
+jvmtiError JNICALL Callbacks(jvmtiEnv*, const jvmtiEventCallbacks* callbacks, jint) {
+  Require(callbacks->ThreadStart != nullptr && callbacks->ThreadEnd != nullptr,
+          "Thread cache has no attachment lifecycle invalidation");
   return JVMTI_ERROR_NONE;
 }
 void JNICALL DeleteGlobal(JNIEnv*, jobject value) { --global_refs[value]; }
@@ -426,7 +448,7 @@ jvmtiError JNICALL Modifiable(jvmtiEnv*, jclass klass, jboolean* value) {
   *value = klass != nested_type; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
-  if (mode >= 32) {
+  if (mode >= 32 && mode <= 37) {
     if (mode == 36) return JVMTI_ERROR_INTERNAL;
     *value = reinterpret_cast<jobject>(mode == 33 && klass != first_type ? 0x4800 : 0x4900);
     frame_locals.insert(*value); return JVMTI_ERROR_NONE;
@@ -444,7 +466,7 @@ jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
 jvmtiError JNICALL Signature(jvmtiEnv*, jclass klass, char** value, char**) {
   if (mode == 21 && klass == reinterpret_cast<jclass>(0x4100)) return JVMTI_ERROR_INTERNAL;
   if (mode == 35) return JVMTI_ERROR_INTERNAL;
-  if (mode >= 32) klass = first_type;
+  if (mode >= 32 && mode <= 37) klass = first_type;
   const std::string text = klass == root_type ? "Ljava/lang/Object;" :
       "Lfixture/Type" + std::to_string(reinterpret_cast<uintptr_t>(klass)) + ";";
   *value = static_cast<char*>(std::malloc(text.size() + 1));
@@ -479,7 +501,15 @@ jvmtiError JNICALL IsInterface(jvmtiEnv*, jclass, jboolean* value) { *value = fa
 jvmtiError JNICALL Status(jvmtiEnv*, jclass, jint* value) { *value = JVMTI_CLASS_STATUS_PREPARED; return JVMTI_ERROR_NONE; }
 jvmtiError JNICALL ErrorName(jvmtiEnv*, jvmtiError, char**) { return JVMTI_ERROR_NOT_AVAILABLE; }
 jvmtiError JNICALL Deallocate(jvmtiEnv*, unsigned char* value) { std::free(value); return JVMTI_ERROR_NONE; }
-jvmtiError JNICALL Events(jvmtiEnv*, jvmtiEventMode, jvmtiEvent, jthread, ...) { return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL Events(jvmtiEnv*, jvmtiEventMode value, jvmtiEvent event, jthread, ...) {
+  if (event == JVMTI_EVENT_THREAD_START && value == JVMTI_ENABLE && mode == 41)
+    return JVMTI_ERROR_INTERNAL;
+  if (event == JVMTI_EVENT_THREAD_END && value == JVMTI_ENABLE) {
+    ++thread_end_enables;
+    if (mode == 40) return JVMTI_ERROR_INTERNAL;
+  }
+  return JVMTI_ERROR_NONE;
+}
 jvmtiError JNICALL StackDeclaring(jvmtiEnv*, jmethodID, jclass* value) {
   if (mode == 34) return JVMTI_ERROR_INTERNAL;
   *value = mode == 37 ? first_type : reinterpret_cast<jclass>(0x4700);
@@ -541,7 +571,7 @@ int main(int argc, char** argv) {
       Require(transaction::Current() == &outer.context() && outer.context().verification.get() == verification,
               "Nested transaction did not restore its enclosing module Parts");
     }
-    if (mode >= 32) {
+    if (mode >= 32 && mode <= 37) {
       tooling.GetAllStackTraces = AllStacks; tooling.GetMethodDeclaringClass = StackDeclaring;
       structural_redefine::detail::Batch batch;
       batch.classes[first_type].live.descriptor = "Lfixture/Type12800;";
@@ -774,11 +804,60 @@ int main(int argc, char** argv) {
                 "Failed Thread probe overwrote unavailable mapping diagnosis");
       }
     }
-    if (mode >= 29) {
+    if (mode >= 29 && mode < 38) {
       Require(structural_redefine::Capabilities().find("\"interfaceMethodSelection\":false") != std::string::npos &&
               !pending_exception && global_refs[selection_probe] == 0,
               "Rejected native probe leaked a root/exception or advertised selection");
       Require(probe_registration_calls == (mode == 29 ? 1 : 0), "Invalid native probe binding order");
+    }
+    if (mode >= 38) {
+      using namespace interface_method_selection;
+      Require(ready.load() && bridge_attempts == 0 && !interpreter_bridge_hook && !bridge_entry,
+              "Interpreter bridge installed eagerly");
+      Require(thread_end_enables == (mode == 41 ? 0 : 1), "Attachment lifecycle failure was ignored");
+      services.throw_new = ThrowOriginal;
+      services.delete_global = [](JavaVM*, void*, jobject root) { --global_refs[root]; };
+      original_invocation = reinterpret_cast<void*>(InvocationOriginal);
+      artdcevm::abi::arm64::ArtMethodPrefix method{}, plain{}, concrete{};
+      method.access_flags.store(evolution::kAccPublic | evolution::kAccAbstract);
+      plain.access_flags.store(evolution::kAccPublic | evolution::kAccAbstract);
+      ShadowFramePrefix frame{nullptr, &method};
+      uint64_t result = 41;
+      BridgeOriginal(nullptr, nullptr, &frame, &result);
+      Require(result == 97 && bridge_calls == 1 && thrown.empty(), "Uninstalled bridge intercepted a call");
+      const jobject owner = reinterpret_cast<jobject>(0x8000);
+      const size_t installed = active.size();
+      if (mode == 39) {
+        transaction::Scope failed;
+        ++global_refs[owner];
+        try { Register({{&method}, {&method}, owner, false}); Require(false, "Failed hook accepted registration"); }
+        catch (const std::runtime_error&) {}
+        Require(!bridge_entry && !interpreter_bridge_hook && invocation_errors.empty() && access_errors.empty() &&
+                SelectionState().staged.empty() && global_refs[owner] == 0 && active.size() == installed,
+                "Failed hook published registry entries, leaked roots or retained a hook");
+      }
+      {
+        transaction::Scope rejected;
+        ++global_refs[owner];
+        Register({{&method}, {&method}, owner, false});
+        Require(bridge_entry && interpreter_bridge_hook && active.size() == installed + 1,
+                "First registration did not install one bridge");
+        const int attempts = bridge_attempts;
+        std::string why;
+        Require(RequireInvocationBridge(&why) && bridge_attempts == attempts, "Bridge installation was not idempotent");
+        result = 41;
+        bridge_entry(nullptr, nullptr, &frame, &result);
+        Require(result == 0 && thrown == "Ljava/lang/IllegalAccessError;", "Registered IAE target lost priority");
+        thrown.clear(); frame.method = &plain;
+        bridge_entry(nullptr, nullptr, &frame, &result);
+        Require(invocation_calls == 1 && thrown.empty(), "Ordinary miranda did not use ART's invocation error");
+        frame.method = &concrete;
+        bridge_entry(nullptr, nullptr, &frame, &result);
+        Require(result == 97 && bridge_calls == 2, "Concrete interpreter call changed");
+        Complete(false);
+      }
+      Require(invocation_errors.empty() && access_errors.empty() && global_refs[owner] == 0,
+              "Rejected transaction retained invocation registrations or roots");
     }
     if (mode == 4) {
       const jvmtiClassDefinition definitions[] = {{first_type, 0, nullptr}, {second_type, 0, nullptr}};
@@ -844,7 +923,7 @@ def main():
         source.write_text(SOURCE)
         binary = work / 'test'
         common = native / 'platform/common'
-        sources = sorted(common.glob('*.cc')) + [native / 'evolution/dex_schema.cc']
+        sources = [path for path in sorted(common.glob('*.cc')) if path.name != 'interface_method_selection.cc'] + [native / 'evolution/dex_schema.cc']
         # Select the host libc++ platform before enabling only the production
         # Android pointer-map declaration. No target libc headers are loaded.
         prelude = work / 'prelude.h'
@@ -864,7 +943,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        cases = [(case, None, False) for case in range(38)]
+        cases = [(case, None, False) for case in range(42)]
         cases += [(case, api, False) for api in (30, 31, 32) for case in range(23, 29)]
         cases += [(23, api, True) for api in (30, 31, 32, 33)]
         for case, api, missing in cases:

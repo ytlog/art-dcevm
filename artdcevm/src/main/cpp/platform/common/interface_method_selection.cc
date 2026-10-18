@@ -7,6 +7,7 @@
 #include <mutex>
 #include <set>
 #include <unordered_set>
+#include "shadowhook.h"
 #include "evolution/linking_dex.h"
 #include "platform/common/art_method_identity.h"
 #include "platform/common/class_layout_table.h"
@@ -57,6 +58,9 @@ std::unordered_set<void*> invocation_errors;
 void* original_abstract = nullptr;
 void* original_abstract_receiver = nullptr;
 void* original_interpreter_bridge = nullptr;
+void* interpreter_bridge_target = nullptr;
+void* interpreter_bridge_hook = nullptr;
+std::mutex bridge_mutex;
 void* original_invocation = nullptr;
 void* original_invocation_receiver = nullptr;
 thread_local bool helper = false;
@@ -77,6 +81,27 @@ State& SelectionState() {
   auto& part = transaction::Current()->selection;
   if (!part) part = std::make_unique<State>();
   return *static_cast<State*>(part.get());
+}
+void Register(Registration registration) {
+  Registration* entry;
+  try {
+    std::string why;
+    if (!RequireInvocationBridge(&why)) throw std::runtime_error(why);
+    auto& staged = SelectionState().staged;
+    staged.push_back(std::move(registration));
+    entry = &staged.back();
+  } catch (...) {
+    if (registration.owner) services.delete_global(services.vm, services.current(), registration.owner);
+    throw;
+  }
+  std::lock_guard<std::mutex> lock(registry_mutex);
+  try {
+    for (void* method : entry->methods) invocation_errors.insert(method);
+    for (void* method : entry->access) access_errors.insert(method);
+  } catch (...) {
+    for (void* method : entry->methods) { invocation_errors.erase(method); access_errors.erase(method); }
+    throw;
+  }
 }
 const char* InvocationError(void* method) {
   std::lock_guard<std::mutex> lock(registry_mutex);
@@ -205,8 +230,15 @@ class HelperScope {
 
 struct Ops {
   bool (*link)(LinkMethodsFunction, void*, void*, Handle, Handle, bool*, void**);
+  bool (*abstract_targets)(Handle);
 };
 template <typename Class, typename Method> struct Selector {
+  static bool AbstractTargets(Handle klass) {
+    auto* methods = class_layout::Members<Method>(klass.Get<Class>()->methods);
+    for (uint32_t i = 0; methods && i < methods->length; ++i)
+      if (methods->At(i)->access_flags.load(std::memory_order_relaxed) & evolution::kAccAbstract) return true;
+    return false;
+  }
   static Key Identity(Method* method) {
     evolution::Member member;
     std::string why;
@@ -464,30 +496,29 @@ ARTDCEVM_TEST(
       void* owner = runtime_thread::Read(Thread(), receiver->class_loader);
       registration.owner = services.add_global(services.vm, thread, owner ? owner : receiver);
       if (!registration.owner) throw std::bad_alloc{};
-      // Stage ownership before changing the registry: C++ allocation failures
-      // cannot leave unowned native keys visible to invocation threads.
-      auto& staged = SelectionState().staged;
-      try { staged.push_back(std::move(registration)); }
-      catch (...) { services.delete_global(services.vm, thread, registration.owner); throw; }
-      auto& entry = staged.back();
-      std::lock_guard<std::mutex> lock(registry_mutex);
-      try {
-        for (void* method : entry.methods) invocation_errors.insert(method);
-        for (void* method : entry.access) access_errors.insert(method);
-      } catch (...) {
-        for (void* method : entry.methods) { invocation_errors.erase(method); access_errors.erase(method); }
-        throw;
-      }
+      // Install the guard and stage ownership before publishing native keys.
+      Register(std::move(registration));
     }
     active_release.store(CurrentState()->selected_release);
     return true;
   }
-  static constexpr Ops Make(int) { return {Link}; }
+  static constexpr Ops Make(int) { return {Link, AbstractTargets}; }
 };
 const auto kOps = class_layout::Table<Selector, Ops>();
 }  // namespace
 
 bool Available() { return ready.load() && imt_sealing::Available(); }
+bool RequireInvocationBridge(std::string* why) {
+  std::lock_guard<std::mutex> lock(bridge_mutex);
+  if (interpreter_bridge_hook) return true;
+  if (!ready.load() || !interpreter_bridge_target)
+    return class_layout::Fail(why, "interface invocation bridge is unavailable");
+  interpreter_bridge_hook = shadowhook_hook_sym_addr(interpreter_bridge_target,
+      HookAddress(InterpreterBridge), &original_interpreter_bridge);
+  if (interpreter_bridge_hook) return true;
+  original_interpreter_bridge = nullptr;
+  return class_layout::Fail(why, "cannot install interface invocation bridge");
+}
 bool LinkingHelper() { return helper; }
 void Complete(bool success) noexcept {
   auto* context = transaction::Current();
@@ -505,9 +536,16 @@ bool LinkMethods(LinkMethodsFunction original, void* linker, void* thread, abi::
     return original(linker, thread, klass, interfaces, conflict, imt);
   try {
     const int index = state->selected_release - 11;
-    return index >= 0 && index < static_cast<int>(kOps.size())
-        ? kOps[index].link(original, linker, thread, klass, interfaces, conflict, imt)
-        : original(linker, thread, klass, interfaces, conflict, imt);
+    if (index < 0 || index >= static_cast<int>(kOps.size()))
+      return original(linker, thread, klass, interfaces, conflict, imt);
+    const bool result = kOps[index].link(original, linker, thread, klass, interfaces, conflict, imt);
+    // Ordinary mirandas need the same legacy MethodHandle guard as registered
+    // IAE/AME copies. Neither kind is invokable until LinkClass publishes it.
+    if (result && kOps[index].abstract_targets(klass)) {
+      std::string why;
+      if (!RequireInvocationBridge(&why)) throw std::runtime_error(why);
+    }
+    return result;
   } catch (const std::bad_alloc&) {
     services.throw_new(thread, "Ljava/lang/OutOfMemoryError;", "interface selection allocation failed");
   } catch (const std::exception& error) {
@@ -592,7 +630,7 @@ bool Prepare(JavaVM* vm, JNIEnv* jni, std::vector<Hook>* hooks, std::string* why
   services.bridge = symbols::Find(kInterpreterBridge);
   void* abstract = symbols::Find(kAbstractError);
   void* receiver = symbols::Find(kAbstractReceiverError);
-  void* interpreter = symbols::Find(kInterpreterCall);
+  interpreter_bridge_target = symbols::Find(kInterpreterCall);
   void* invocation = symbols::Find(kInvocationError);
   void* invocation_receiver = symbols::Find(kInvocationReceiverError);
   const std::pair<const char*, bool> required[] = {
@@ -601,7 +639,7 @@ bool Prepare(JavaVM* vm, JNIEnv* jni, std::vector<Hook>* hooks, std::string* why
       {"AddGlobalRef", services.add_global != nullptr},
       {"DeleteGlobalRef", services.delete_global != nullptr}, {"ThrowNewException", services.throw_new != nullptr},
       {"CurrentFromGdb", services.current != nullptr}, {"interpreter bridge", services.bridge != nullptr},
-      {"ThrowAbstractMethodError", abstract || receiver}, {"interpreter invocation bridge", interpreter != nullptr}, {"invocation-time error", invocation || invocation_receiver}};
+      {"ThrowAbstractMethodError", abstract || receiver}, {"interpreter invocation bridge", interpreter_bridge_target != nullptr}, {"invocation-time error", invocation || invocation_receiver}};
   for (const auto& [name, found] : required)
     if (!found) return class_layout::Fail(why, std::string("interface selection missing ") + name);
   jclass local = jni->FindClass("com/github/ytlog/artdcevm/internal/InterfaceLinkProbe");
@@ -628,7 +666,6 @@ bool Prepare(JavaVM* vm, JNIEnv* jni, std::vector<Hook>* hooks, std::string* why
   if (invocation_receiver) hooks->push_back({invocation_receiver, reinterpret_cast<void*>(InvocationReceiverFailure), &original_invocation_receiver, kInvocationReceiverError.name});
   if (abstract) hooks->push_back({abstract, reinterpret_cast<void*>(AbstractError), &original_abstract, kAbstractError.name});
   if (receiver) hooks->push_back({receiver, reinterpret_cast<void*>(AbstractReceiverError), &original_abstract_receiver, kAbstractReceiverError.name});
-  hooks->push_back({interpreter, reinterpret_cast<void*>(InterpreterBridge), &original_interpreter_bridge, kInterpreterCall.name});
   ready.store(true);
   return true;
 }

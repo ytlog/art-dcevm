@@ -10,6 +10,9 @@ using LinkMethodsFunction = bool (*)(void*, void*, abi::arm64::Handle, abi::arm6
 using LinkClassFunction = bool (*)(void*, void*, const char*, abi::arm64::Handle, abi::arm64::Handle, abi::arm64::Handle*);
 bool Prepare(JavaVM*, JNIEnv*, std::vector<Hook>*, std::string*);
 bool Available();
+// Install before publishing the first abstract invocation target. A failed
+// installation must reject the private class/transaction, never publish it.
+bool RequireInvocationBridge(std::string* why);
 bool LinkingHelper();
 bool LinkClass(LinkClassFunction, void*, void*, const char*, abi::arm64::Handle, abi::arm64::Handle, abi::arm64::Handle*) noexcept;
 bool LinkMethods(LinkMethodsFunction, void*, void*, abi::arm64::Handle, abi::arm64::Handle, bool*, void**) noexcept;

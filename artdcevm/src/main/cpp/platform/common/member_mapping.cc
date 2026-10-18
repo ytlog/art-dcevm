@@ -19,6 +19,7 @@
 #include "platform/common/class_layout.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/member_retirement.h"
+#include "platform/common/interface_method_selection.h"
 #include "platform/common/proxy_relink.h"
 #include "platform/common/narrowed_references.h"
 #include "platform/common/transaction_context.h"
@@ -215,6 +216,12 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
   static bool PlanMethods(const runtime_thread::VerifiedThread& thread, Class* old_class, Class* new_class, MappingPlan* plan, std::string* why) {
     auto* old_methods = Members<Method>(old_class->methods);
     auto* new_methods = Members<Method>(new_class->methods);
+    // Ordinary class evolution can also create abstract MethodHandle targets,
+    // without going through an interface group's LinkMethods context.
+    for (uint32_t j = 0; new_methods && j < new_methods->length; ++j)
+      if ((new_methods->At(j)->access_flags.load(std::memory_order_relaxed) & evolution::kAccAbstract) &&
+          interface_method_selection::Available() &&
+          !interface_method_selection::RequireInvocationBridge(why)) return false;
     std::vector<evolution::Member> identities(new_methods ? new_methods->length : 0);
     for (uint32_t j = 0; new_methods && j < new_methods->length; ++j)
       if (!class_layout::MethodIdentity<Class>(thread, new_methods->At(j), &identities[j], why)) return false;
