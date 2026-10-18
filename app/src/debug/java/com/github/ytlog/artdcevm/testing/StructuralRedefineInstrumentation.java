@@ -414,7 +414,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
         // As on JBR, the proxy class stays and gains the new parent: kept methods
         // still reach the handler, the parent's default runs its body and its
-        // abstract method throws AbstractMethodError. Dropping it again rejects.
+        // abstract method throws AbstractMethodError. Dropping it again still rejects, unlike JBR.
         runScenario("proxy-interface-parent", 0, scenario -> {
             scenario.check("parentBefore", false, ProxyFixture.isParent(api));
             scenario.redefine(batch, "proxy-parent-add");

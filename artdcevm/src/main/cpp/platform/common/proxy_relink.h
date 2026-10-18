@@ -32,8 +32,9 @@ bool Available();
 // Native: for each loaded proxy class and each interface target it implements,
 // a long[] sized for the new interface's IfTable methods. A target that adds
 // parent interfaces gives the proxy a new IfTable with an entry for each one
-// it does not implement yet, superinterfaces first; as on JBR, a target that
-// drops a parent interface is rejected.
+// it does not implement yet, superinterfaces first. A target that drops a
+// parent interface is rejected, unlike JBR: the proxy would also need its
+// IfTable entries and the references it fills dropped.
 jvmtiError Prepare(JNIEnv* jni, const std::vector<jclass>& proxies, const std::vector<Interface>& interfaces,
                    std::string* error);
 // Before ART's no-failure point, match each interface by Class identity in

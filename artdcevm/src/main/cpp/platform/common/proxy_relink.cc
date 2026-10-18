@@ -466,7 +466,8 @@ jvmtiError Prepare(JNIEnv* jni, const std::vector<jclass>& proxies, const std::v
       if (!before.count(name)) added.push_back(name);
     }
     for (const auto& name : before) {
-      // As on JBR, which keeps a proxy's interfaces when its interface drops a parent.
+      // JBR drops the parent from the proxy; that needs IfTable removal and
+      // narrowed-reference cleanup for proxies, which this relink lacks.
       if (std::find(incoming.interfaces.begin(), incoming.interfaces.end(), name) == incoming.interfaces.end()) {
         *error = target.live->descriptor + ": a Proxy implementation cannot drop parent interface " + name;
         return JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
