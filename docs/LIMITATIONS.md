@@ -28,11 +28,11 @@
 
 | 接口目标的拒绝情况 | JVMTI 错误码 |
 | --- | --- |
-| 新增 native；direct 方法遮蔽继承的接口／Object 方法；default 与类链 protected/package-private 实例方法同签名，或改变另一运行时包的 package-private 类方法解析；Android 13、14 上已加载类以 package-private／protected 方法实现新增的 abstract（ART 链接失败） | `METHOD_ADDED`（63） |
+| 新增 native；direct 方法遮蔽继承的接口／Object 方法；选择服务不可用时 default 与非 public 类方法同签名或旧 ART 无法链接非 public 实现 | `METHOD_ADDED`（63） |
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
-| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
-| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或其 default 出现上述同签名 | `HIERARCHY_CHANGED`（66） |
+| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；选择服务不可用时改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
+| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或选择服务不可用且其 default 出现上述同签名 | `HIERARCHY_CHANGED`（66） |
 | 新增的接口由同批重建，而新类与该重建互相依赖，或同一重建组内新类排在它之前 | `HIERARCHY_CHANGED`（66） |
 | 类在接口、注解、枚举之间变化（接口的访问级别与 synthetic 等修饰符可像普通类一样变化） | `CLASS_MODIFIERS_CHANGED`（70） |
 | 接口重建组之外的实现类父类在同批改变父类 | `HIERARCHY_CHANGED`（66） |
@@ -45,9 +45,9 @@
 
 接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。不能仅切换模式来修复此前缓存的指针 ID。普通类仍按其原有规则验收。
 
-与 JBR 相同，新增 public abstract 方法不要求已加载的实现类提供实现：已有实现、父类继承的实现、同批补齐的实现和 ART 选中的更具体 default 照常分派；缺少实现的类（包括没有实例、没有提交 DEX 的类）调用时抛 `AbstractMethodError`。更具体的 abstract 重声明遮住远处的 default，同批移除最后一个实现也是如此。泛型与协变返回依赖真实 bridge，不把相同名称或不同返回类型当作实现。实现类只有同签名的非 public 方法时遵循 ART 的选择：Android 15、16 链接成功，调用抛 `IllegalAccessError`（API 36 实测，只有 private 方法时同样）；Android 13、14 链接 package-private／protected 实现即抛 `IllegalAccessError`，类无法链接，整批以 63 拒绝，`lastRejection` 写明实现类、方法与接口。
+与 JBR 相同，新增 public abstract 方法不要求已加载的实现类提供实现：已有实现、继承实现、同批补齐的实现与 ART 选中的更具体 default 照常分派；缺少实现、缺少真实 bridge 或被更具体 abstract 遮住的 default，在调用时抛 `AbstractMethodError`。`interfaceMethodSelection=true` 时，package-private/protected 类虚方法（含另一运行时包的父类方法）在接口选择中优先于 default，事务成功，接口调用抛 `IllegalAccessError`；原有类方法调用保留原行为。private 方法本身不实现新增 abstract，调用抛 `AbstractMethodError`。
 
-新增 default 与类链非 public 实例方法同签名时，Android 11–17 均在提交前以 63 拒绝，并保留旧定义。JBR 在接口调用时抛 IllegalAccessError；ART 15–17 会复制并执行 default，故不接受该不等价行为。更具体的 public 覆写可接受，static/private 的兼容场景继续支持。
+新增 default、abstract/default 互换与新增父接口带来的方法共用同一选择路径。类自身的 private/static 声明不代替 default；更具体的 public 类覆写照常优先。固定 JBR 还区分仅从父类找到 private 声明的子类：该子类对 default 的调用抛 `AbstractMethodError`，包括重定义后才加载的子类，重新演进后仍保持此结果。命名链接、分配与错误服务缺失时 `interfaceMethodSelection=false`，保留原有保守拒绝；本次新增路径已在 API 33/36 的普通与 CheckJNI 模式验证，其他版本目前只有源码和符号覆盖。
 
 多个接口组共同提交。快照后加载的相关类型触发现有有界重试，达到上限时整批拒绝 113，撤回或修正后可重新提交。失败不改写旧定义、已缓存的反射／MethodHandle／JNI method ID 或预热调用点。
 
@@ -147,7 +147,7 @@
 | 变化 | JBR DCEVM | art-dcevm |
 | --- | --- | --- |
 | 持有动态代理的实例字段改类型 | 新类型是直接声明接口或 `Proxy` 父类时保留；仅间接实现接口时清空 | 目标与继承字段按同一规则处理，见[字段改型对照](TESTING.md#jbr-对照) |
-| 接口新增 abstract 方法，而已加载的实现类只有同签名的非 public 方法 | 接受；private 调用时抛 `AbstractMethodError`，package-private／protected 抛 `IllegalAccessError` | 按 ART 的选择：Android 15、16 接受，调用均抛 `IllegalAccessError`；Android 13、14 的 package-private／protected 实现无法链接，拒绝 63 |
+| 接口方法与非 public 类方法同签名 | 接受；private 不实现 abstract，抛 `AbstractMethodError`；package-private/protected 抛 `IllegalAccessError` | 选择服务可用时相同；类方法调用保留，支持 default/abstract 切换与新增父接口；API 33/36 已验证 |
 | 普通类方法在 static 与实例之间切换，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 命名调用方式保护可用时接受，旧调用抛 ICCE；旧调用方禁止 JIT 编译及内联，ART 仍执行原有去优化。Android 13、16 覆盖普通／CheckJNI、热调用、活动帧、GC 与隐式重建；入口不可用时保留 71 |
 | 普通类虚方法改为 private，批次外仍有无访问权的旧调用方 | 接受；旧 virtual/super 调用抛 `IllegalAccessError`，自身旧帧可调用新 private 方法 | 接受并保护外部旧调用，抛 IAE；旧调用方禁止 JIT 编译及内联。有命名选择服务时（`privateSelfSelection`：API 36 已经真机验证，多数 API 34–35 运行时依源码对齐），自身旧帧直接选择 private 方法并忽略覆写，含接口 default 副本；选择逻辑被内联（API 30–33）或运行时探测不匹配时拒绝 71 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |

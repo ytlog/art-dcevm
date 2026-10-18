@@ -7,3 +7,5 @@
 # complete interface contract so R8 cannot change the IMT slot coverage.
 -keep class com.github.ytlog.artdcevm.internal.ImtLinkProbe { *; }
 -keep class com.github.ytlog.artdcevm.internal.ImtLinkProbeMethods { *; }
+# The linker calls this preloaded native entry to verify each callback thread.
+-keep class com.github.ytlog.artdcevm.internal.InterfaceLinkProbe { *; }

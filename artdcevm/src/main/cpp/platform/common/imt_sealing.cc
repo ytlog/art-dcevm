@@ -10,6 +10,7 @@
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/common/class_layout_table.h"
 #include "platform/common/fault_injection.h"
+#include "platform/common/interface_method_selection.h"
 #include "platform/symbols/imt_sealing_symbols.h"
 
 namespace artdcevm::imt_sealing {
@@ -94,7 +95,7 @@ bool LinkMethods(void* self, void* thread, abi::Handle klass, abi::Handle interf
                  bool* new_conflict, void** imt) noexcept {
   if (priming) ++probe_links;
   const bool had_conflict = *new_conflict;
-  if (!reinterpret_cast<Link>(original_link_methods)(self, thread, klass, interfaces, new_conflict, imt))
+  if (!interface_method_selection::LinkMethods(reinterpret_cast<Link>(original_link_methods), self, thread, klass, interfaces, new_conflict, imt))
     return false;
   // Fixed ART 13--17 LinkClass initializes new_conflict=false. The modern
   // LinkMethods helper only copies the superclass IMT or writes through
@@ -202,6 +203,12 @@ template <typename Class, typename Method> struct Sealer {
 // Indexed like class_layout's probes.
 const auto kSealers = class_layout::Table<Sealer, SealOps>();
 }  // namespace
+
+bool ProtectInvocations() {
+  if (!Available() || !canonical_conflict.load(std::memory_order_acquire)) return false;
+  protecting.store(true, std::memory_order_release);
+  return true;
+}
 
 bool Prepare(const class_layout::Services& layout, std::vector<Hook>* hooks, std::string* failure) {
   std::lock_guard<std::mutex> lock(state_mutex);

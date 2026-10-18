@@ -1,6 +1,7 @@
 #include "platform/common/structural_redefine_internal.h"
 
 #include "platform/common/imt_sealing.h"
+#include "platform/common/interface_method_selection.h"
 #include "platform/common/invoke_kind.h"
 #include "platform/common/narrowed_references.h"
 #include "support/json.h"
@@ -31,6 +32,7 @@ std::string Capabilities() {
           (methods && state.capabilities.superclass_change ? "true" : "false") +
       ",\"interfaceRemoval\":" + (methods && state.capabilities.subclass_watch && imt_sealing::Available() && narrowed_references::Available() ? "true" : "false") +
       ",\"interfaceDispatchSealing\":" + QuoteJsonMutf8(imt_sealing::State()) +
+      ",\"interfaceMethodSelection\":" + (methods && interface_method_selection::Available() ? "true" : "false") +
       ",\"retransformRouted\":" + (state.installed && state.capabilities.retransform ? "true" : "false") +
       ",\"privateSelfSelection\":" + (methods && invoke_kind::SelectionServices() ? "true" : "false") +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +

@@ -64,7 +64,7 @@ python3 tools/run-device-tests.py --serial DEVICE_SELECTOR --device-id android-d
 
 `ordinary` 保留普通类新增接口，只跳过接口目标；用于接口尚未启用的版本。`interface-abstract` 便于定位新增 abstract 的问题，`thread-subclass` 单独运行应用 `Thread` 子类场景，`interface-removal` 运行接口移除、重复重建、抽象父类晚加载、JBR 引用字段清理与恢复场景，`proxy-interface` 单独运行 Proxy 实现类场景，`interface-drop-parent` 单独运行接口移除父接口场景，`static-narrow` 检查静态字段的 JBR 复制规则，`field-retype` 检查字段改类型；这些都不能替代完整回归。`--timeout` 调整仪器超时，`--evidence-root` 必须位于忽略的 `build/evidence/` 下。报告须覆盖全部预期场景、错误码、旧定义与后续操作；不能只看仪器进程的退出码。
 
-`--scenario-group interface-shadow` 单独验证接口新增 default 与类链方法同签名的边界：static/private 场景成功；protected/package-private 实例及跨包 package-private 场景提交前返回 63，检查声明类拒绝原因、旧成员不变、旧实例与新实例分派及 GC。主机快照回归另查更具体的 public 覆写和不同加载器。
+`--scenario-group interface-shadow` 验证 JBR 的接口／类方法选择：19 个场景覆盖 static/private default、protected/package/跨包类方法 IAE、反射/MethodHandle/JNI/字节码、30,000 次热循环、晚加载子类及 public 覆写、private 父类继承的 AME、恢复与再次添加、abstract/default 切换、新父接口 default、映射计划故障回滚。`interface-abstract` 另验 private AME 与 package/protected IAE，包含 JNI、MethodHandle、字节码和 GC。`compare-jbr-interface-selection.py --java-home "$ART_DCEVM_JBR_HOME"` 运行固定 JBR 21.0.11+10-b1163.116 对照，编译相同 fixture 并应用相同 classfile 访问标志配方。`test-linking-dex-host.py` 独立校验私有 DEX 的声明、只移除接口列表、SHA-1、Adler32 和 map。新选择路径的设备记录目前为 API 33/36 的普通与 CheckJNI 模式。
 
 ## 失败恢复与故障隔离
 

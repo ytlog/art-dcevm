@@ -29,6 +29,7 @@ bool Prime(JNIEnv* jni, std::string* why);
 // narrowing. Abort may leave protection on, but changes no published class.
 bool Enable(abi::arm64::ClassRedefinitionPrefix* self, std::string* why);
 bool Protecting();
+bool ProtectInvocations();
 bool Available();
 // "unavailable: <reason>" or "available".
 std::string State();

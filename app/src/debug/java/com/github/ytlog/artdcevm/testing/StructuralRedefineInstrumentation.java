@@ -2537,18 +2537,6 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         });
     }
 
-    // Up to Android 14, ART fails to link a package-private or protected
-    // implementation of an interface method with IllegalAccessError, so the
-    // whole transaction fails; later releases link the class and the call
-    // throws IllegalAccessError, also for a private method. JBR links it and
-    // throws at the call (AbstractMethodError for a private method).
-    static final int NON_PUBLIC_LINK_ERROR_API = 34;
-
-    static int abstractUnimplementedCode(String kind) {
-        boolean nonPublic = kind.equals("package") || kind.equals("protected");
-        return nonPublic && Build.VERSION.SDK_INT <= NON_PUBLIC_LINK_ERROR_API ? 63 : 0;
-    }
-
     // The interface gains an abstract method that the class does not implement
     // with a public instance method of the same descriptor.
     private void runAbstractUnimplementedScenario(String kind) throws Exception {
@@ -2561,26 +2549,26 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         Object old = group.instance(type);
         String variant = "interface-abstract-" + kind;
         boolean contractOnly = kind.equals("signature") || kind.equals("conflict");
-        int code = abstractUnimplementedCode(kind);
-        runScenario("interface-abstract-unimplemented-" + kind, code, scenario -> {
+        runScenario("interface-abstract-unimplemented-" + kind, 0, scenario -> {
             if (contractOnly) scenario.redefine(new Class<?>[]{group.contract}, "interface-abstract-add");
             else scenario.redefine(new Class<?>[]{group.contract, group.load(type)},
                     kind.equals("bridge-missing") ? variant : "interface-abstract-add", variant);
-            if (code != 0) {
-                String reason = DcevmRuntime.capabilities().getString("lastRejection");
-                scenario.check("classNamed", true, reason.contains(type + ";"));
-                scenario.check("linkError", true, reason.contains("as IllegalAccessError"));
-                scenario.check("oldBody", 11, group.contract.getMethod("oldValue").invoke(old));
-                scenario.expectError("noDeclaration", NoSuchMethodException.class, () -> group.contract.getMethod("required"));
-                return;
-            }
             scenario.check("newBody", 12, group.contract.getMethod("oldValue").invoke(old));
             // Two unrelated defaults stay a conflict; otherwise nothing implements the method.
-            boolean nonPublic = kind.equals("package") || kind.equals("protected")
-                    || (kind.equals("private") && Build.VERSION.SDK_INT > NON_PUBLIC_LINK_ERROR_API);
+            boolean nonPublic = kind.equals("package") || kind.equals("protected");
             Class<? extends Throwable> expected = kind.equals("conflict") ? IncompatibleClassChangeError.class
                     : nonPublic ? IllegalAccessError.class : AbstractMethodError.class;
             scenario.expectError("interfaceCall", expected, () -> group.contract.getMethod("required").invoke(old));
+            if (kind.equals("private") || nonPublic) {
+                Method required = group.contract.getMethod("required");
+                MethodHandle handle = MethodHandles.publicLookup().unreflect(required);
+                StandardJvmtiClient.cacheInterfaceDispatch(0, required);
+                scenario.expectError("interfaceHandle", expected, () -> handle.invokeWithArguments(old));
+                scenario.expectError("interfaceJni", expected, () -> StandardJvmtiClient.callInterfaceDispatchString(old, 0));
+                scenario.expectError("interfaceBytecode", expected, () -> group.call(old));
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.expectError("interfaceAfterGc", expected, () -> required.invoke(old));
+            }
         });
         if (type.equals("Implementation")) {
             runScenario("interface-abstract-retry-" + kind, 0, scenario -> {
@@ -2592,9 +2580,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void runInterfaceShadowScenarios() throws Exception {
-        // Static/private shadows preserve JBR resolution. Non-public virtual
-        // implementations and cross-package package members cannot preserve
-        // JBR dispatch when ART copies a new default; reject before commit.
+        // Private/static declarations do not implement interface methods;
+        // non-public virtual class declarations select IllegalAccessError.
         Object[] shadows = {new InterfaceEvolutionFixture.StaticImpl(), new InterfaceEvolutionFixture.PrivateImpl(),
                 new InterfaceEvolutionFixture.ProtectedImpl(), new InterfaceEvolutionFixture.PackageImpl(),
                 new InterfaceEvolutionFixture.OtherPackageImpl()};
@@ -2608,18 +2595,50 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             Class<?> type = contracts[i]; Object receiver = shadows[i];
             Method stable = type.getMethod("stable");
             String schema = memberSchema(type);
-            int code = index >= 2 ? 63 : 0;
-            runScenario(name, code, scenario -> {
+            Object[] loadedLate = {null};
+            Object plain = index == 2 ? new InterfaceEvolutionFixture.ProtectedPlain() : null;
+            if (index == 2) runScenario(name + "-abort", 110, scenario -> {
+                scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(new Class<?>[]{type}, name);
+                scenario.check("stable", 71, stable.invoke(receiver));
+                scenario.check("oldShadow", 72, receiver.getClass().getMethod("oldCall").invoke(receiver));
+                scenario.expectError("noDeclaration", NoSuchMethodException.class, () -> type.getMethod("shadow"));
+            });
+            runScenario(name, 0, scenario -> {
                 scenario.redefine(new Class<?>[]{type}, name);
                 int old = 51 + 10 * index;
-                if (code != 0) {
-                    String reason = DcevmRuntime.capabilities().getString("lastRejection");
-                    String owner = index == 2 ? "ProtectedBase" : index == 3 ? "PackageBase" : "OtherPackageBase";
-                    scenario.check("rejectionReason", true, reason.contains(owner + ";: shadow()I"));
-                    scenario.check("unchangedMembers", schema, memberSchema(type));
+                old = 0;
+                if (index >= 2) scenario.expectError("interfaceShadow", IllegalAccessError.class,
+                        () -> type.getMethod("shadow").invoke(receiver));
+                else scenario.check("interfaceShadow", 1, type.getMethod("shadow").invoke(receiver));
+                Method shadow = type.getMethod("shadow");
+                Method caller = type.getMethod("call", type);
+                Method hot = type.getMethod("hot", type, int.class);
+                MethodHandle handle = MethodHandles.publicLookup().unreflect(shadow);
+                StandardJvmtiClient.cacheInterfaceDispatch(0, shadow);
+                String lateName = new String[]{"StaticLate", "PrivateLate", "ProtectedLate", "PackageLate", "OtherPackageLate"}[index];
+                Object late = Class.forName(InterfaceEvolutionFixture.class.getName() + "$" + lateName,
+                        true, receiver.getClass().getClassLoader()).getConstructor().newInstance();
+                loadedLate[0] = late;
+                if (index >= 2) {
+                    scenario.expectError("bytecode", IllegalAccessError.class, () -> caller.invoke(null, receiver));
+                    scenario.expectError("handle", IllegalAccessError.class, () -> handle.invokeWithArguments(receiver));
+                    scenario.expectError("jni", IllegalAccessError.class, () -> StandardJvmtiClient.callInterfaceDispatchInt(receiver, 0));
+                    scenario.expectError("late", IllegalAccessError.class, () -> caller.invoke(null, late));
+                    scenario.expectError("lateJni", IllegalAccessError.class, () -> StandardJvmtiClient.callInterfaceDispatchInt(late, 0));
+                    scenario.check("hotFailures", 30000, hot.invoke(null, receiver, 30000));
                 } else {
-                    old = 0;
-                    scenario.check("interfaceShadow", 1, type.getMethod("shadow").invoke(receiver));
+                    scenario.check("bytecode", 1, caller.invoke(null, receiver));
+                    scenario.check("handle", 1, invokeCachedHandle(handle, receiver));
+                    scenario.check("jni", 1, StandardJvmtiClient.callInterfaceDispatchInt(receiver, 0));
+                    if (index == 1) scenario.expectError("late", AbstractMethodError.class, () -> caller.invoke(null, late));
+                    else scenario.check("late", 1, caller.invoke(null, late));
+                    scenario.check("hotFailures", 0, hot.invoke(null, receiver, 30000));
+                }
+                if (index == 2) {
+                    Object publicOverride = Class.forName(InterfaceEvolutionFixture.class.getName() + "$ProtectedPublic",
+                            true, receiver.getClass().getClassLoader()).getConstructor().newInstance();
+                    scenario.check("publicOverride", 103, caller.invoke(null, publicOverride));
                 }
                 scenario.check("oldDispatch", old, stable.invoke(receiver));
                 Object fresh = receiver.getClass().getConstructor().newInstance();
@@ -2629,6 +2648,57 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                         : receiver.getClass().getMethod("oldCall").invoke(receiver));
                 System.gc(); System.runFinalization(); System.gc();
                 scenario.check("afterGc", old, stable.invoke(receiver));
+            });
+            if (index == 2) {
+                runScenario(name + "-abstract", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{type}, "interface-shadow-abstract");
+                    Method shadow = type.getMethod("shadow");
+                    scenario.expectError("nonPublic", IllegalAccessError.class, () -> shadow.invoke(receiver));
+                    scenario.expectError("missing", AbstractMethodError.class, () -> shadow.invoke(plain));
+                    scenario.check("oldShadow", 72, receiver.getClass().getMethod("oldCall").invoke(receiver));
+                });
+                runScenario(name + "-default", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{type}, name);
+                    Method shadow = type.getMethod("shadow");
+                    scenario.expectError("nonPublic", IllegalAccessError.class, () -> shadow.invoke(receiver));
+                    scenario.check("default", 1, shadow.invoke(plain));
+                    scenario.check("oldShadow", 72, receiver.getClass().getMethod("oldCall").invoke(receiver));
+                });
+                runScenario(name + "-parent", 0, scenario -> {
+                    // Resolve the new parent before Native snapshot capture.
+                    Class<?> parent = InterfaceEvolutionFixture.ShadowParent.class;
+                    scenario.check("parentLoaded", true, parent.isInterface());
+                    scenario.redefine(new Class<?>[]{type}, "interface-shadow-parent");
+                    Method shadow = type.getMethod("shadow");
+                    scenario.expectError("nonPublic", IllegalAccessError.class, () -> shadow.invoke(receiver));
+                    scenario.check("parentDefault", 7, shadow.invoke(plain));
+                    scenario.check("oldShadow", 72, receiver.getClass().getMethod("oldCall").invoke(receiver));
+                });
+            }
+            runScenario(name + "-restore", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{type}, "interface-shadow-original");
+                scenario.check("stable", 51 + 10 * index, stable.invoke(receiver));
+                scenario.check("oldShadow", 52 + 10 * index, index == 0
+                        ? InterfaceEvolutionFixture.StaticBase.shadow()
+                        : receiver.getClass().getMethod("oldCall").invoke(receiver));
+            });
+            runScenario(name + "-readd", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{type}, name);
+                Method shadow = type.getMethod("shadow");
+                if (index >= 2) {
+                    scenario.expectError("interfaceShadow", IllegalAccessError.class, () -> shadow.invoke(receiver));
+                    scenario.expectError("lateAgain", IllegalAccessError.class, () -> shadow.invoke(loadedLate[0]));
+                } else {
+                    scenario.check("interfaceShadow", 1, shadow.invoke(receiver));
+                    if (index == 1) scenario.expectError("lateAgain", AbstractMethodError.class, () -> shadow.invoke(loadedLate[0]));
+                    else scenario.check("lateAgain", 1, shadow.invoke(loadedLate[0]));
+                }
+                scenario.check("hotFailures", index >= 2 ? 30000 : 0, type.getMethod("hot", type, int.class).invoke(null, receiver, 30000));
+                System.gc(); System.runFinalization(); System.gc();
+                scenario.check("afterGc", 0, stable.invoke(receiver));
+                scenario.check("oldShadow", 52 + 10 * index, index == 0
+                        ? InterfaceEvolutionFixture.StaticBase.shadow()
+                        : receiver.getClass().getMethod("oldCall").invoke(receiver));
             });
         }
     }

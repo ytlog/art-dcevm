@@ -74,6 +74,18 @@ public final class InterfaceEvolutionFixture {
     public interface OtherPackageShadow { default int stable() { return 91; } }
     public static class OtherPackageImpl extends com.github.ytlog.artdcevm.fixture.other.OtherPackageBase
             implements OtherPackageShadow {}
+    // Loaded reflectively after evolution to exercise the normal ClassLinker path.
+    public static class StaticLate extends StaticBase implements StaticShadow {}
+    public static class PrivateLate extends PrivateImpl {}
+    public interface ShadowParent { default int shadow() { return 7; } }
+    public static class ProtectedPlain implements ProtectedShadow {}
+    public static class ProtectedLate extends ProtectedBase implements ProtectedShadow {}
+    public static class PackageLate extends PackageBase implements PackageShadow {}
+    public static class OtherPackageLate extends com.github.ytlog.artdcevm.fixture.other.OtherPackageBase
+            implements OtherPackageShadow {}
+    public static class ProtectedPublic extends ProtectedBase implements ProtectedShadow {
+        public int shadow() { return 103; }
+    }
     public interface BridgeParent<T> { T result(); }
     public interface BridgeContract extends BridgeParent<Integer> {
         default Integer result() { return 90; }

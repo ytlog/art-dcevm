@@ -143,11 +143,11 @@ SCENARIOS = (
     ('interface-hide-parent-static', ['interface-hide-parent-static'], 63),
     ('interface-hide-parent-private', ['interface-hide-parent-private'], 63),
     ('interface-hide-object', ['interface-hide-object'], 63),
-    ('interface-shadow-static', ['interface-shadow-static'], 0),
-    ('interface-shadow-private', ['interface-shadow-private'], 0),
-    ('interface-shadow-protected', ['interface-shadow-protected'], 63),
-    ('interface-shadow-package', ['interface-shadow-package'], 63),
-    ('interface-shadow-other-package', ['interface-shadow-other-package'], 63),
+    *[("interface-shadow-" + kind + suffix,
+       ["interface-shadow-original" if suffix == "-restore" else "interface-shadow-abstract" if suffix == "-abstract"
+        else "interface-shadow-parent" if suffix == "-parent" else "interface-shadow-" + kind], 110 if suffix == "-abort" else 0)
+      for kind in ("static", "private", "protected", "package", "other-package")
+      for suffix in (("-abort", "", "-abstract", "-default", "-parent", "-restore", "-readd") if kind == "protected" else ("", "-restore", "-readd"))],
     ('interface-bridge-add', ['interface-bridge-add', 'interface-bridge-add'], 0),
     ('interface-lambda-first', ['interface-lambda-first'], 0),
     ('interface-lambda-append', ['interface-lambda-append', 'interface-lambda-append'], 0),
@@ -337,7 +337,7 @@ MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "
                          "interface-kind-abstract-missing", "interface-parent-missing",
                          "multi-interface-unimplemented", "interface-default-conflict"})
 MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy", "tool-retransform-structural", "tool-retransform-restore"})
-MAPPED_SCENARIOS.update({"interface-shadow-static", "interface-shadow-private"})
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("interface-shadow-") and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("proxy-interface-") and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
 VAR_HANDLE_API = 33
@@ -345,11 +345,6 @@ VAR_HANDLE_API = 33
 # implementation of an interface method, so the transaction rejects with 63;
 # later releases link it and calls throw IllegalAccessError, also for a
 # private method.
-NON_PUBLIC_LINK_ERROR_API = 34
-LINK_ERROR_CHECKS = {"classNamed": True, "linkError": True, "oldBody": 11,
-                     "noDeclaration": "java.lang.NoSuchMethodException"}
-
-
 def release_expectation(name, code, required, api, self_selection):
     """Expected code and checks given the API and reported privateSelfSelection."""
     if name.startswith("method-private-self-") and not name.endswith("-restore") and self_selection:
@@ -362,11 +357,6 @@ def release_expectation(name, code, required, api, self_selection):
     if name == "method-private-active-target" and self_selection:
         return 0, {"privateKind": True, "activeCompleted": True, "oldSelf": 25}
 
-    kind = name.removeprefix("interface-abstract-unimplemented-")
-    if kind in ("package", "protected") and api <= NON_PUBLIC_LINK_ERROR_API:
-        return 63, LINK_ERROR_CHECKS
-    if kind == "private" and api > NON_PUBLIC_LINK_ERROR_API:
-        return code, {**required, "interfaceCall": "java.lang.IllegalAccessError"}
     return code, required
 EVOLVING_CHECKS = {"oldCompute": 13, "newCompute": 13, "addedType": "long",
                    "oldAdded": 0, "newAdded": 77, "oldAddedMethod": 110,
@@ -815,12 +805,13 @@ REQUIRED_CHECKS.update({
         "newDispatch": 31, "afterGc": 31} for kind in ("static", "private")},
     "interface-hide-object": {"rejectionReason": True, "oldDispatch": 41, "newDispatch": 41, "afterGc": 41},
     **{"interface-shadow-" + kind: {"interfaceShadow": 1, "oldDispatch": 0, "newDispatch": 0,
-        "oldShadow": 52 + 10 * i, "afterGc": 0} for i, kind in enumerate(("static", "private"))},
-    **{"interface-shadow-" + kind: {"rejectionReason": True, "oldDispatch": 51 + 10 * i,
-        "newDispatch": 51 + 10 * i, "oldShadow": 52 + 10 * i, "afterGc": 51 + 10 * i}
-        for i, kind in enumerate(("protected", "package"), 2)},
-    "interface-shadow-other-package": {"rejectionReason": True, "oldDispatch": 91, "newDispatch": 91,
-        "oldShadow": 92, "afterGc": 91},
+        "oldShadow": 52 + 10 * i, "afterGc": 0, "bytecode": 1, "handle": 1, "jni": 1, "late": "java.lang.AbstractMethodError" if i == 1 else 1,
+        "hotFailures": 0} for i, kind in enumerate(("static", "private"))},
+    **{"interface-shadow-" + kind: {"interfaceShadow": "java.lang.IllegalAccessError", "oldDispatch": 0,
+        "newDispatch": 0, "oldShadow": 52 + 10 * i, "afterGc": 0,
+        **{check: "java.lang.IllegalAccessError" for check in ("bytecode", "handle", "jni", "late", "lateJni")},
+        "hotFailures": 30000, **({"publicOverride": 103} if i == 2 else {})}
+        for i, kind in enumerate(("protected", "package", "other-package"), 2)},
     "interface-bridge-add": {"before": 90, "oldBridge": 90, "newBridge": 90,
         "oldAdded": 91, "newAdded": 91, "hasBridge": True, "addedBridge": True, "afterGc": 91},
     **{"interface-lambda-" + kind: {"appendCode": 0, "redefinedTypes": i + 1,
@@ -842,7 +833,7 @@ REQUIRED_CHECKS.update({
 })
 UNCHANGED_CHECKS = {
     **{name: ("unchangedMembers",) for name in ("tool-retransform-structural", "tool-retransform-restore")},
-    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private', 'interface-shadow-protected', 'interface-shadow-package', 'interface-shadow-other-package']},
+    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private']},
     "interface-overlap-superclass": ("unchangedParent",),
     **{name: ("unchangedSubject",) for name in ("super-batch-moving", "super-chain-old-structural")},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
@@ -1107,6 +1098,25 @@ REQUIRED_CHECKS["static-narrow-loaders"] = {
     "distinctClasses": False, **{name + str(i): value for i in range(2)
         for name, value in (("selfCleared", None), ("compatibleKept", True), ("retypedKept", True), ("ownLoader", True))}}
 
+REQUIRED_CHECKS["interface-shadow-protected-abort"] = {"armed": 0, "stable": 71, "oldShadow": 72,
+    "noDeclaration": "java.lang.NoSuchMethodException"}
+REQUIRED_CHECKS["interface-shadow-protected-abstract"] = {"nonPublic": "java.lang.IllegalAccessError",
+    "missing": "java.lang.AbstractMethodError", "oldShadow": 72}
+REQUIRED_CHECKS["interface-shadow-protected-default"] = {"nonPublic": "java.lang.IllegalAccessError", "default": 1, "oldShadow": 72}
+REQUIRED_CHECKS["interface-shadow-protected-parent"] = {"parentLoaded": True, "nonPublic": "java.lang.IllegalAccessError", "parentDefault": 7, "oldShadow": 72}
+
+for _index, _kind in enumerate(("static", "private", "protected", "package", "other-package")):
+    _name = "interface-shadow-" + _kind
+    REQUIRED_CHECKS[_name + "-restore"] = {"stable": 51 + 10 * _index, "oldShadow": 52 + 10 * _index}
+    REQUIRED_CHECKS[_name + "-readd"] = {
+        "interfaceShadow": "java.lang.IllegalAccessError" if _index >= 2 else 1,
+        "lateAgain": "java.lang.IllegalAccessError" if _index >= 2 else "java.lang.AbstractMethodError" if _index == 1 else 1,
+        "hotFailures": 30000 if _index >= 2 else 0, "afterGc": 0, "oldShadow": 52 + 10 * _index}
+for _kind in ("private", "package", "protected"):
+    _error = "java.lang.AbstractMethodError" if _kind == "private" else "java.lang.IllegalAccessError"
+    REQUIRED_CHECKS["interface-abstract-unimplemented-" + _kind].update(
+        {check: _error for check in ("interfaceHandle", "interfaceJni", "interfaceBytecode", "interfaceAfterGc")})
+
 def scenario_sequence(scenario_group, api=None):
     if api is not None and not 33 <= api <= 37:
         return tuple(item for item in scenario_sequence(scenario_group)
@@ -1196,6 +1206,8 @@ def validate_report(report, scenario_group="full"):
     self_selection = capabilities.get("privateSelfSelection")
     if type(self_selection) is not bool:
         raise RunFailure("The initialization report is missing privateSelfSelection")
+    if type(capabilities.get("interfaceMethodSelection")) is not bool:
+        raise RunFailure("The initialization report is missing interfaceMethodSelection")
     expected_scenarios = scenario_sequence(scenario_group, device["api"])
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
@@ -1225,6 +1237,10 @@ def validate_report(report, scenario_group="full"):
         if name.startswith("tool-retransform-") and scenario_capabilities.get("retransformRouted") is not True:
             raise RunFailure("Retransform scenario ran without its installed route")
         mapping = (scenario.get("capabilities") or {}).get("memberMapping")
+        if (name.startswith("interface-shadow-") or name in {
+                "interface-abstract-unimplemented-private", "interface-abstract-unimplemented-package",
+                "interface-abstract-unimplemented-protected"}) and capabilities.get("interfaceMethodSelection") is not True:
+            raise RunFailure(name + " requires JBR interfaceMethodSelection")
         if name in MAPPED_SCENARIOS and not (isinstance(mapping, str)
                                              and mapping.startswith("verified: ")):
             raise RunFailure("Scenario " + name + " ran without a runtime-verified member mapping")

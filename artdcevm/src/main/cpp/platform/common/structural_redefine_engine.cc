@@ -6,6 +6,7 @@
 #include <android/log.h>
 #include "shadowhook.h"
 #include "platform/common/imt_sealing.h"
+#include "platform/common/interface_method_selection.h"
 #include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
@@ -174,6 +175,8 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
     if (!sealing_prepared)
       sealing_note = "interface removal unavailable: " + failure;
     else {
+      if (!interface_method_selection::Prepare(vm, jni, &retirement_hooks, &failure))
+        sealing_note = "non-public interface selection unavailable: " + failure;
       references_prepared = narrowed_references::Prepare(process->layout_services, &retirement_hooks, &failure);
       if (!references_prepared)
         sealing_note = "interface reference cleanup unavailable: " + failure;

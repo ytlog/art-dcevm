@@ -6,6 +6,7 @@
 #include "platform/common/class_layout_table.h"
 #include "platform/common/fault_injection.h"
 #include "platform/common/imt_sealing.h"
+#include "platform/common/interface_method_selection.h"
 #include "platform/common/narrowed_references.h"
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
@@ -128,6 +129,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // abstract method or newly inherits conflicting defaults links a method
   // that throws at the call.
   abilities.interface_members = abilities.member_mapping;
+  abilities.interface_selection = interface_method_selection::Available();
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
   abilities.interface_removal = abilities.member_mapping && process->capabilities.subclass_watch &&
       imt_sealing::Available() && narrowed_references::Available();

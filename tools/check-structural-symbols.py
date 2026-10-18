@@ -28,11 +28,12 @@ INTERFACE_IMPLEMENTATIONS = tuple(COMMON / name for name in (
 STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(COMMON.glob('*.cc')))
 OPTIONAL_CATALOGS = (
     ('invokeKindServices', 'Invoke kind', 'invoke_kind_symbols.h', 'invoke_kind.cc'),
+    ('interfaceSelectionServices', 'Interface selection', 'interface_selection_symbols.h', 'interface_method_selection.cc'),
     ('imtSealingServices', 'IMT sealing', 'imt_sealing_symbols.h', 'imt_sealing.cc'),
     ('narrowedReferenceServices', 'Narrowed references', 'narrowed_reference_symbols.h', 'narrowed_references.cc'),
     ('retransformServices', 'Retransform', 'retransform_symbols.h', 'structural_redefine_engine.cc'),
 )
-LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so'}
+LIBRARIES = {'kJvmti': 'libopenjdkjvmti.so', 'kArt': 'libart.so', 'kDexFile': 'libdexfile.so'}
 TABLES = ('.dynsym', '.symtab', '.gnu_debugdata')
 ENTRY = re.compile(r'NamedSymbol\s+(k\w+)\{\s*Library::(k\w+),\s*"([^"]+)"'
                    r'(?:,\s*SymbolTable::(k\w+))?\s*\}')

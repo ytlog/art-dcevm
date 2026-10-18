@@ -37,6 +37,7 @@ SOURCE = r'''
 #include "platform/symbols/imt_sealing_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/runtime_thread_symbols.h"
+#include "platform/symbols/interface_selection_symbols.h"
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
@@ -46,6 +47,8 @@ SOURCE = r'''
 #include <string>
 using namespace artdcevm;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
+int probe_registration_calls = 0;
+const jclass selection_probe = reinterpret_cast<jclass>(0x1900);
 bool route_hooked = false;
 using RetransformEntry = jvmtiError (*)(jvmtiEnv*, jint, const jclass*);
 RetransformEntry routed_retransform = nullptr;
@@ -202,6 +205,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
       std::strstr(name, "ClassLinker15ResolveMethodId") ||
       std::strcmp(name, "NterpGetMethod") == 0) return nullptr;
   const std::string key(name);
+  if (key == symbols::interface_selection::kOpenDex.name && mode < 29) return nullptr;
   if (key == symbols::retransform::kJvmtiRetransformClasses.name)
     return mode >= 23 ? reinterpret_cast<void*>(RetransformOriginal) : nullptr;
   if (key == symbols::retransform::kRedefineClassesDirect.name)
@@ -307,11 +311,15 @@ jclass JNICALL FindClass(JNIEnv*, const char* name) {
     if (hooked_fill_super) hooked_fill_super(nullptr, {}, nullptr, &conflict_token, &fresh, imt);
     probe_running = false;
   }
-  jclass result = std::string(name) == "java/lang/Object" ? root_type : reinterpret_cast<jclass>(0x1000);
+  jclass result = std::string(name) == "com/github/ytlog/artdcevm/internal/InterfaceLinkProbe" ? selection_probe
+      : std::string(name) == "java/lang/Object" ? root_type : reinterpret_cast<jclass>(0x1000);
   if (local_frames > popped_frames) frame_locals.insert(result);
   return result;
 }
-jobject JNICALL NewGlobalRef(JNIEnv*, jobject object) { ++global_refs[object]; return object; }
+jobject JNICALL NewGlobalRef(JNIEnv*, jobject object) {
+  if (mode == 30 && object == selection_probe) { pending_exception = true; return nullptr; }
+  ++global_refs[object]; return object;
+}
 void JNICALL DeleteLocalRef(JNIEnv*, jobject object) {
   frame_locals.erase(object);
   if (mode >= 21 && object == first_type) ++borrowed_deletions;
@@ -328,8 +336,14 @@ jobject JNICALL PopLocalFrame(JNIEnv*, jobject) {
 }
 jboolean JNICALL IsProxy(JNIEnv*, jclass, jmethodID, va_list) { return JNI_FALSE; }
 void JNICALL ClearException(JNIEnv*) { pending_exception = false; }
-jmethodID JNICALL GetMethodID(JNIEnv*, jclass, const char*, const char*) {
+jmethodID JNICALL GetMethodID(JNIEnv*, jclass klass, const char*, const char*) {
+  if (mode == 31 && klass == selection_probe) { pending_exception = true; return nullptr; }
   return reinterpret_cast<jmethodID>(0x2001);
+}
+jint JNICALL RegisterNatives(JNIEnv*, jclass klass, const JNINativeMethod*, jint count) {
+  Require(!pending_exception && klass == selection_probe && count == 1, "Native registration ran after a pending exception");
+  ++probe_registration_calls;
+  return JNI_ERR;  // No Java exception: the return value must still reject the feature.
 }
 jvmtiError JNICALL Potential(jvmtiEnv*, jvmtiCapabilities* caps) {
   *caps = {}; caps->can_redefine_classes = 1; return JVMTI_ERROR_NONE;
@@ -419,6 +433,7 @@ int main(int argc, char** argv) {
     invocation.GetEnv = GetEnv;
     functions.FindClass = FindClass; functions.NewGlobalRef = NewGlobalRef;
     functions.DeleteLocalRef = DeleteLocalRef; functions.GetMethodID = GetMethodID;
+    functions.RegisterNatives = RegisterNatives;
     functions.PushLocalFrame = PushLocalFrame; functions.PopLocalFrame = PopLocalFrame;
     functions.CallStaticBooleanMethodV = IsProxy; functions.ExceptionClear = ClearException;
     if (mode >= 23 && mode != 26) tooling.RetransformClasses = RetransformOriginal;
@@ -648,6 +663,12 @@ int main(int argc, char** argv) {
                 "Failed Thread probe overwrote unavailable mapping diagnosis");
       }
     }
+    if (mode >= 29) {
+      Require(structural_redefine::Capabilities().find("\"interfaceMethodSelection\":false") != std::string::npos &&
+              !pending_exception && global_refs[selection_probe] == 0,
+              "Rejected native probe leaked a root/exception or advertised selection");
+      Require(probe_registration_calls == (mode == 29 ? 1 : 0), "Invalid native probe binding order");
+    }
     if (mode == 4) {
       const jvmtiClassDefinition definitions[] = {{first_type, 0, nullptr}, {second_type, 0, nullptr}};
       Require(routed(&env, 2, definitions) == JVMTI_ERROR_NONE && nested_preload && outer_routes == 1,
@@ -732,7 +753,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(29):
+        for case in range(32):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:

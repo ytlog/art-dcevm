@@ -106,6 +106,8 @@ struct Abilities {
   // still treating them as the removed interface throw
   // IncompatibleClassChangeError (requires member_mapping).
   bool interface_removal = false;
+  // Pre-publication linking preserves JBR non-public class-method selection.
+  bool interface_selection = false;
 };
 
 struct Decision {

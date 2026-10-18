@@ -45,10 +45,10 @@ def complete_report(api=36, self_selection=None):
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,
             "hierarchyChange": False, "fullDcevmComplete": False,
-            "privateSelfSelection": self_selection}},
+            "privateSelfSelection": self_selection, "interfaceMethodSelection": True}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
-                       "capabilities": {"retransformRouted": 33 <= api <= 37, "memberMapping": "verified: android16 class layout",
+                       "capabilities": {"interfaceMethodSelection": True, "retransformRouted": 33 <= api <= 37, "memberMapping": "verified: android16 class layout",
                                         "interfaceRedefinition": True,
                                         "interfaceRuntime": "verified: android16 Class/Thread/HandleScope/holder probes"},
                        "threadSingleStepCallbacks": 1 if name.startswith("methods-retire") else 0,
@@ -140,39 +140,37 @@ class ApkVerificationTests(unittest.TestCase):
             with self.subTest(scenario=name, missing=check), self.assertRaises(runner.RunFailure):
                 runner.validate_report(broken, scenario_group="proxy-interface")
 
-    def test_interface_shadow_rejects_unsafe_defaults_on_every_release(self):
+    def test_interface_shadow_requires_jbr_dispatch_on_every_release(self):
         for api in (30, 33, 34, 35, 36, 37):
             report = complete_report(api)
             report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("interface-shadow-")]
-            self.assertEqual(len(report["scenarios"]), 5)
+            self.assertEqual(len(report["scenarios"]), 19)
             runner.validate_report(report, scenario_group="interface-shadow")
-            for name in ("interface-shadow-protected", "interface-shadow-package"):
+            for name in ("interface-shadow-protected", "interface-shadow-package", "interface-shadow-other-package"):
                 scenario = next(s for s in report["scenarios"] if s["name"] == name)
-                self.assertEqual(scenario["actualCode"], 63)
-                broken = copy.deepcopy(report)
-                target = next(s for s in broken["scenarios"] if s["name"] == name)
-                target["checks"] = [c for c in target["checks"] if c["name"] != "unchangedMembers"]
-                with self.subTest(api=api, scenario=name), self.assertRaises(runner.RunFailure):
-                    runner.validate_report(broken, scenario_group="interface-shadow")
+                self.assertEqual(scenario["actualCode"], 0)
+                for check in ("interfaceShadow", "bytecode", "handle", "jni", "late", "lateJni", "hotFailures", "oldShadow"):
+                    broken = copy.deepcopy(report)
+                    target = next(s for s in broken["scenarios"] if s["name"] == name)
+                    target["checks"] = [c for c in target["checks"] if c["name"] != check]
+                    with self.subTest(api=api, scenario=name, check=check), self.assertRaises(runner.RunFailure):
+                        runner.validate_report(broken, scenario_group="interface-shadow")
 
-    def test_non_public_interface_calls_require_release_specific_evidence(self):
+    def test_non_public_interface_calls_require_jbr_errors(self):
         for api in (33, 34, 35, 36):
-            with self.subTest(api=api):
-                report = complete_report(api)
-                runner.validate_report(report)
-                package = next(s for s in report["scenarios"]
-                               if s["name"] == "interface-abstract-unimplemented-package")
-                self.assertEqual(package["expectedCode"], 63 if api <= 34 else 0)
-                package["actualCode"] = 0 if api <= 34 else 63
-                with self.assertRaises(runner.RunFailure):
-                    runner.validate_report(report)
-        report = complete_report(36)
-        private = next(s for s in report["scenarios"]
-                       if s["name"] == "interface-abstract-unimplemented-private")
-        call = next(c for c in private["checks"] if c["name"] == "interfaceCall")
-        call.update(expected="java.lang.AbstractMethodError", actual="java.lang.AbstractMethodError")
-        with self.assertRaises(runner.RunFailure):
+            report = complete_report(api)
             runner.validate_report(report)
+            for kind, wrong in (("package", "java.lang.AbstractMethodError"),
+                                ("protected", "java.lang.AbstractMethodError"),
+                                ("private", "java.lang.IllegalAccessError")):
+                broken = copy.deepcopy(report)
+                target = next(s for s in broken["scenarios"]
+                              if s["name"] == "interface-abstract-unimplemented-" + kind)
+                self.assertEqual(target["expectedCode"], 0)
+                call = next(c for c in target["checks"] if c["name"] == "interfaceCall")
+                call.update(expected=wrong, actual=wrong)
+                with self.subTest(api=api, kind=kind), self.assertRaises(runner.RunFailure):
+                    runner.validate_report(broken)
 
     def test_ordinary_group_requires_retirement_without_interface_admission(self):
         report = complete_report()

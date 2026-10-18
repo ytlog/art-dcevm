@@ -17,5 +17,6 @@ struct ArtMethod {
   void* data;
   void* quick_entry;
 };
+inline void ClearCode(ArtMethod* method) { method->dex_code_item_offset = 0; }
 static_assert(offsetof(ArtMethod, dex_method_index) == 12 && sizeof(ArtMethod) == 40);
 }  // namespace artdcevm::abi::arm64::android11

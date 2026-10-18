@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <jni.h>
 #include <string>
+#include <vector>
 #include "platform/abi/arm64/common/runtime_objects.h"
 
 // Fixed release arm64 declarations shared by Android 11--17, checked against
@@ -87,6 +88,22 @@ struct RedefinitionDataIter {
   ObjectArray* OldInstances() const { return Slot(kSlotOldInstanceObjects); }
 };
 static_assert(offsetof(RedefinitionDataIter, holder) == 8);
+
+// ti_redefine.h, Android 11--17. A private allocation-only driver uses the
+// normal ART failure reporter too; its error string and class signature must
+// exist even when a helper class fails before reaching the caller's holder.
+struct AllocationDriver {
+  RedefinerPrefix prefix;
+  uint32_t type = 1;  // RedefinitionType::kStructural.
+  std::vector<ClassRedefinitionLayout<4>> definitions;
+  std::string* error;
+};
+struct AllocationDefinition {
+  ClassRedefinitionPrefix prefix;
+  std::string signature;
+};
+static_assert(offsetof(AllocationDriver, error) == 64);
+static_assert(offsetof(AllocationDefinition, signature) == 24);
 
 // DexFile::Header::file_size_.
 inline constexpr size_t kDexHeaderFileSizeOffset = 0x20;

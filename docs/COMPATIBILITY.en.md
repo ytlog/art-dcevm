@@ -53,3 +53,5 @@ Existing compilation with Kotlin 2.3.21 (`-jvm-default=enable`, JVM target 1.8) 
 - Injected allocation failures do not establish recovery from real Java/native memory exhaustion. Other ART module updates, untested OEMs and releases require independent validation. One passing Compose scenario does not establish complete-app or all hot-reload behavior.
 
 Raw logs, APK hashes, per-device reports and individual verification records stay in local ignored directories. Public conclusions contain no device identifiers, connection details or local machine paths. Follow the [new-release validation order](TESTING.en.md#new-release-validation-order) before updating these conclusions.
+
+Interface/non-public class-method selection has its own `interfaceMethodSelection` capability, requiring named libart/libdexfile services and runtime declaration probes. New selection, late children, abstract/default transitions, parent defaults and rollback currently have normal and CheckJNI arm64 device coverage on API 33 (Android 13) and API 36 (Android 16). This new path has no device run here on API 30–32, 34–35 or 37; previous interface suite results do not establish that coverage.

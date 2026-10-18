@@ -589,6 +589,9 @@ int main(int argc, char** argv) {
         const auto shadow = policy::Evaluate(hidden, shadowed, hierarchy, members);
         Require(shadow.error == kModifiers && shadow.reason.find("Lfixture/Base;") != std::string::npos,
                 "abstract made default must not shadow a subtype method");
+        auto selection = members; selection.interface_selection = true;
+        Require(policy::Evaluate(hidden, shadowed, hierarchy, selection).error == JVMTI_ERROR_NONE,
+                "verified JBR selection must accept an abstract-to-default transition");
         auto packaged = contract; packaged.methods[1].access = acc::kAccAbstract;
         reject(packaged, kModifiers, "default made package-private abstract must be rejected");
       }
@@ -610,6 +613,9 @@ int main(int argc, char** argv) {
         const auto shadow = policy::Evaluate(contract, parented, shadowing, members);
         Require(shadow.error == kHierarchy && shadow.reason.find("Lfixture/Base;") != std::string::npos,
                 "a parent default shadowing a subtype method must be rejected");
+        auto selection = members; selection.interface_selection = true;
+        Require(policy::Evaluate(contract, parented, shadowing, selection).error == JVMTI_ERROR_NONE,
+                "verified JBR selection must accept an inherited parent default");
         auto batched = facts; batched.added_interface_in_batch = "Lfixture/Parent;";
         Require(policy::Evaluate(contract, parented, batched, members).error == kHierarchy,
                 "a parent redefined in the same batch must be rejected");
@@ -673,6 +679,11 @@ int main(int argc, char** argv) {
                                  "default shadowing a subtype method must be rejected");
       Require(shadow.find("Lfixture/Base;") != std::string::npos,
               "shadow rejection must name the declaring class");
+      auto selection = members;
+      selection.interface_selection = true;
+      const auto selected = policy::Evaluate(contract, with({{"hidden", "()I", acc::kAccPublic}}), hierarchy, selection);
+      Require(selected.error == JVMTI_ERROR_NONE && selected.methods_structural && selected.requires_member_mapping,
+              "verified JBR selection must accept a default with a non-public class declaration");
       accept(with({{"hidden", "()I", acc::kAccPublic | acc::kAccStatic}}), 0, kAdded,
              "static addition unrelated to virtual dispatch must be accepted");
       // Kept methods still keep their modifiers, and a retired identity keeps its kind.

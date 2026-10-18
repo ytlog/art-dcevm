@@ -71,6 +71,20 @@ class Reader {
     return TypeList(U32(Item(classes_, index) + 12));
   }
 
+  std::vector<uint16_t> ClassInterfaceIndices(uint32_t index) {
+    Header(true);
+    const uint32_t offset = U32(Item(classes_, index) + 12);
+    if (!offset) return {};
+    const uint32_t count = DataU32(offset);
+    std::vector<uint16_t> result;
+    for (uint32_t i = 0; i < count; ++i) {
+      const uint16_t type = DataU16(size_t{offset} + 4 + size_t{i} * 2);
+      Type(type);  // Validate the index and descriptor before returning it.
+      result.push_back(type);
+    }
+    return result;
+  }
+
   Member FieldIdentity(uint32_t index) {
     Header(true);
     const size_t item = Item(fields_, index);
@@ -422,6 +436,17 @@ class Reader {
 bool ReadClassInterfaces(const DexView& dex, uint32_t class_def, std::vector<std::string>* output, std::string* error) {
   try {
     *output = Reader(dex).ClassInterfaces(class_def);
+    error->clear();
+    return true;
+  } catch (const std::runtime_error& failure) {
+    *error = failure.what();
+    return false;
+  }
+}
+
+bool ReadClassInterfaceIndices(const DexView& dex, uint32_t class_def, std::vector<uint16_t>* output, std::string* error) {
+  try {
+    *output = Reader(dex).ClassInterfaceIndices(class_def);
     error->clear();
     return true;
   } catch (const std::runtime_error& failure) {

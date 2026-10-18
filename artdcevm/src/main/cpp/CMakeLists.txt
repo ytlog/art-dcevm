@@ -30,6 +30,7 @@ add_library(artdcevm SHARED
   platform/common/interface_admission.cc
   platform/common/interface_group_snapshot.cc
   platform/common/interface_allocation.cc
+  platform/common/interface_method_selection.cc
   platform/common/structural_redefine_engine.cc
   platform/common/structural_redefine_route.cc
   platform/common/structural_redefine_hooks.cc

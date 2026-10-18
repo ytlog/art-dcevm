@@ -1,5 +1,6 @@
 #include "platform/common/interface_redefinition_internal.h"
 #include "platform/common/art_method_identity.h"
+#include "platform/common/interface_method_selection.h"
 
 namespace artdcevm::interface_redefinition {
 using namespace detail;
@@ -7,30 +8,6 @@ namespace detail {
 // Match HandleScope::Create/Thread::PushHandleScope rather than borrowing
 // unrooted raw pointers across ART allocations. No Java allocation occurs while
 // gathering the Class objects or constructing this C++ storage.
-class Roots {
- public:
-  Roots(void* thread, size_t count)
-      : thread_(thread), runtime_(Runtime()), storage_(new uint8_t[runtime_.scope_header_size + 4 * count]{}) {
-    Field<void*>(storage_.get(), runtime_.scope_link) = Field<void*>(thread_, ThreadLayout().top_handle_scope);
-    Field<int32_t>(storage_.get(), runtime_.scope_capacity) = static_cast<int32_t>(count);
-    Field<void*>(thread_, ThreadLayout().top_handle_scope) = storage_.get();
-  }
-  ~Roots() { Field<void*>(thread_, ThreadLayout().top_handle_scope) = Field<void*>(storage_.get(), runtime_.scope_link); }
-  Roots(const Roots&) = delete;
-  Roots& operator=(const Roots&) = delete;
-  Handle Add(void* object) {
-    auto* slot = reinterpret_cast<uint32_t*>(storage_.get() + runtime_.scope_header_size) + used_++;
-    *slot = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
-    if (runtime_.scope_size != InterfaceRuntime::kAbsent)
-      Field<uint32_t>(storage_.get(), runtime_.scope_size) = static_cast<uint32_t>(used_);
-    return {slot};
-  }
- private:
-  void* thread_;
-  const InterfaceRuntime& runtime_;
-  std::unique_ptr<uint8_t[]> storage_;
-  size_t used_ = 0;
-};
 void Assign(Handle handle, void* object) {
   *const_cast<uint32_t*>(handle.reference) = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
 }
@@ -112,6 +89,7 @@ jvmtiError Run(RedefinerPrefix* driver) noexcept {
     AttemptScope scope(state, &next);
     const jvmtiError result = reinterpret_cast<Function>(process->original_run)(driver);
     next.committed = result == JVMTI_ERROR_NONE;
+    interface_method_selection::Complete(next.committed);
     return result;
   } catch (const std::bad_alloc&) {
     // Only this hook's root allocation may throw here; deeper hooks catch
@@ -167,14 +145,14 @@ bool LinkClass(void* linker, void* thread, const char* descriptor, Handle klass,
   using Function = bool (*)(void*, void*, const char*, Handle, Handle, Handle*);
   State* state = CurrentState();
   const Linking* linking = state ? state->linking : nullptr;
-  if (linking && !descriptor) Assign(state->attempt->pending, klass.Get<void>());
-  const bool result = reinterpret_cast<Function>(process->original_link_class)(
+  if (linking && !descriptor && !interface_method_selection::LinkingHelper()) Assign(state->attempt->pending, klass.Get<void>());
+  const bool result = interface_method_selection::LinkClass(reinterpret_cast<Function>(process->original_link_class),
       linker, thread, descriptor, klass, interfaces, output);
   // Capture the resolved class before AllocateNewClassObject's JNI-ID array
   // allocations. Those can fail after linking and return nullptr to Finish.
   // This callback may run with ClassLinker locks held. Only assign an existing
   // HandleScope root: no JNI/local-table growth, heap store or allocation here.
-  if (linking && !descriptor && output && output->Get<void>())
+  if (linking && !descriptor && output && output->Get<void>() && !interface_method_selection::LinkingHelper())
     Assign(state->attempt->pending, output->Get<void>());
 ARTDCEVM_TEST(
   // A link failure after producing the class exercises the allocator's null
@@ -211,7 +189,11 @@ void* ReplacementFor(void* old, bool* pending) {
 void* Redirect(void* linker, TypeIndex index, void* cache, void* loader) noexcept try {
   State* state = CurrentState();
   const Linking* linking = state ? state->linking : nullptr;
-  if (!state || (linking ? cache != linking->private_cache.Get<void>() : !state->external)) return nullptr;
+  if (!state) return nullptr;
+  if (state->selection_types && cache == state->selection_cache.Get<void>()) {
+    return index.index < state->selection_types->size() ? (*state->selection_types)[index.index].Get<void>() : nullptr;
+  }
+  if (linking ? cache != linking->private_cache.Get<void>() : !state->external) return nullptr;
   const auto* dex = reinterpret_cast<const DexFilePrefix*>(static_cast<DexCache*>(cache)->dex_file);
 ARTDCEVM_TEST(
   if (ARTDCEVM_FAULT(11)) throw std::bad_alloc{};
@@ -246,7 +228,7 @@ void* LookupByCache(void* linker, TypeIndex index, void* cache, void* loader) no
   return reinterpret_cast<LookupCache>(process->original_lookup_cache)(linker, index, cache, loader);
 }
 void* LookupByReferrer(void* linker, TypeIndex index, void* referrer) noexcept {
-  if (const State* state = CurrentState(); state && (state->linking || state->external)) {
+  if (const State* state = CurrentState(); state && (state->linking || state->external || state->selection_types)) {
     if (void* object = Redirect(linker, index, runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->dex_cache)),
                                runtime_thread::Read(Thread(), Field<uint32_t>(referrer, state->runtime->class_loader)))) return object;
   }

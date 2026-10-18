@@ -186,6 +186,8 @@ struct State final : transaction::Part {
   // ART allocates a class that links rebuilt interfaces: its lookups of
   // their old classes resolve to the allocated replacements.
   bool external = false;
+  Handle selection_cache{};
+  const std::vector<Handle>* selection_types = nullptr;
 };
 inline State* CurrentState() {
   return transaction::PartOf<State>(transaction::Current(), &transaction::Context::interfaces);
@@ -193,6 +195,32 @@ inline State* CurrentState() {
 inline const InterfaceRuntime& Runtime() { return *CurrentState()->runtime; }
 inline const runtime_thread::VerifiedThread& Thread() { return *CurrentState()->thread; }
 inline const RuntimeThread& ThreadLayout() { return *CurrentState()->thread_layout; }
+class Roots {
+ public:
+  Roots(void* thread, size_t count)
+      : thread_(thread), runtime_(Runtime()), storage_(new uint8_t[runtime_.scope_header_size + 4 * count]{}) {
+    Field<void*>(storage_.get(), runtime_.scope_link) = Field<void*>(thread_, ThreadLayout().top_handle_scope);
+    Field<int32_t>(storage_.get(), runtime_.scope_capacity) = static_cast<int32_t>(count);
+    Field<void*>(thread_, ThreadLayout().top_handle_scope) = storage_.get();
+  }
+  ~Roots() { Field<void*>(thread_, ThreadLayout().top_handle_scope) = Field<void*>(storage_.get(), runtime_.scope_link); }
+  Roots(const Roots&) = delete;
+  Roots& operator=(const Roots&) = delete;
+  Handle Add(void* object) {
+    auto* slot = reinterpret_cast<uint32_t*>(storage_.get() + runtime_.scope_header_size) + used_++;
+    *slot = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(object));
+    if (runtime_.scope_size != InterfaceRuntime::kAbsent)
+      Field<uint32_t>(storage_.get(), runtime_.scope_size) = static_cast<uint32_t>(used_);
+    return {slot};
+  }
+ private:
+  void* thread_;
+  const InterfaceRuntime& runtime_;
+  std::unique_ptr<uint8_t[]> storage_;
+  size_t used_ = 0;
+};
+void Assign(Handle, void*);
+void DiscardClass(void*);
 extern thread_local Timing timing;
 struct JniFailure {};
 class LocalRef {

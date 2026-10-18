@@ -173,7 +173,7 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
 // subtype. Missing abstract implementations fail at the call. `modifiers`
 // is the JVMTI view.
 Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
-                                const LoadedHierarchy& hierarchy, bool supported) {
+                                const LoadedHierarchy& hierarchy, bool supported, bool selection) {
   const std::string method = key.first + key.second;
   if (!supported)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
@@ -196,7 +196,7 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
   // miranda: calls to it throw AbstractMethodError.
   if (modifiers & acc::kAccAbstract) return {};
   const auto shadow = hierarchy.subtype_shadows.find(key);
-  if (shadow != hierarchy.subtype_shadows.end())
+  if (shadow != hierarchy.subtype_shadows.end() && !selection)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "added default method may change calls resolved by " + shadow->second + ": " + method);
   return {};
@@ -205,7 +205,7 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
 // superinterfaces the target did not inherit, to every implementation: like
 // added members, a direct method of the target must not hide one, a default
 // must not shadow a subtype method. Missing abstract implementations fail at the call.
-Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarchy& hierarchy) {
+Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarchy& hierarchy, bool selection) {
   std::set<MemberKey> direct;
   for (const auto& m : incoming.methods) {
     const uint32_t now = MethodModifiers(m.access);
@@ -219,7 +219,7 @@ Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarch
                       "a static or private method hides an added parent interface method: " + name);
       if (!method.is_abstract) {
         const auto shadow = hierarchy.subtype_shadows.find(method.key);
-        if (shadow != hierarchy.subtype_shadows.end())
+        if (shadow != hierarchy.subtype_shadows.end() && !selection)
           return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                         "added parent interface default may change calls resolved by " + shadow->second + ": " + name);
         continue;
@@ -234,20 +234,20 @@ Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarch
 // A new default is an added default for every implementation; a new abstract
 // declaration throws AbstractMethodError when no implementation exists.
 Decision CheckInterfaceKindChange(const MemberKey& key, uint32_t before, uint32_t after,
-                                  const LoadedHierarchy& hierarchy, bool supported) {
+                                  const LoadedHierarchy& hierarchy, bool supported, bool selection) {
   const std::string method = key.first + key.second;
   // Restoring a private instance declaration as public gives implementations
   // a default or miranda again. Reuse addition's visibility/shadow checks;
   // old invoke-direct self calls remain valid without a caller scan.
   if (supported && (before & acc::kAccPrivate) && !(before & acc::kAccStatic) && Virtual(after))
-    return CheckInterfaceAddition(key, after, hierarchy, supported);
+    return CheckInterfaceAddition(key, after, hierarchy, supported, selection);
   if (!supported || (before ^ after) != acc::kAccAbstract || !Virtual(before) || !(before & acc::kAccPublic))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                   "interface redefinition does not support method modifier changes: " + method);
   // An implementation that relied on the default links a miranda.
   if (after & acc::kAccAbstract) return {};
   const auto shadow = hierarchy.subtype_shadows.find(key);
-  if (shadow != hierarchy.subtype_shadows.end())
+  if (shadow != hierarchy.subtype_shadows.end() && !selection)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED,
                   "interface method made default may change calls resolved by " + shadow->second + ": " + method);
   return {};
@@ -299,7 +299,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   decision.requires_member_mapping = superclass_changed || interfaces.interfaces_removed;
   if (interface_target && parents_changed) {
     // CheckInterfaces already rejected removed or unresolvable parents.
-    Decision parents = CheckInterfaceParents(incoming, hierarchy);
+    Decision parents = CheckInterfaceParents(incoming, hierarchy, abilities.interface_selection);
     if (parents.error != JVMTI_ERROR_NONE) return parents;
     decision.requires_member_mapping = true;
   }
@@ -373,7 +373,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
     }
     if (interface_target && changed) {
       Decision kind = CheckInterfaceKindChange({old.name, old.descriptor}, old.access, now, hierarchy,
-                                               interface_members);
+                                               interface_members, abilities.interface_selection);
       if (kind.error != JVMTI_ERROR_NONE) return kind;
       decision.requires_member_mapping = true;
     }
@@ -408,7 +408,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   }
   if (interface_target) {
     for (const auto& [key, now] : new_methods) {
-      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members);
+      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members, abilities.interface_selection);
       if (added.error != JVMTI_ERROR_NONE) return added;
       decision.requires_member_mapping = true;
     }

@@ -3,11 +3,11 @@
 
 namespace artdcevm::symbols {
 
-enum class Library { kArt, kJvmti };
+enum class Library { kArt, kJvmti, kDexFile };
 enum class SymbolTable { kDynsym, kAnyNamed };
 
 constexpr const char* LibraryName(Library library) {
-  return library == Library::kArt ? "libart.so" : "libopenjdkjvmti.so";
+  return library == Library::kArt ? "libart.so" : library == Library::kJvmti ? "libopenjdkjvmti.so" : "libdexfile.so";
 }
 
 // A named ELF symbol. Addresses and offsets are never derived from disassembly.

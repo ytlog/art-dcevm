@@ -73,6 +73,7 @@ struct ArtMethod {
   void* data;
   void* quick_entry;
 };
+inline void ClearCode(ArtMethod*) {}  // Since 12 the code item is stored in data_.
 static_assert(sizeof(ArtMethod) == 32);
 // libdexfile/dex/modifiers.h; ART sets it on each method of a replaced class.
 inline constexpr uint32_t kAccObsoleteMethod = 0x00040000;

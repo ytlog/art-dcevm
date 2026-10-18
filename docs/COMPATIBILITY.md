@@ -53,3 +53,5 @@ Kotlin 2.3.21（`-jvm-default=enable`、JVM target 1.8）与 D8 8.10.9 的已有
 - 注入分配失败不证明真实 Java/native 内存耗尽可以恢复；其他 ART 模块更新、未测 OEM 与版本仍需独立验证。Compose 的一个已通过场景不代表完整应用或所有热重载行为。
 
 原始日志、APK 哈希、逐设备报告与逐次验证记录只保存在本地忽略目录。公开结论不包含设备标识、连接信息或本机路径；更新结论前按[测试指南](TESTING.md#新增版本的验证顺序)取得对应证据。
+
+接口／非 public 类方法选择由 `interfaceMethodSelection` 单独报告，要求命名的 libart/libdexfile 服务与运行时声明探测。新增选择、晚加载子类、default/abstract 切换、父接口 default 与故障回滚目前在 API 33（Android 13）和 API 36（Android 16）的 arm64 设备上以普通及 CheckJNI 模式验证。API 30–32、34–35、37 的这条新增路径尚无本次设备验证，不能由已有接口套件的通过记录推断。

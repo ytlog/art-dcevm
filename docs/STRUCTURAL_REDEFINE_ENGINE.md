@@ -153,17 +153,21 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 删除的 default/abstract 声明按普通退役映射到自身；重链接后的实现类不再携带的 copied default/miranda 走现有“消失的 copied 方法映射到声明类的 canonical 成员”路径，canonical 即已退役的旧声明，因此 DexCache 清除、重新解析抛 `NoSuchMethodError`，JNI、反射与 MethodHandle 由现有守卫拒绝。default 改为 abstract 与新增 abstract 相同（见下文第 4 条）；abstract 改为 default 复用新增 default 的 `subtype_shadows` 检查。字段沿用普通类的字段退役与静态字段复制；接口在准入时已初始化，新增静态字段取默认值。
 
-新增父接口时，Native 阶段经公开 JVMTI 读取新父接口及其目标原先未继承（`IsAssignableFrom` 判定）的父接口所声明的虚方法，。策略据此拒绝被目标 static/private 方法遮蔽的方法和遮蔽实现类链方法的 default；新父接口的 abstract 方法与新增 abstract 相同，实现类缺少实现时调用抛 `AbstractMethodError`。新增的接口若由同批重建（它本身或其父接口是目标），新类必须链接其替换类，否则 copied default 与分派槽位会停留在提交前的旧版本。目标的 `Requirements::linked_interfaces` 记下新增接口；分配该类（ART 自身的分配，或其所在接口组的分配）之前先完成那些重建，ART 链接期间的类型查找与 `CheckVerification` 期间的 `FindClass` 都把旧接口换成替换类。重建互相依赖或同组内顺序颠倒时以 66 拒绝。接口始终使用结构路径，`Abilities::interface_members` 仅在引擎拥有成员映射时启用。
+新增父接口时，Native 阶段经公开 JVMTI 读取新父接口及其目标原先未继承（`IsAssignableFrom` 判定）的父接口所声明的虚方法。策略据此拒绝被目标 static/private 方法遮蔽的方法，以及选择服务不可用时遮蔽实现类链方法的 default；新父接口的 abstract 方法与新增 abstract 相同，实现类缺少实现时调用抛 `AbstractMethodError`。新增的接口若由同批重建（它本身或其父接口是目标），新类必须链接其替换类，否则 copied default 与分派槽位会停留在提交前的旧版本。目标的 `Requirements::linked_interfaces` 记下新增接口；分配该类（ART 自身的分配，或其所在接口组的分配）之前先完成那些重建，ART 链接期间的类型查找与 `CheckVerification` 期间的 `FindClass` 都把旧接口换成替换类。重建互相依赖或同组内顺序颠倒时以 66 拒绝。接口始终使用结构路径，`Abilities::interface_members` 仅在引擎拥有成员映射时启用。
 
 这复用接口现有的重建组：接口、已加载子接口、实现类及其子类按新接口重新 `LinkClass`，未提交 DEX 的实现类使用原 DEX 与私有 DexCache，同样获得 copied default。新方法没有旧对应项，不进入旧方法映射。类链上的 public 实现优先于 default；更具体的子接口覆盖父接口，原 miranda 可变为 default 拷贝。实例迁移、引用改写、去优化与缓存失效仍全部由 ART 完成。
 
 新增方法还须满足以下检查：
 
 1. 新增 static/private 方法不得遮蔽从父接口继承的虚方法或 Object 的 public 实例方法，否则拒绝 63。`CollectInheritedInterface` 将这些身份记录到 `LoadedHierarchy::inherited_interface`。已校验的旧 `invoke-interface` 可能仍按 IMT 分派，引擎不能靠新声明使它安全地抛调用方式错误。
-2. 新增 default 可以与类链 static/private 方法同签名，public 实例实现也可接受。类链中的 protected/package-private 实例方法与新 default 同签名时以 63 拒绝：固定 JBR 在接口调用时抛 `IllegalAccessError`，而 ART 15–17 的 `AssignVTableIndexes` 只选择 public 类方法，会复制并执行 default；旧版 ART 则在链接时拒绝。另一运行时包的 package-private 方法同样拒绝，防止已有指名类的调用改为解析到复制的 default。`subtype_shadows` 来自 `interface_redefinition::Backend::GroupTypes`，只检查实际重建的准备完成且非错误类型，并写明声明类。快照沿每个实现类的类链记录最具体的 virtual 声明，更具体的 public 覆写不受祖先非 public 方法误拒绝；boot 声明按唯一描述符缓存，选择仍逐实现类计算，其他加载器不按名称合并。
+2. 新增 default 与类链 protected/package-private 虚方法同签名时，`Abilities::interface_selection` 决定能否按 JBR 接受：类方法优先，接口调用抛 `IllegalAccessError`，原有类方法调用保留；更具体 public 覆写仍优先。`subtype_shadows` 保留服务不可用时的拒绝依据，命名服务与运行时声明探测通过后才放开新增 default、abstract/default 切换和新增父接口带来的 default。
 3. 与 JBR 相同，新出现的 default 冲突照常接受：ART 为两个无关接口的同签名 default 链接冲突方法，调用时抛 `IncompatibleClassChangeError`；`PlanMethods` 把旧 copied default 映射到该冲突方法，缓存的旧解析随之失效。之后的事务消除冲突时，调用恢复到唯一的 default。
 
-4. 与 JBR 相同，新增 public abstract（含 default 改为 abstract、新父接口的 abstract 方法）不要求已加载的实现类提供实现，也不走 default 的 `subtype_shadows` 拒绝。ART 为缺实现的类链接 miranda，调用时抛 `AbstractMethodError`；已有实现、继承实现、同批实现与 ART 选中的更具体 default 照常分派；未提交 DEX、没有实例的实现类同样随接口组重新链接。实现类只有同签名的非 public 方法时，结果取决于 ART 的选择语义：ART 13、14 的 `LinkInterfaceMethods` 对 package-private 或 protected 实现在 IfTable 形成前调用固定源码的 `ThrowIllegalAccessErrorForImplementingMethod`，类无法链接，整批以 63 拒绝；ART 15、16 的 `AssignVTableIndexes` 只选择 public 类方法，链接成功，调用抛 `IllegalAccessError`（API 36 实测，只有 private 方法时同样如此；JBR 对 private 抛 `AbstractMethodError`、对 package-private/protected 抛 `IllegalAccessError`）。`interface_redefinition` 通过上述命名 NO_INLINE 服务观察 ART 实际选择的方法对，在链接锁内只记录原生元数据和已有 HandleScope 根，原服务照常执行；分配失败、离开锁后按固定 Class 布局读出实现类、方法与接口，写入拒绝原因。该服务不可定位时仍由 ART 的链接错误拒绝，原因只是不含方法。
+4. 新增 public abstract、default 改为 abstract 和新增父接口的 abstract 方法均可接受。缺少实现时调用抛 `AbstractMethodError`；private 类方法不作为实现，package-private/protected 虚方法选择 `IllegalAccessError`。真实 bridge、更具体 default、abstract 遮蔽和冲突仍由 ART 的链接器决定。固定 JBR 对仅在父类找到 private 声明的子类保留 miranda 而不继承新增 default；同一路径覆盖该子类的结构重建和后续普通类加载。
+
+`interface_method_selection.cc` 共用现有 `LinkMethods` 钩子，并从外层 `LinkClass` 保存真实 ClassLinker 接收者，避免把模板 helper 当作链接器。它用独立有效 DEX 暂时隐藏私有替换类自身的接口列表，保留全部 ID、签名与代码；包括普通类加载在内，先分配仅属于待链接类的私有 DexCache；仅在原链接调用期间替换该私有 cache 的 DexFile，并通过可移动 Handle 恢复，不切换共享 cache。ART 照常分配类方法 vtable 索引。另一个不发布到 ClassTable 的空抽象类实现最终接口图，借用 ART 的默认方法、miranda 与冲突选择；然后将选中方法复制进接收类，填好私有 vtable/IfTable，仍由外层 ART 完成类布局和发布。
+
+非 public 错误入口采用真实接口签名的 public abstract copied miranda，清除代码和可执行 default 标志，保留原类方法与其虚调用槽。JIT 无法将这个不可执行入口内联为原类方法或 default。命名的 invocation-time/abstract 错误服务为登记入口选择 IAE/AME；旧版 MethodHandle 跳过抽象检查时，由命名的 interpreter-to-interpreter 调用入口在执行前抛出相同错误。普通解释器方法直接经过标志快路径。登记在类发布前完成；失败删除登记和根，成功时像退役成员一样保留类加载器根至进程结束，避免原生方法地址重用。后续普通类加载通过预加载的 JNI native 探针获得本线程的真实 Native 声明证明，沿用已验证 Class 布局；不修改线程状态、不推算地址。`interfaceMethodSelection` 单独报告服务可用性。
 
 接口 direct 方法退役使用现有 `{old, old, kRetired}` 映射、DexCache 清理与访问守卫：字节码、JNI、MethodHandle 调用抛 `NoSuchMethodError`，缓存反射调用抛包装它的 `InvocationTargetException`；活动旧帧继续执行。标准入口的保活根已覆盖接口及整组子类型，发生退役时保留至进程结束；每个目标独立记录 retired kinds，因此之后以另一种调用方式恢复同名同描述符时，仍按原调用方式检查，采用与直接切换相同的调用保护或 71 限制。接口不需要新的访问守卫。
 
@@ -183,7 +187,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 | --- | --- |
 | 接口目标的方法体更新 | 接受；需接口运行时探测与成员映射通过 |
 | 接口目标新增 public abstract/default/static/private 实例方法；删除或改签名任一方法；public 实例方法 abstract ↔ default；静态字段增删或改类型 | 成员映射与接口运行时可用、且继承与遮蔽检查通过时接受；缺实现或 default 冲突在调用时抛错 |
-| 接口目标新增 native；direct 遮蔽；ART 13、14 链接非 public 实现失败 | 拒绝 `METHOD_ADDED`（63） |
+| 接口目标新增 native；direct 遮蔽；选择服务不可用时的非 public 链接失败 | 拒绝 `METHOD_ADDED`（63） |
 | 接口目标字段修饰符变化；abstract ↔ default 之外的方法修饰符变化；新父接口方法遮蔽检查失败；类种类变化 | 分别拒绝 `SCHEMA_CHANGED`（64）、`METHOD_MODIFIERS_CHANGED`（71）、`HIERARCHY_CHANGED`（66）、`CLASS_MODIFIERS_CHANGED`（70） |
 | 接口运行时能力不可用（版本、命名服务或探测不支持） | 拒绝 `NOT_AVAILABLE`（98）；声明变化使用上述标准错误码 |
 | 新增字段、方法 | 接受 |
@@ -390,7 +394,8 @@ JBR 还允许自身 obsolete 帧直接调用新 private 方法体，并忽略子
 | 可选接口后端契约、组装、状态报告与校验查找 | `platform/common/interface_redefinition.{h,cc}` |
 | 接口准入、Thread/Class/HandleScope 探测 | `platform/common/interface_admission.cc` |
 | 接口组的 Native 快照、描述与查询类型准备 | `platform/common/interface_group_snapshot.cc` |
-| 接口组分配、链接观察与非 public 实现的链接错误诊断、解析重定向、Run 保活与失败清理 | `platform/common/interface_allocation.cc` |
+| 接口组分配、保守链接错误诊断、解析重定向、Run 保活与失败清理 | `platform/common/interface_allocation.cc` |
+| JBR 接口方法选择、私有链接 DEX、抛错入口登记与后续类加载 | `platform/common/interface_method_selection.cc` |
 | 接口进程/事务状态与共享助手的私有声明 | `platform/common/interface_redefinition_internal.h` |
 | 映射与链接错误诊断共用的有界 DEX 方法身份读取 | `platform/common/art_method_identity.h` |
 | 接口受影响类型、继承边与重建顺序的 Native 快照 | `platform/common/interface_snapshot.{h,cc}` |
