@@ -194,6 +194,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("field-retype".equals(isolated)) runRetypeScenarios();
             else if ("invoke-kind".equals(isolated)) runInvokeKindScenarios();
             else if ("method-private".equals(isolated)) runPrivateCallScenarios();
+            else if ("method-private-self".equals(isolated)) runPrivateSelfScenarios();
             else if ("tool".equals(isolated)) runToolScenarios();
             else if ("interface-shadow".equals(isolated)) runInterfaceShadowScenarios();
             else if ("interface-selection".equals(isolated)) runInterfaceSelectionMatrix();
@@ -4224,14 +4225,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     // The runtime reports whether named switch-interpreter selectors are installed;
     // a runtime that inlines them keeps rejection 71 for active self frames.
-    private static boolean privateSelfSelection() throws Exception {
-        return DcevmRuntime.capabilities().optBoolean("privateSelfSelection", false);
+    private static boolean privateSelfSelection(boolean iface) throws Exception {
+        return DcevmRuntime.capabilities().optBoolean("privateSelfSelection" + (iface ? "Interface" : "Class"), false);
     }
 
     private void runPrivateSelfScenarios() throws Exception {
-        boolean supported = privateSelfSelection();
         for (int round = 0; round < 2; round++) {
             for (boolean iface : new boolean[]{false, true}) {
+                boolean supported = privateSelfSelection(iface);
                 PrivateSelfFixture.Subject subject = new PrivateSelfFixture.Subject();
                 PrivateSelfFixture.Child child = new PrivateSelfFixture.Child();
                 PrivateSelfFixture.Impl impl = new PrivateSelfFixture.Impl();
@@ -4265,17 +4266,25 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 }
                 try {
                     if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("self frames not ready");
+                    if (round == 1 && (supported || privateSelfSelection(!iface))) runScenario(name + "-retain", 0, scenario -> {
+                        scenario.redefine(new Class<?>[]{target}, "method-private-self-retained");
+                        System.gc();
+                        scenario.check("newBody", iface ? 1011 : 1007,
+                                iface ? impl.await(open, open, 0) : subject.await(open, open, 0));
+                    });
                     runScenario(name, supported ? 0 : 71, scenario -> {
                         scenario.redefine(new Class<?>[]{target}, "method-private-self");
                         if (!supported)
                             scenario.check("activeReason", true, DcevmRuntime.capabilities().getString("lastRejection").contains("active frame"));
                         scenario.check("privateKind", supported, Modifier.isPrivate(target.getDeclaredMethod("target").getModifiers()));
+                        long steps = StandardJvmtiClient.singleStepCount();
                         System.gc(); resume.countDown();
                         for (Thread worker : workers) worker.join(10000);
                         for (int i = 0; i < workers.length; i++) {
                             scenario.check("completed" + i, true, !workers[i].isAlive());
                             scenario.check("stepping" + i, true, stepping[i]);
                         }
+                        scenario.check("singleStepObserved", true, !singleStep || StandardJvmtiClient.singleStepCount() > steps);
                         scenario.check("self", supported ? (iface ? 31 : 25) : (iface ? 11 : 7), results[0]);
                         scenario.check("overrideReceiver", supported ? (iface ? 31 : 25) : (iface ? 49 : 47), results[1]);
                         scenario.check("range", supported ? (iface ? 36 : 41) : (iface ? 6 : 11), results[2]);
@@ -4311,7 +4320,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             catch (Throwable t) { selfResult[0] = t.getClass().getName(); }
         });
         own.start();
-        boolean supported = privateSelfSelection();
+        boolean supported = privateSelfSelection(false);
         try {
             if (!selfReady.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("self not ready");
             runScenario("method-private-active-target", supported ? 0 : 71, scenario -> {

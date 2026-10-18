@@ -11,6 +11,7 @@ bool Inject(int stage);
 void InterfacePrepared(bool prepared);
 bool RejectThreadProbe();
 int ImtFallbackMode();
+int PrivateSelfMask();
 void ReferenceRead(bool marking);
 void SnapshotFinished(std::chrono::steady_clock::time_point start, int targets, int loaded);
 void CorruptHolder(const abi::arm64::RedefinitionDataIter& data);
@@ -18,12 +19,14 @@ int Increment(Counter counter);
 void Set(Counter counter, int value);
 }
 #define ARTDCEVM_IMT_FALLBACK_MODE() (::artdcevm::fault_injection::ImtFallbackMode())
+#define ARTDCEVM_PRIVATE_SELF_MASK() (::artdcevm::fault_injection::PrivateSelfMask())
 #define ARTDCEVM_FAULT(stage) (::artdcevm::fault_injection::Inject(stage))
 #define ARTDCEVM_FAULT_IF(stage, condition) ((condition) && ARTDCEVM_FAULT(stage))
 #define ARTDCEVM_REJECT_THREAD_PROBE() (::artdcevm::fault_injection::RejectThreadProbe())
 #define ARTDCEVM_TEST(...) __VA_ARGS__
 #else
 #define ARTDCEVM_IMT_FALLBACK_MODE() 0
+#define ARTDCEVM_PRIVATE_SELF_MASK() 0
 #define ARTDCEVM_FAULT(stage) false
 #define ARTDCEVM_FAULT_IF(stage, condition) false
 #define ARTDCEVM_REJECT_THREAD_PROBE() false

@@ -11,7 +11,8 @@ inline constexpr NamedSymbol kResolveMethodId{Library::kArt, "_ZN3art11ClassLink
 // nterp.cc. Android 14+ also uses this cache-fill entry in the switch interpreter.
 inline constexpr NamedSymbol kNterpGetMethod{Library::kArt, "NterpGetMethod", SymbolTable::kAnyNamed};
 // entrypoint_utils-inl.h, Android 14--17: switch interpreter invocation selection.
-// Absent where a runtime inlines it (all of 11--13, some 14 and 17 modules).
+// Each instantiation may be inlined independently. Keep the available selector;
+// all of 11--13 inline both, while some 14/17 modules retain interface only.
 inline constexpr NamedSymbol kSelectVirtual{Library::kArt, "_ZN3art16FindMethodToCallILNS_10InvokeTypeE2EEEPNS_9ArtMethodEPNS_6ThreadES3_PNS_6ObjPtrINS_6mirror6ObjectEEERKNS_11InstructionEbPb", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kSelectInterface{Library::kArt, "_ZN3art16FindMethodToCallILNS_10InvokeTypeE4EEEPNS_9ArtMethodEPNS_6ThreadES3_PNS_6ObjPtrINS_6mirror6ObjectEEERKNS_11InstructionEbPb", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kMethodDescriptor{Library::kArt, "_ZN3art9ArtMethod27GetDeclaringClassDescriptorEv", SymbolTable::kAnyNamed};

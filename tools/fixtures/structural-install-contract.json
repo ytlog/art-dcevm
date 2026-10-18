@@ -30,7 +30,11 @@
       "standardRedefineRouted": true,
       "subclassLoadRetries": 0,
       "superclassWidening": true,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "invocation guards not installed",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
     },
     "cold": {
       "classModifierChange": false,
@@ -62,7 +66,11 @@
       "standardRedefineRouted": false,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "hooksSha256": "1adfaa4ed6367f2b6bfe0932e4157f5e3548ee32680878b11371cb8251527900",
     "unhooks": []
@@ -98,7 +106,11 @@
       "standardRedefineRouted": true,
       "subclassLoadRetries": 0,
       "superclassWidening": true,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "invocation guards not installed",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
     },
     "cold": {
       "classModifierChange": false,
@@ -130,7 +142,11 @@
       "standardRedefineRouted": false,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "hooksSha256": "5c8c13b3da669dc636f7ce82b5d06ad0e53e07481bf7b3b7a09cc26f9f11f4d4",
     "unhooks": [
@@ -168,7 +184,11 @@
       "standardRedefineRouted": true,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -200,7 +220,11 @@
       "standardRedefineRouted": false,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "hooksSha256": "1adfaa4ed6367f2b6bfe0932e4157f5e3548ee32680878b11371cb8251527900",
     "unhooks": [
@@ -262,7 +286,11 @@
       "standardRedefineRouted": true,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -294,7 +322,11 @@
       "standardRedefineRouted": false,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "hooksSha256": "73f8c4c1ceef62ed0be44bd12542d2db3fbd16c2b829f73d98d48620335ffefa",
     "unhooks": []
@@ -330,7 +362,11 @@
       "standardRedefineRouted": true,
       "subclassLoadRetries": 0,
       "superclassWidening": true,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "invocation guards not installed",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
     },
     "cold": {
       "classModifierChange": false,
@@ -362,7 +398,11 @@
       "standardRedefineRouted": false,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "hooksSha256": "1adfaa4ed6367f2b6bfe0932e4157f5e3548ee32680878b11371cb8251527900",
     "unhooks": []
@@ -398,7 +438,11 @@
       "standardRedefineRouted": true,
       "subclassLoadRetries": 0,
       "superclassWidening": true,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "invocation guards not installed",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
     },
     "cold": {
       "classModifierChange": false,
@@ -430,7 +474,11 @@
       "standardRedefineRouted": false,
       "subclassLoadRetries": 0,
       "superclassWidening": false,
-      "interfaceMethodSelection": false
+      "interfaceMethodSelection": false,
+      "privateSelfSelectionClass": false,
+      "privateSelfSelectionClassReason": "method evolution unavailable",
+      "privateSelfSelectionInterface": false,
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
     },
     "hooksSha256": "51a15f134beaeb1b50e0cccebf675adbc6908801b56166f880cf313cf6db7ee1",
     "unhooks": []

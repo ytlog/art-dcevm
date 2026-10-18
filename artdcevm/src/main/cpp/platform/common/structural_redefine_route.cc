@@ -185,23 +185,49 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
 // An obsolete method keeps running old code after the batch commits, and its
 // next call re-resolves by name: with an invoke-kind change, that code could
 // invoke the new member as the old kind. Record any batch class on a stack.
+static jvmtiError MatchActiveClass(jvmtiEnv* env, JNIEnv* jni, jclass declaring, Batch& batch) {
+  for (const auto& [klass, snapshot] : batch.classes)
+    if (jni->IsSameObject(klass, declaring)) {
+      batch.active_frame = snapshot.live.descriptor;
+      return JVMTI_ERROR_NONE;
+    }
+  // A preceding structural/body update retains obsolete declaring Class
+  // objects on stacks. They differ from the current JNI class reference but
+  // still have self access iff descriptor and defining loader both match.
+  char* signature = nullptr;
+  jvmtiError result = env->GetClassSignature(declaring, &signature, nullptr);
+  if (result != JVMTI_ERROR_NONE) return result;
+  for (const auto& [klass, snapshot] : batch.classes) {
+    if (!signature || snapshot.live.descriptor != signature) continue;
+    jobject old_loader = nullptr, current_loader = nullptr;
+    result = env->GetClassLoader(declaring, &old_loader);
+    if (result == JVMTI_ERROR_NONE) result = env->GetClassLoader(klass, &current_loader);
+    if (result == JVMTI_ERROR_NONE && jni->IsSameObject(old_loader, current_loader))
+      batch.active_frame = snapshot.live.descriptor;
+    jni->DeleteLocalRef(old_loader);
+    jni->DeleteLocalRef(current_loader);
+    if (result != JVMTI_ERROR_NONE || batch.active_frame) break;
+  }
+  env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+  return result;
+}
+
 jvmtiError FindActiveBatchFrame(jvmtiEnv* env, JNIEnv* jni, Batch& batch) {
   jvmtiStackInfo* stacks = nullptr;
   jint threads = 0;
-  const jvmtiError result = env->GetAllStackTraces(1024, &stacks, &threads);
+  jvmtiError result = env->GetAllStackTraces(1024, &stacks, &threads);
   if (result != JVMTI_ERROR_NONE) return result;
-  for (jint t = 0; t < threads && !batch.active_frame; ++t) {
-    for (jint f = 0; f < stacks[t].frame_count && !batch.active_frame; ++f) {
+  for (jint t = 0; t < threads && !batch.active_frame && result == JVMTI_ERROR_NONE; ++t) {
+    for (jint f = 0; f < stacks[t].frame_count && !batch.active_frame && result == JVMTI_ERROR_NONE; ++f) {
       jclass declaring = nullptr;
-      if (env->GetMethodDeclaringClass(stacks[t].frame_buffer[f].method, &declaring) != JVMTI_ERROR_NONE) continue;
-      for (const auto& [klass, snapshot] : batch.classes)
-        if (jni->IsSameObject(klass, declaring)) batch.active_frame = snapshot.live.descriptor;
+      result = env->GetMethodDeclaringClass(stacks[t].frame_buffer[f].method, &declaring);
+      if (result == JVMTI_ERROR_NONE) result = MatchActiveClass(env, jni, declaring, batch);
       jni->DeleteLocalRef(declaring);
     }
   }
   for (jint t = 0; t < threads; ++t) jni->DeleteLocalRef(stacks[t].thread);
   env->Deallocate(reinterpret_cast<unsigned char*>(stacks));
-  return JVMTI_ERROR_NONE;
+  return result;
 }
 
 // A submitted definition drops an interface its class implements now. An

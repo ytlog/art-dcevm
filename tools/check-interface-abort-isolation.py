@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOKENS = ('InterfaceAbortInstrumentation', 'artdcevm::fault_injection::',
           'RejectThreadProbe()', 'ReferenceRead(bool)', 'failure_stage', 'failure_hits',
           'counters', 'Inject(int)')
-EXPORTS = ('configureImtFallback', 'configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes', 'primePointerId', 'rejectRuntimeThreadProbe', 'runtimeReferenceReads', 'runtimeMarkingReads')
+EXPORTS = ('configureImtFallback', 'configurePrivateSelfMask', 'configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes', 'primePointerId', 'rejectRuntimeThreadProbe', 'runtimeReferenceReads', 'runtimeMarkingReads')
 
 
 def ndk_bin():

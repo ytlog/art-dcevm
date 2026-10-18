@@ -52,7 +52,7 @@ python3 tools/compare-jbr-invoke-kind.py --java-home JBR_REFERENCE_HOME
 
 `JBR_REFERENCE_HOME` 是待替换的路径占位符。原始输出、输入夹具／执行器／运行时哈希保存在忽略的 `build/evidence/`。该对照覆盖特定接口收窄与引用字段规则，不能证明全部 JBR 功能已对齐。ART 设备测试应复核相同返回值、错误、引用清理及失败后行为。
 
-`compare-jbr-invoke-kind.py` 与设备组 `invoke-kind` 对照 static／实例双向切换后的旧 static、virtual、super、继承与 range 调用，以及接口 static 改 default 后的旧静态调用，含热调用重编译、调用方与目标活动帧、GC、隐式重建、恢复和失败事务。设备组 `method-private` 还覆盖外部旧 virtual/super/range 的 IAE、接口 default 改 private 的 IAE/NSME、覆写、合法的新自身调用、空接收者、热调用、隐式重建、删除后重加和恢复；JBR 对照单独验证自身旧活动帧可继续新 private 方法，设备记录该路径的 71 边界。设备组 `tool` 单独验证追加子类后的校验与之后再次重定义新增类，覆盖替换类图的一致性。`test-invoke-kind-host.py` 覆盖命名入口的两组 ABI、缺失入口与安装回滚，以及编译标志保留；宿主假服务不替代真实 ART 验证。
+`compare-jbr-invoke-kind.py` 与设备组 `invoke-kind` 对照 static／实例双向切换后的旧 static、virtual、super、继承与 range 调用，以及接口 static 改 default 后的旧静态调用，含热调用重编译、调用方与目标活动帧、GC、隐式重建、恢复和失败事务。设备组 `method-private` 还覆盖外部旧 virtual/super/range 的 IAE、接口 default 改 private 的 IAE/NSME、覆写、合法的新自身调用、空接收者、热调用、隐式重建、删除后重加和恢复；JBR 对照用默认、解释和定向编译执行验证自身旧帧。`method-private-self` 单独覆盖类与接口 default 副本的旧帧、忽略覆写、range、合法 null 的 NPE、GC、两轮恢复和实际 single-step 回调；有任一选择服务时，第二轮还先更新方法体，验证更早 DEX 的保留，以及另一种类缺少选择服务时的 71。API 33 无选择服务时跳过这项前置 default 方法体更新（ART obsolete 副本检查阻碍），其自身 private 变化继续验证 71。`--private-self-mode interface-only|class-only|disabled` 在 Debug 初始化前屏蔽选择入口，测试报告须与屏蔽及逐种类预期一致；此测试不替代 API 34/37 真机验证。 两个入口都屏蔽时，API 36 第二轮热 copied default 返回 71 后，在关闭 single-step 时因 JIT zombie code 重复登记触发 ART 断言；普通／CheckJNI 及独立自身测试进程均可复现。这项压力组合仍受阻，不列作通过证据；复现时保留单步和活动帧保护。设备组 `tool` 单独验证追加子类后的校验与之后再次重定义新增类，覆盖替换类图的一致性。`test-invoke-kind-host.py` 覆盖命名入口的两组 ABI、缺失入口与安装回滚，以及编译标志保留；宿主假服务不替代真实 ART 验证。
 
 ## 设备回归
 
@@ -183,6 +183,9 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 | `superclassWidening` | 方法退役 Hook 与校验重定向均已安装 |
 | `interfaceRemoval` | 方法退役、发布前分派保护、实例引用字段检查和 ClassPrepare 快照监视均可用；普通类可以移除接口 |
 | `interfaceDispatchSealing` | `available: ...` 或 `unavailable: 原因`；记录经实际探测的发布前链接边界及 canonical 来源，还需要命名分配服务与类加载器分配器读取 |
+| `privateSelfSelectionClass`、`privateSelfSelectionInterface` | 对应种类的命名自身调用选择服务及依赖已安装；事务另需布局探测 |
+| `privateSelfSelection` | 前两项交集，保留旧诊断语义 |
+| `privateSelfSelectionClassReason`、`privateSelfSelectionInterfaceReason` | 服务可用时为空，否则说明不可用原因 |
 | `hierarchyChange`、`fullDcevmComplete` | 始终为 false：父类收窄不支持，完整 DCEVM 尚未完成 |
 | `interfaceRedefinition` | 布尔值；安装且 Class/Thread/HandleScope/holder 全部探测通过时为 true。初始化后尚未探测、版本或服务不可用、进程级探测停用时为 false；单个目标拒绝不清除此值 |
 | `interfaceRuntime` | `unavailable`、`unverified: interface runtime declarations`、`verified: androidNN Class/Thread/HandleScope/holder probes` 或 `disabled: 原因`；准入 API 30–37；源码对齐的版本（API 30–32、37）探测通过后追加 `; declarations not yet device-validated`；其他版本禁用并说明原因 |

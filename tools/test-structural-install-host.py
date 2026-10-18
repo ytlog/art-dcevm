@@ -46,6 +46,9 @@ SOURCE = r'''
 #include <stdexcept>
 #include <string>
 using namespace artdcevm;
+namespace artdcevm::structural_redefine::detail {
+jvmtiError FindActiveBatchFrame(jvmtiEnv*, JNIEnv*, Batch&);
+}
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
 int probe_registration_calls = 0;
 const jclass selection_probe = reinterpret_cast<jclass>(0x1900);
@@ -378,6 +381,11 @@ jvmtiError JNICALL Modifiable(jvmtiEnv*, jclass klass, jboolean* value) {
   *value = klass != nested_type; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
+  if (mode >= 32) {
+    if (mode == 36) return JVMTI_ERROR_INTERNAL;
+    *value = reinterpret_cast<jobject>(mode == 33 && klass != first_type ? 0x4800 : 0x4900);
+    frame_locals.insert(*value); return JVMTI_ERROR_NONE;
+  }
   if ((transform_behavior == 14 && klass == first_type) ||
       ((transform_behavior == 15 || transform_behavior == 16) && klass == second_type))
     return JVMTI_ERROR_INTERNAL;
@@ -390,6 +398,8 @@ jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
 }
 jvmtiError JNICALL Signature(jvmtiEnv*, jclass klass, char** value, char**) {
   if (mode == 21 && klass == reinterpret_cast<jclass>(0x4100)) return JVMTI_ERROR_INTERNAL;
+  if (mode == 35) return JVMTI_ERROR_INTERNAL;
+  if (mode >= 32) klass = first_type;
   const std::string text = klass == root_type ? "Ljava/lang/Object;" :
       "Lfixture/Type" + std::to_string(reinterpret_cast<uintptr_t>(klass)) + ";";
   *value = static_cast<char*>(std::malloc(text.size() + 1));
@@ -425,6 +435,20 @@ jvmtiError JNICALL Status(jvmtiEnv*, jclass, jint* value) { *value = JVMTI_CLASS
 jvmtiError JNICALL ErrorName(jvmtiEnv*, jvmtiError, char**) { return JVMTI_ERROR_NOT_AVAILABLE; }
 jvmtiError JNICALL Deallocate(jvmtiEnv*, unsigned char* value) { std::free(value); return JVMTI_ERROR_NONE; }
 jvmtiError JNICALL Events(jvmtiEnv*, jvmtiEventMode, jvmtiEvent, jthread, ...) { return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL StackDeclaring(jvmtiEnv*, jmethodID, jclass* value) {
+  if (mode == 34) return JVMTI_ERROR_INTERNAL;
+  *value = mode == 37 ? first_type : reinterpret_cast<jclass>(0x4700);
+  frame_locals.insert(*value); return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL AllStacks(jvmtiEnv*, jint, jvmtiStackInfo** value, jint* count) {
+  struct Stack { jvmtiStackInfo info; jvmtiFrameInfo frame; };
+  auto* stack = static_cast<Stack*>(std::calloc(1, sizeof(Stack)));
+  stack->info.thread = reinterpret_cast<jthread>(0x4600);
+  stack->info.frame_count = 1; stack->info.frame_buffer = &stack->frame;
+  stack->frame.method = reinterpret_cast<jmethodID>(0x4500);
+  frame_locals.insert(stack->info.thread);
+  *value = &stack->info; *count = 1; return JVMTI_ERROR_NONE;
+}
 int main(int argc, char** argv) {
   try {
     Require(argc == 2, "Missing installation case");
@@ -469,6 +493,20 @@ int main(int argc, char** argv) {
       }
       Require(transaction::Current() == &outer.context() && outer.context().verification.get() == verification,
               "Nested transaction did not restore its enclosing module Parts");
+    }
+    if (mode >= 32) {
+      tooling.GetAllStackTraces = AllStacks; tooling.GetMethodDeclaringClass = StackDeclaring;
+      structural_redefine::detail::Batch batch;
+      batch.classes[first_type].live.descriptor = "Lfixture/Type12800;";
+      const auto error = structural_redefine::detail::FindActiveBatchFrame(&env, &jni, batch);
+      Require(error == (mode >= 34 && mode <= 36 ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE),
+              "Frame snapshot hid a JVMTI failure");
+      Require(bool(batch.active_frame) == (mode == 32 || mode == 37),
+              "Frame identity ignored obsolete descriptor/loader identity");
+      Require(frame_locals.empty(), "Frame snapshot leaked a local root");
+      std::cout << "CAPABILITIES " << structural_redefine::Capabilities() << '\n';
+      std::cout << "Installer case " << mode << " PASS\n";
+      return 0;
     }
     const auto result = structural_redefine::Install(&vm, &env, {});
     if (mode == 1) {
@@ -753,7 +791,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        for case in range(32):
+        for case in range(38):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / f'case-{case}.log').write_text(result.stdout + result.stderr)
             if result.returncode:

@@ -112,8 +112,10 @@ SCENARIOS = (
     ("method-private-self-class-restore", ["method-private-self-original"], 0),
     ("method-private-self-interface", ["method-private-self"], 71),
     ("method-private-self-interface-restore", ["method-private-self-original"], 0),
+    ("method-private-self-class-again-retain", ["method-private-self-retained"], 0),
     ("method-private-self-class-again", ["method-private-self"], 71),
     ("method-private-self-class-again-restore", ["method-private-self-original"], 0),
+    ("method-private-self-interface-again-retain", ["method-private-self-retained"], 0),
     ("method-private-self-interface-again", ["method-private-self"], 71),
     ("method-private-self-interface-again-restore", ["method-private-self-original"], 0),
     ("method-storage", ["method-storage"], 0),
@@ -420,15 +422,16 @@ MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
 VAR_HANDLE_API = 33
 def release_expectation(name, code, required, api, self_selection):
-    """Expected code and checks given the API and reported privateSelfSelection."""
-    if name.startswith("method-private-self-") and not name.endswith("-restore") and self_selection:
+    """Expected code and checks given the reported per-kind selection services."""
+    selected = self_selection["interface" if "interface" in name else "class"]
+    if name.startswith("method-private-self-") and not name.endswith(("-restore", "-retain")) and selected:
         iface = "interface" in name
         checks = {**required, "privateKind": True, "self": 31 if iface else 25,
                   "overrideReceiver": 31 if iface else 25, "range": 36 if iface else 41}
         checks.pop("activeReason", None)
         if not iface: checks["entered"] = 3
         return 0, checks
-    if name == "method-private-active-target" and self_selection:
+    if name == "method-private-active-target" and selected:
         return 0, {"privateKind": True, "activeCompleted": True, "oldSelf": 25}
 
     return code, required
@@ -1168,12 +1171,14 @@ for _suffix in ("", "-again"):
             "activeReason": True, "privateKind": False,
             "self": 11 if _iface else 7, "overrideReceiver": 49 if _iface else 47,
             "range": 6 if _iface else 11, "nullReceiver": "java.lang.NullPointerException",
-            "override": 49 if _iface else 47,
+            "override": 49 if _iface else 47, "singleStepObserved": True,
             **{"completed" + str(i): True for i in range(4)},
             **{"stepping" + str(i): True for i in range(4)},
         }
         if not _iface: REQUIRED_CHECKS[_name].update(entered=0, value=5)
         REQUIRED_CHECKS[_name + "-restore"] = {"self": 11 if _iface else 7, "overrideReceiver": 49 if _iface else 47}
+        if _suffix:
+            REQUIRED_CHECKS[_name + "-retain"] = {"newBody": 1011 if _iface else 1007}
         MAPPED_SCENARIOS.update({_name, _name + "-restore"})
 MAPPED_SCENARIOS.add("method-private-active-target")
 
@@ -1265,7 +1270,11 @@ MAPPED_SCENARIOS.update(name for name, _, code in CLASS_KIND_SCENARIOS if code =
 
 REQUIRED_CHECKS.update(INTERFACE_SELECTION_REQUIRED)
 
-def scenario_sequence(scenario_group, api=None):
+def scenario_sequence(scenario_group, api=None, self_selection=None):
+    if self_selection is not None:
+        return tuple(item for item in scenario_sequence(scenario_group, api)
+                     if not item[0].endswith("-retain") or
+                     any(self_selection.values()))
     if api is not None and not 33 <= api <= 37:
         return tuple(item for item in scenario_sequence(scenario_group)
                      if not item[0].startswith("tool-retransform-"))
@@ -1286,6 +1295,8 @@ def scenario_sequence(scenario_group, api=None):
                      if item[0].startswith("interface-kind-static") or item[0] == "interface-kind-instance-legacy")
     if scenario_group == "tool":
         return tuple(item for item in SCENARIOS if item[0].startswith("tool-"))
+    if scenario_group == "method-private-self":
+        return tuple(item for item in SCENARIOS if item[0].startswith("method-private-self-"))
     if scenario_group == "method-private":
         return tuple(item for item in SCENARIOS if item[0].startswith("method-private"))
     if scenario_group == "invoke-kind":
@@ -1312,7 +1323,7 @@ def scenario_sequence(scenario_group, api=None):
     raise RunFailure("Unsupported scenario group")
 
 
-def validate_report(report, scenario_group="full"):
+def validate_report(report, scenario_group="full", private_self_mode=None):
     """Require every requested return code and an actual behavior observation."""
     if (not isinstance(report, dict) or type(report.get("schemaVersion")) is not int
             or report["schemaVersion"] != 1):
@@ -1355,12 +1366,21 @@ def validate_report(report, scenario_group="full"):
     for name in ("hierarchyChange", "fullDcevmComplete"):
         if capabilities.get(name) is not False:
             raise RunFailure("The engine capabilities claim unimplemented hierarchy changes")
-    self_selection = capabilities.get("privateSelfSelection")
-    if type(self_selection) is not bool:
-        raise RunFailure("The initialization report is missing privateSelfSelection")
+    self_selection = {}
+    for kind in ("class", "interface"):
+        key = "privateSelfSelection" + kind.title()
+        selected, reason = capabilities.get(key), capabilities.get(key + "Reason")
+        if type(selected) is not bool or not isinstance(reason, str) or bool(reason) == selected:
+            raise RunFailure("The initialization report is missing consistent " + key + " and reason")
+        self_selection[kind] = selected
+    if capabilities.get("privateSelfSelection") is not all(self_selection.values()):
+        raise RunFailure("privateSelfSelection must be the conjunction of its per-kind services")
+    masked = {"interface-only": ("class",), "class-only": ("interface",), "disabled": ("class", "interface")}
+    if private_self_mode and any(self_selection[kind] for kind in masked[private_self_mode]):
+        raise RunFailure("The debug private self mask did not disable the selected service")
     if type(capabilities.get("interfaceMethodSelection")) is not bool:
         raise RunFailure("The initialization report is missing interfaceMethodSelection")
-    expected_scenarios = scenario_sequence(scenario_group, device["api"])
+    expected_scenarios = scenario_sequence(scenario_group, device["api"], self_selection)
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
         raise RunFailure("The device report does not contain the complete scenario sequence")
@@ -1524,8 +1544,10 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "tool", "interface-shadow", "interface-selection", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "interface-shadow", "interface-selection", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
+    parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
+                        help="Debug-only mask of named own-frame selectors before installation")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
                         help="Debug-only canonical IMT capture path to verify before engine initialization")
     parser.add_argument("--checkjni-mode", choices=("normal", "checkjni"),
@@ -1598,6 +1620,7 @@ def main(argv=None):
         try:
             mode_args = ["-e", "checkjni", "true" if args.checkjni_mode == "checkjni" else "false"] if args.checkjni_mode else []
             if args.scenario_group != "full": mode_args += ["-e", "scenario", args.scenario_group]
+            if args.private_self_mode: mode_args += ["-e", "privateSelf", args.private_self_mode]
             if args.imt_fallback_mode: mode_args += ["-e", "imtFallback", args.imt_fallback_mode]
             test = adb("instrumentation", "shell", "am", "instrument", "-w", "-r", *mode_args, COMPONENT,
                        timeout=args.timeout)
@@ -1628,7 +1651,7 @@ def main(argv=None):
             result = json.loads(report.stdout)
         except (ValueError, TypeError) as error:
             raise RunFailure("The device report is not valid JSON") from error
-        validate_report(result, scenario_group=args.scenario_group)
+        validate_report(result, scenario_group=args.scenario_group, private_self_mode=args.private_self_mode)
         if args.imt_fallback_mode:
             sealing = result["initialization"]["capabilities"].get("interfaceDispatchSealing", "")
             expected = "LinkMethods saturated probe"
@@ -1638,6 +1661,7 @@ def main(argv=None):
                 raise RunFailure("The selected named IMT capture callback did not run")
             meta["imtFallbackMode"] = args.imt_fallback_mode
             meta["imtFallbackState"] = sealing
+        if args.private_self_mode: meta["privateSelfMode"] = args.private_self_mode
         meta["device"] = result["device"]
         meta["scenarioCount"] = len(result["scenarios"])
         performance = report_performance(result)

@@ -61,7 +61,7 @@
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到批次类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。导出命名 `FindMethodToCall<kVirtual/kInterface>` 选择入口的运行时在 Class/Thread/HandleScope 探测通过后支持此行为，以 `privateSelfSelection` 报告：API 36（已经真机验证）与多数 API 34–35 运行库（依固定源码，尚未上机）。API 30–33 以及部分 API 34、37 模块内联了选择逻辑，仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
+| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到批次类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。按目标种类安装命名 `FindMethodToCall<kVirtual/kInterface>` 入口并通过 Class/Thread/HandleScope 探测后支持此行为，分别以 `privateSelfSelectionClass`／`privateSelfSelectionInterface` 报告，旧键为交集。API 36 已经真机验证；部分 API 34/37 仅保留 interface 模板的模块按固定源码支持接口目标，尚未上机。API 30–33 和缺少对应命名服务或源码依据的目标仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
 | 种类变化不满足实例、子类型、分配或分派前提 | 62／66／70 | 见[类种类演进](CLASS_KIND_EVOLUTION.md) |
 | 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 | 移除接口时成员映射或分派保护不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
@@ -110,7 +110,7 @@
 
 - 删除的方法和签名替换前的方法退役：字节码、JNI、MethodHandle 再调用时抛 `NoSuchMethodError`，缓存的反射 `Method.invoke` 抛包装它的 `InvocationTargetException`；已在执行的旧方法帧继续执行旧方法体。
 - 退役字段：字节码、JNI、MethodHandle 访问抛 `NoSuchFieldError`；缓存的反射 `Field` 访问实例字段抛 `IllegalArgumentException`，访问静态字段抛 `NoClassDefFoundError`；VarHandle 抛 `UnsupportedOperationException`。缓存的反射 `Field` 的名称与声明类会显示为库内占位类的字段。
-- 恢复同名成员会产生新成员，旧的缓存引用保持退役。恢复时 static／实例方式互换的旧调用按调用方式保护抛 ICCE；原虚方法恢复为 private 后，无访问权的旧外部调用抛 IAE；自身旧活动帧仍不支持。
+- 恢复同名成员会产生新成员，旧的缓存引用保持退役。恢复时 static／实例方式互换的旧调用按调用方式保护抛 ICCE；原虚方法恢复为 private 后，无访问权的旧外部调用抛 IAE；自身旧活动帧须具备对应种类的选择服务及布局探测。
 - 发生过退役的类及其 class loader 保留到进程结束。
 
 ## ART 自身的限制
@@ -149,7 +149,7 @@
 | 持有动态代理的实例字段改类型 | 新类型是直接声明接口或 `Proxy` 父类时保留；仅间接实现接口时清空 | 目标与继承字段按同一规则处理，见[字段改型对照](TESTING.md#jbr-对照) |
 | 接口方法与非 public 类方法同签名 | 接受；private 不实现 abstract，抛 `AbstractMethodError`；package-private/protected 抛 `IllegalAccessError` | 选择服务可用时相同；类方法调用保留，支持 default/abstract 切换与新增父接口；API 33/36 已验证 |
 | 普通类方法在 static 与实例之间切换，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 命名调用方式保护可用时接受，旧调用抛 ICCE；旧调用方禁止 JIT 编译及内联，ART 仍执行原有去优化。Android 13、16 覆盖普通／CheckJNI、热调用、活动帧、GC 与隐式重建；入口不可用时保留 71 |
-| 普通类虚方法改为 private，批次外仍有无访问权的旧调用方 | 接受；旧 virtual/super 调用抛 `IllegalAccessError`，自身旧帧可调用新 private 方法 | 接受并保护外部旧调用，抛 IAE；旧调用方禁止 JIT 编译及内联。有命名选择服务时（`privateSelfSelection`：API 36 已经真机验证，多数 API 34–35 运行时依源码对齐），自身旧帧直接选择 private 方法并忽略覆写，含接口 default 副本；选择逻辑被内联（API 30–33）或运行时探测不匹配时拒绝 71 |
+| 普通类虚方法改为 private，批次外仍有无访问权的旧调用方 | 接受；旧 virtual/super 调用抛 `IllegalAccessError`，自身旧帧可调用新 private 方法 | 接受并保护外部旧调用，抛 IAE；旧调用方禁止 JIT 编译及内联。有对应种类的命名选择服务时（`privateSelfSelectionClass`／`privateSelfSelectionInterface`），自身旧帧直接选择 private 方法并忽略覆写，含接口 default 副本；选择逻辑被内联（API 30–33）或运行时探测不匹配时拒绝 71 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
 | 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 持久发布前保护与后续结构重建共同保留正确分派，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口) |
 | 有 Proxy 实现类的接口移除父接口 | 接受，已有代理不再是该父接口的实例 | 接受；共享父接口保留到最后一条继承路径被移除，已有引用沿用接口收窄规则 |

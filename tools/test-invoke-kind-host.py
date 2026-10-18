@@ -113,8 +113,8 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
     if ((mode == 12 || mode == 13) && name == std::string(symbols::interface_redefinition::kLookupCache.name)) return HookAddress(LookupType);
     if (mode == 13 && (name == std::string(kSelectVirtual.name) || name == std::string(kSelectInterface.name) ||
         name == std::string(kMethodLoader.name) || name == std::string(symbols::runtime_thread::kUseReadBarrier.name))) return nullptr;
-    if (name == std::string(kSelectVirtual.name)) return HookAddress(Selection);
-    if (mode != 7 && name == std::string(kSelectInterface.name)) return HookAddress(Selection);
+    if (mode != 14 && mode != 15 && name == std::string(kSelectVirtual.name)) return HookAddress(Selection);
+    if (mode != 7 && mode != 15 && name == std::string(kSelectInterface.name)) return HookAddress(Selection);
     if (mode != 8 && name == std::string(kMethodDescriptor.name)) return HookAddress(Descriptor);
     if (name == std::string(kMethodLoader.name)) return HookAddress(Loader);
     if (name == std::string(kObsoleteCacheRead.name) || name == std::string(kObsoleteCacheRaw.name)) return HookAddress(CacheRead);
@@ -231,8 +231,13 @@ int main(int argc, char** argv) {
         invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8);
         const bool complete = mode == 6 || mode == 10 || mode == 12;
         Require(invoke_kind::SelfCalls() == complete && invoke_kind::SelectionServices() == complete,
-                "partial selection services enabled self calls");
-        if (complete || mode == 11 || mode == 13) {
+                "combined selection capability is not the conjunction");
+        Require(invoke_kind::SelfCalls(false) == (complete || mode == 7) &&
+                invoke_kind::SelfCalls(true) == (complete || mode == 14), "wrong per-kind self admission");
+        for (bool iface : {false, true})
+          Require(invoke_kind::SelectionServices(iface) == (invoke_kind::SelectionUnavailable(iface) == nullptr),
+                  "selection reason disagrees with capability");
+        if (complete || mode == 7 || mode == 8 || mode == 9 || mode == 14 || mode == 15 || mode == 11 || mode == 13) {
           void* klass = mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
           Require(klass != MAP_FAILED, "unable to allocate low-address class fixture");
           auto* fields = static_cast<uint32_t*>(klass); fields[0] = 0x00200000; fields[1] = 0x9000;
@@ -352,6 +357,7 @@ int main(int argc, char** argv) {
       }
       invoke_kind::Installed(false);
       Require(!invoke_kind::Enable(), "enabled after installer rollback");
+      Require(!invoke_kind::SelfCalls(false) && !invoke_kind::SelfCalls(true), "self admission survived rollback");
     }
     std::cout << "Invocation guard case " << mode << " PASS\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
@@ -380,7 +386,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(14):
+        for case in range(16):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')

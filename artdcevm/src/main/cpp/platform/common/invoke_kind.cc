@@ -5,6 +5,7 @@
 #include <mutex>
 #include "platform/common/runtime_roots.h"
 #include "platform/common/art_dex_view.h"
+#include "platform/common/fault_injection.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/symbols/invoke_kind_symbols.h"
@@ -265,9 +266,13 @@ bool Prepare(std::vector<Hook>* hooks) {
     prepared.push_back({nterp, HookAddress(GetMethod), HookSlot(&original_nterp), kNterpGetMethod.name});
   else if (resolve_method_id) return false;
   // The self-call capability is independent of the older invocation guards.
-  // Missing or partial selection services retain conservative admission 71.
+  // A missing selector retains admission 71 only for its target kind. Some
+  // fixed-source 14/17 modules retain the interface selector but inline virtual.
   void* select_virtual = symbols::Find(kSelectVirtual);
   void* select_interface = symbols::Find(kSelectInterface);
+  const int selection_mask = ARTDCEVM_PRIVATE_SELF_MASK();
+  if (selection_mask & 1) select_virtual = nullptr;
+  if (selection_mask & 2) select_interface = nullptr;
   method_descriptor = reinterpret_cast<decltype(method_descriptor)>(symbols::Find(kMethodDescriptor));
   method_loader = reinterpret_cast<decltype(method_loader)>(symbols::Find(kMethodLoader));
   lookup_type = reinterpret_cast<decltype(lookup_type)>(symbols::Find(symbols::interface_redefinition::kLookupCache));
@@ -284,14 +289,20 @@ bool Prepare(std::vector<Hook>* hooks) {
   if (cache_legacy && !cache_read && !cache_raw && mark && use_read_barrier)
     prepared.push_back({cache_legacy, HookAddress(CopiedObsoleteCache<true>),
                         HookSlot(&original_cache_read), kObsoleteCacheLegacy.name});
-  // Android 14--16 share FindMethodToCall<type>; 14--15 resolve through the
-  // hooked ResolveMethod<kNoChecks> original instead of ResolveMethodId.
-  if ((resolve_method_id || caller) && select_virtual && select_interface && method_descriptor && method_loader &&
-      scope_visitors.unsigned_ids && cache_read && cache_raw && mark && use_read_barrier) {
+  // Obsolete copied defaults need their retained DEX even when an invoke-kind
+  // request is rejected. Cache ownership does not depend on callee selection.
+  if (cache_read && cache_raw && mark && use_read_barrier) {
     prepared.push_back({cache_read, HookAddress(CopiedObsoleteCache<true>), HookSlot(&original_cache_read), kObsoleteCacheRead.name});
     prepared.push_back({cache_raw, HookAddress(CopiedObsoleteCache<false>), HookSlot(&original_cache_raw), kObsoleteCacheRaw.name});
-    prepared.push_back({select_virtual, HookAddress(SelectMethod<2>), HookSlot(&original_virtual), kSelectVirtual.name});
-    prepared.push_back({select_interface, HookAddress(SelectMethod<4>), HookSlot(&original_interface), kSelectInterface.name});
+  }
+  // Android 14--17 share FindMethodToCall<type>; 14--15 resolve through the
+  // hooked ResolveMethod<kNoChecks> original instead of ResolveMethodId.
+  if ((resolve_method_id || caller) && (select_virtual || select_interface) && method_descriptor && method_loader &&
+      scope_visitors.unsigned_ids && cache_read && cache_raw && mark && use_read_barrier) {
+    if (select_virtual)
+      prepared.push_back({select_virtual, HookAddress(SelectMethod<2>), HookSlot(&original_virtual), kSelectVirtual.name});
+    if (select_interface)
+      prepared.push_back({select_interface, HookAddress(SelectMethod<4>), HookSlot(&original_interface), kSelectInterface.name});
   }
   hooks->insert(hooks->end(), prepared.begin(), prepared.end());
   return true;
@@ -306,7 +317,7 @@ void KeepInterpreted(void* method, uint32_t precompiled_flag) {
 }
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, Handle target) {
-  if (!original_virtual || !original_interface || scope_verified.load(std::memory_order_acquire)) return;
+  if ((!original_virtual && !original_interface) || scope_verified.load(std::memory_order_acquire)) return;
   if (!runtime_roots::VerifyScopes(*layout, *thread_layout, thread, target, scope_visitors)) return;
   std::lock_guard<std::mutex> lock(scope_mutex);
   if (scope_verified.load(std::memory_order_relaxed)) return;
@@ -326,10 +337,23 @@ void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, 
   class_verified.store(true, std::memory_order_release);
 }
 bool SelectionServices() {
-  return installed.load(std::memory_order_acquire) && original_virtual && original_interface;
+  return SelectionServices(false) && SelectionServices(true);
+}
+bool SelectionServices(bool interface_target) {
+  return SelectionUnavailable(interface_target) == nullptr;
+}
+const char* SelectionUnavailable(bool interface_target) {
+  if (!installed.load(std::memory_order_acquire)) return "invocation guards not installed";
+  if (!(interface_target ? original_interface : original_virtual))
+    return interface_target ? "named interface selector or its fixed-source dependencies unavailable"
+                            : "named virtual selector or its fixed-source dependencies unavailable";
+  return nullptr;
 }
 bool SelfCalls() {
-  return installed.load(std::memory_order_acquire) && scope_verified.load(std::memory_order_acquire) &&
+  return SelfCalls(false) && SelfCalls(true);
+}
+bool SelfCalls(bool interface_target) {
+  return SelectionServices(interface_target) && scope_verified.load(std::memory_order_acquire) &&
       class_verified.load(std::memory_order_acquire);
 }
 bool Protecting() { return enabled.load(std::memory_order_acquire); }

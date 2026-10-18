@@ -48,7 +48,7 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
           invoke_kind::Enable());
     }
     // Old self frames require a probed selector that bypasses the vtable/IMT.
-    if (batch.active_frame && (!protected_change || (private_change && !invoke_kind::SelfCalls())))
+    if (batch.active_frame && (!protected_change || (private_change && !invoke_kind::SelfCalls(interface_target))))
       return "an active frame of " + *batch.active_frame + " may still invoke the old kind of " + method;
     transaction::Current()->protect_invocations |= protected_change;
     std::map<const abi::arm64::DexFilePrefix*, std::vector<uint32_t>> ids;

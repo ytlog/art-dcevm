@@ -377,9 +377,24 @@ Proxy 的类型身份与字段兼容清理分别判断。例如 Proxy 直接实�
 
 virtual 改 private 后，无访问权的外部旧 virtual/super/interface 调用在读取或缓存直接方法索引为分派槽之前抛 `IllegalAccessError`。经实现类命名、且该类不再继承此 default 的旧虚调用保持解析失败并抛 `NoSuchMethodError`。子类自身声明的覆写仍可按自己的符号身份调用；新编译的自身调用使用 invoke-direct，能进入 private 方法体。同样的调用方编译保护覆盖这些切换，以及退役后以 private 方式重新加入的身份。
 
-JBR 还允许自身 obsolete 帧直接调用新 private 方法体，并忽略子类覆写。Android 14–16 的固定 `FindMethodToCall<type>` 相同，运行时把 `kVirtual`/`kInterface` 实例保留为独立函数时按名称导出，它们是 switch 解释器的调用选择入口：旧目标帧先解析方法，按声明描述符和定义加载器确认自身访问权，然后直接选择新 private 声明，不把直接方法索引送入 vtable/IMT。解析失败保持原异常；合法自身访问的 null 接收者抛 NPE，外部旧调用仍抛 IAE。`runtime_roots` 复用接口准入的命名根访问器和 Class/Thread/HandleScope 探测，在解析可能挂起时保护并更新 ART 的接收者局部变量。Android 16–17 经 `ClassLinker::ResolveMethodId` 解析；Android 14–15 经固定的 `ResolveMethod<kNoChecks>(Thread*, …)`，它在 DEX cache 未命中时进入已被 Hook 的 cache 重载，因此用线程局部作用域避免该嵌套调用套用外部调用方检查。此路径已在 API 36 真机验证；同时具备两个选择入口的 API 34–35 运行库依固定源码使用它，尚未上机。API 30–33 把选择逻辑内联进 switch 解释器，只暴露读取 vtable/IMT 索引之后的 `DoCall`，部分内联 `FindMethodToCall<kVirtual>` 的 API 34、37 模块同样如此，均保留活动帧拒绝 71。部分新模块中的非模板 `FindMethodToCall(…, InvokeType, …)` 没有公开的固定源码，不予使用。`capabilities()` 的 `privateSelfSelection` 报告选择入口是否已安装。
+JBR 还允许自身 obsolete 帧直接调用新 private 方法体，并忽略子类覆写。固定源码中的 `FindMethodToCall<kVirtual/kInterface>` 是 switch 解释器读取 vtable/IMT 前的调用选择点。两个入口独立安装，事务按目标的类／接口种类选择服务；接口 default 副本属于接口目标。旧帧先解析方法，按声明描述符和定义加载器确认自身访问权，再直接选择新 private 声明。解析失败保持原异常；合法自身调用的 null 接收者抛 NPE，外部无访问权的旧调用抛 IAE。`runtime_roots` 复用接口准入的命名根访问器和 Class/Thread/HandleScope 探测，在解析可能挂起时保护并更新 ART 的接收者局部变量。Android 16–17 经 `ClassLinker::ResolveMethodId` 解析；Android 14–15 经固定的 `ResolveMethod<kNoChecks>(Thread*, …)`，并在其嵌套 cache 重载中保留自身解析上下文。
 
-接口 default 的旧活动帧可能来自实现类中的方法副本。ART 将副本标为 obsolete 后，原 `GetObsoleteDexCache` 要求它位于声明接口的方法数组中，从而中止事务。对应的两种命名入口现在对结构退役接口的副本选择该接口保留的旧 DEX；若方法已在正常 obsolete map 中，仍交回 ART，以保留更早方法体重定义的 DEX。Class 与 ClassExt 字段经已有声明探测和命名字段表确认；带读屏障路径遵循 CC/CMC 选择，不带屏障的栈访问路径保持原语义。迁移、引用替换、去优化和缓存清理仍由 ART 原事务负责。共享 JBR/设备样例覆盖类与接口自身旧帧、覆盖接收者、range、null、GC、两轮恢复及 single-step。ClassFile nest 的访问权与外部调用不同；访问对照使用没有 private 访问权的独立顶层调用方。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
+`privateSelfSelectionClass`／`privateSelfSelectionInterface` 分别报告已安装的选择服务，旧键 `privateSelfSelection` 保持两者交集；对应的 `…Reason` 在服务可用时为空，否则说明缺少的服务或依赖。这些诊断不代替事务准入的运行时布局探测。活动帧扫描除引用身份外，还以 JVMTI 声明描述符和定义加载器匹配先前重定义保留的旧 Class；查询失败使事务失败，不能遗漏 obsolete 自身帧后接受不受保护的变化。
+
+对已存 37 套运行库进行命名表审计，结果如下。此表仅证明精确符号名称存在，不证明 ABI、实际调用边界或真机通过；API 36 的单入口安装在 Debug 进程中分别屏蔽另一入口验证，不等同于 API 34/37 上机验证。
+
+| API | 两个模板入口 | 仅 interface 模板入口 | 无可用固定源码选择入口 |
+| --- | ---: | ---: | ---: |
+| 30–33 | 0 | 0 | 16 |
+| 34 | 4 | 1 | 1 |
+| 35 | 5 | 0 | 0 |
+| 36 | 7 | 0 | 0 |
+| 37 | 0 | 2 | 1 |
+
+API 30–33 的[固定解释器源码](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/interpreter/interpreter_common.h)把选择内联在 `DoInvoke` 中：已存库虽有 `FindMethodFromCode`，该 switch 路径并不经过它；命名 `DoCall` 位于分派之后，无法防止把新 private 的直接方法索引当成 vtable/IMT 槽。API 34/37 仅缺 virtual 模板的模块现在允许接口目标，类目标仍保留活动帧拒绝 71。[Android 17 固定源码](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/entrypoints/entrypoint_utils-inl.h)仍使用模板；两个模块中的非模板 `FindMethodToCall(…, InvokeType, …)` 尚未找到对应固定源码，不使用它。`NterpGetMethod` 的 virtual 缓存值按 vtable 索引解码，不能表示任意 private 直接目标；interface 的 Object 标记也不能表达这种目标。指令事件入口不提供 callee 选择服务，不能靠强制 single-step 替代它。不改访问标志、不改写 obsolete DEX，也不从反汇编或返回地址定位内联逻辑。
+
+
+接口 default 的旧活动帧可能来自实现类中的方法副本。ART 将副本标为 obsolete 后，原 `GetObsoleteDexCache` 要求它位于声明接口的方法数组中，从而中止事务。obsolete DEX 所属关系的 Hook 独立于选择入口安装，拒绝的请求也需要旧帧安全继续。对应命名入口对结构退役接口的副本选择该接口保留的旧 DEX；若方法已在正常 obsolete map 中，仍交回 ART，以保留更早方法体重定义的 DEX。Class 与 ClassExt 字段经已有声明探测和命名字段表确认；带读屏障路径遵循 CC/CMC 选择，不带屏障的栈访问路径保持原语义。迁移、引用替换、去优化和缓存清理仍由 ART 原事务负责。共享 JBR/设备样例覆盖类与接口自身旧帧、覆盖接收者、range、null、GC、两轮恢复、实际 single-step 回调，以及先更新方法体再改 private 的旧 DEX（选择服务可用的进程）。无选择服务的 API 33 在这项前置 default 方法体更新中仍可能触发 ART obsolete 副本检查，不据此宣称支持复合路径。ClassFile nest 的访问权与外部调用不同；访问对照使用没有 private 访问权的独立顶层调用方。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
 
 ## 活动帧
 

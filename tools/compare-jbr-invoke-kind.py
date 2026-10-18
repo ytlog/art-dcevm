@@ -3,6 +3,7 @@
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -71,6 +72,10 @@ public class InvokeKindOracle {
         }
         try {
           if (!ready.await(10, TimeUnit.SECONDS)) throw new AssertionError("own not ready");
+          if (round == 1) {
+            change("method-private-self-retained", target); System.gc();
+            eq("own new body", iface ? 1011 : 1007, iface ? impl.await(open, open, 0) : subject.await(open, open, 0));
+          }
           change("method-private-self", target); System.gc();
         } finally { resume.countDown(); for (Thread worker : workers) worker.join(10000); }
         for (Thread worker : workers) eq("own completed", false, worker.isAlive());
@@ -213,7 +218,9 @@ public class InvokeKindOracle {
     eq("entered", 2, Subject.entered); eq("marker", 7, subject.marker);
   }
   public static void main(String[] args) throws Exception {
-    patches = Path.of(args[0]); Subject subject = new Subject(); Child child = new Child();
+    patches = Path.of(args[0]);
+    if (args.length > 1) { privateSelf(); System.out.println("JBR invoke kind oracle PASS checks=" + checks); return; }
+    Subject subject = new Subject(); Child child = new Child();
     try {
       String name = Subject.class.getName().replace('.', '/') + ".class";
       agent.redefineClasses(new ClassDefinition(Subject.class,
@@ -303,12 +310,17 @@ def main():
     jbr = args.java_home.resolve()
     evidence = new_evidence_directory(ROOT / 'build/evidence/jbr-invoke-kind')
     manifest = {'sourceOracleRevision': SOURCE_REVISION, 'fixtureSha256': {},
-                'harnessSha256': hashlib.sha256(SOURCE.encode()).hexdigest()}
+                'harnessSha256': hashlib.sha256(SOURCE.encode()).hexdigest(),
+                'toolSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), 'runs': []}
     with tempfile.TemporaryDirectory(prefix='oracle-', dir=evidence) as temp:
         work = Path(temp)
 
         def run(name, command):
-            result = subprocess.run(command, capture_output=True, text=True)
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+            except subprocess.TimeoutExpired as error:
+                (evidence / (name + ".log")).write_bytes((error.stdout or b"") + (error.stderr or b""))
+                raise RuntimeError(name + " timed out; inspect ignored evidence") from None
             (evidence / (name + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode:
                 raise RuntimeError(name + ' failed; inspect ignored evidence')
@@ -335,7 +347,7 @@ def main():
                                       '-d', str(patches / variant), str(source)])
         for variant in ('method-private', 'method-private-original', 'method-private-delete',
                         'method-private-caller-rebuild', 'interface-kind-private', 'interface-kind-original',
-                        'method-private-self', 'method-private-self-original'):
+                        'method-private-self', 'method-private-self-original', 'method-private-self-retained'):
             sources = sorted((ROOT / 'fixtures' / variant).rglob('*.java'))
             for source in sources:
                 manifest['fixtureSha256'][variant + '/' + source.name] = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -350,11 +362,19 @@ def main():
         mf.write_text('Premain-Class: InvokeKindOracle\nCan-Redefine-Classes: true\n\n')
         agent = work / 'agent.jar'
         run('agent', [str(jbr / 'bin/jar'), 'cfm', str(agent), str(mf), '-C', str(harness), 'InvokeKindOracle.class'])
-        output = run('oracle', [str(jbr / 'bin/java'), '-XX:+AllowEnhancedClassRedefinition',
-                               '-javaagent:' + str(agent), '-cp', str(harness) + ':' + str(old),
-                               'InvokeKindOracle', str(patches)])
+        for mode, flags in (('default', []), ('self-interpreter', ['-Xint']),
+                            ('self-compiled', ['-Xbatch', '-XX:-TieredCompilation', '-XX:+PrintCompilation',
+                             '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.PrivateSelfFixture*::*'])):
+            output = run('oracle-' + mode, [str(jbr / 'bin/java'), *flags, '-XX:+AllowEnhancedClassRedefinition',
+                         '-javaagent:' + str(agent), '-cp', str(harness) + ':' + str(old),
+                         'InvokeKindOracle', str(patches), *([] if mode == 'default' else ['self'])])
+            if mode == 'self-compiled' and not any(re.match(r'^\s*\d+\s+\d+\s+.*PrivateSelfFixture.*::await', line)
+                                                  and 'made not compilable' not in line for line in output.splitlines()):
+                raise RuntimeError('No compiled self caller observed; inspect ignored evidence')
+            checks = int(output.split('PASS checks=')[-1].splitlines()[0].strip())
+            manifest['runs'].append({'mode': mode, 'checks': checks, 'passed': True})
         manifest['passed'] = True
-        manifest['checks'] = int(output.split('PASS checks=')[-1].strip())
+        manifest['checks'] = sum(item['checks'] for item in manifest['runs'])
         (evidence / 'summary.json').write_text(json.dumps(manifest, indent=2) + '\n')
         print('JBR invoke kind oracle PASS checks=' + str(manifest['checks']))
         print('Evidence: ' + str(evidence.relative_to(ROOT)))

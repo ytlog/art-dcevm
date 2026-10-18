@@ -19,10 +19,14 @@ void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, abi::arm64::Handle target);
 void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods,
                         size_t gc_marking = ~size_t{0}, size_t method_index = ~size_t{0});
-// Named switch-interpreter selectors are installed; each transaction still
-// needs the Class/Thread/HandleScope probes that SelfCalls reports.
+// Class and interface selectors are independent. The no-argument form is the
+// compatibility capability requiring both; admission uses the target's kind.
+// Each transaction still needs the Class/Thread/HandleScope probes.
 bool SelectionServices();
+bool SelectionServices(bool interface_target);
 bool SelfCalls();
+bool SelfCalls(bool interface_target);
+const char* SelectionUnavailable(bool interface_target);
 // Probed Class/DexCache/collector declarations and named type lookup check
 // the symbolic owner, including inherited defaults and Object methods.
 bool ClassKinds();

@@ -27,6 +27,8 @@ spec.loader.exec_module(isolation)
 def complete_report(api=36, self_selection=None):
     if self_selection is None:
         self_selection = api >= 36
+    if type(self_selection) is bool:
+        self_selection = {"class": self_selection, "interface": self_selection}
     def rejection_check(code):
         if code == 0:
             return {"name": "lastRejection", "expected": "", "actual": "", "passed": True}
@@ -45,7 +47,10 @@ def complete_report(api=36, self_selection=None):
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,
             "hierarchyChange": False, "fullDcevmComplete": False,
-            "privateSelfSelection": self_selection, "interfaceMethodSelection": True}},
+            "privateSelfSelection": all(self_selection.values()),
+            **{"privateSelfSelection" + kind.title(): value for kind, value in self_selection.items()},
+            **{"privateSelfSelection" + kind.title() + "Reason": "" if value else "named selector unavailable"
+               for kind, value in self_selection.items()}, "interfaceMethodSelection": True}},
         "scenarios": [{"name": name, "variants": variants, "expectedCode": code,
                        "actualCode": code, "completed": True, "passed": True,
                        "capabilities": {"interfaceMethodSelection": True, "retransformRouted": 33 <= api <= 37, "memberMapping": "verified: android16 class layout",
@@ -61,7 +66,7 @@ def complete_report(api=36, self_selection=None):
                                   *[{"name": key, "expected": "captured baseline", "actual": "captured baseline",
                                      "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())],
                                   rejection_check(code)]}
-                      for name, variants, base_code in runner.scenario_sequence("full", api)
+                      for name, variants, base_code in runner.scenario_sequence("full", api, self_selection)
                       for code, required in [runner.release_expectation(
                           name, base_code, runner.REQUIRED_CHECKS[name], api, self_selection)]],
     }
@@ -286,17 +291,20 @@ class ApkVerificationTests(unittest.TestCase):
 
     def test_obsolete_self_calls_follow_reported_selection_services(self):
         names = {item[0] for item in runner.scenario_sequence("method-private")}
-        for api, selection in ((33, False), (35, True), (35, False), (36, True)):
+        for api, selection in ((33, False), (35, True), (35, False), (36, True),
+                               (34, {"class": False, "interface": True}),
+                               (37, {"class": True, "interface": False})):
+            per_kind = {"class": selection, "interface": selection} if type(selection) is bool else selection
             report = complete_report(api, selection)
             report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
             runner.validate_report(report, scenario_group="method-private")
             for kind in ("class", "interface"):
                 changed = next(item for item in report["scenarios"] if item["name"] == "method-private-self-" + kind)
-                self.assertEqual(changed["actualCode"], 0 if selection else 71)
+                self.assertEqual(changed["actualCode"], 0 if per_kind[kind] else 71)
                 override = next(item for item in changed["checks"] if item["name"] == "overrideReceiver")
                 saved = dict(override)
                 override.update(expected=49, actual=49)
-                if selection or kind == "class":
+                if per_kind[kind] or kind == "class":
                     with self.assertRaises(runner.RunFailure):
                         runner.validate_report(report, scenario_group="method-private")
                 override.update(saved)
@@ -305,6 +313,25 @@ class ApkVerificationTests(unittest.TestCase):
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group="method-private")
                 null.update(expected="java.lang.NullPointerException", actual="java.lang.NullPointerException")
+
+    def test_per_kind_selection_capabilities_and_masks(self):
+        for kind in ("class", "interface"):
+            for suffix in ("", "Reason"):
+                report = complete_report()
+                del report["initialization"]["capabilities"]["privateSelfSelection" + kind.title() + suffix]
+                with self.assertRaises(runner.RunFailure): runner.validate_report(report)
+        for selection, mode in (({"class": False, "interface": True}, "interface-only"),
+                                ({"class": True, "interface": False}, "class-only"),
+                                ({"class": False, "interface": False}, "disabled")):
+            report = complete_report(36, selection)
+            runner.validate_report(report, private_self_mode=mode)
+            report["initialization"]["capabilities"]["privateSelfSelection"] = True
+            with self.assertRaises(runner.RunFailure): runner.validate_report(report)
+        for mode in ("class-only", "interface-only", "disabled"):
+            with self.assertRaises(runner.RunFailure): runner.validate_report(complete_report(), private_self_mode=mode)
+        report = complete_report()
+        report["initialization"]["capabilities"]["privateSelfSelectionClassReason"] = "unavailable"
+        with self.assertRaises(runner.RunFailure): runner.validate_report(report)
 
     def test_self_selection_capability_is_required(self):
         report = complete_report(35, True)

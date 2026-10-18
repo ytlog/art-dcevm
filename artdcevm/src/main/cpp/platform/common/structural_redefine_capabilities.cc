@@ -22,6 +22,11 @@ std::string Capabilities() {
   const bool fields = methods && state.capabilities.field_retirement;
   const std::string retirement = methods ? "true" : "false";
   const std::string field_retirement = fields ? "true" : "false";
+  const auto selection_reason = [methods](bool interface_target) {
+    const char* reason = methods ? invoke_kind::SelectionUnavailable(interface_target)
+                                 : "method evolution unavailable";
+    return QuoteJsonMutf8(reason ? reason : "");
+  };
   interface_redefinition::Backend* interfaces = state.interface_backend.load(std::memory_order_acquire);
   const auto interface_timing = interfaces ? interfaces->LastTiming() : interface_redefinition::Timing{};
   // Both capability fields describe the same probe snapshot, including disablement.
@@ -35,6 +40,10 @@ std::string Capabilities() {
       ",\"interfaceMethodSelection\":" + (methods && interface_method_selection::Available() ? "true" : "false") +
       ",\"retransformRouted\":" + (state.installed && state.capabilities.retransform ? "true" : "false") +
       ",\"privateSelfSelection\":" + (methods && invoke_kind::SelectionServices() ? "true" : "false") +
+      ",\"privateSelfSelectionClass\":" + (methods && invoke_kind::SelectionServices(false) ? "true" : "false") +
+      ",\"privateSelfSelectionInterface\":" + (methods && invoke_kind::SelectionServices(true) ? "true" : "false") +
+      ",\"privateSelfSelectionClassReason\":" + selection_reason(false) +
+      ",\"privateSelfSelectionInterfaceReason\":" + selection_reason(true) +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +
