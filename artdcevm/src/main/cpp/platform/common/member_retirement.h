@@ -50,6 +50,8 @@ void RetireFields(const std::vector<RetiredField>& fields);
 void RetireMethod(const void* method);
 // Read-only query for candidate dispatch validation before commit.
 bool IsRetiredMethod(const void* method);
+// Commit-time alias registration shares the existing JNI retirement guard.
+void RegisterJniAlias(const void* method, jmethodID id);
 // After ART's commit: the guards' fast path relies on ART marking every
 // retired method obsolete, and stops trusting the flag if it did not.
 void ConfirmObsolete(const std::vector<const void*>& methods);

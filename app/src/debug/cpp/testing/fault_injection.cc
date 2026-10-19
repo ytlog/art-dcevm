@@ -1,3 +1,4 @@
+#include <vector>
 #include "platform/common/narrowed_references.h"
 #include "platform/common/fault_injection.h"
 #include "platform/symbols/art_symbol_compat.h"
@@ -147,4 +148,47 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_referenceCl
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_referenceCleanupClears(JNIEnv*, jclass) {
   return artdcevm::narrowed_references::Clears();
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_JniReceiverLossInstrumentation_promoteIds(JNIEnv* jni, jclass) {
+  // Test1972 and runtime.h, fixed Android 13/16: SetJniIdType only permits
+  // swapable -> indices. Suspend other Java threads without holding the mutator
+  // lock: the runtime service refreshes its well-known JNI IDs itself.
+  using namespace artdcevm::symbols;
+  constexpr NamedSymbol instance{Library::kArt, "_ZN3art7Runtime9instance_E", SymbolTable::kAnyNamed};
+  constexpr NamedSymbol change{Library::kArt, "_ZN3art7Runtime12SetJniIdTypeENS_9JniIdTypeE", SymbolTable::kAnyNamed};
+  auto runtime = static_cast<void**>(Find(instance));
+  auto promote = reinterpret_cast<void (*)(void*, int)>(Find(change));
+  if (!runtime || !*runtime || !promote) return JVMTI_ERROR_NOT_AVAILABLE;
+  JavaVM* vm = nullptr; jvmtiEnv* env = nullptr;
+  if (jni->GetJavaVM(&vm) != JNI_OK || vm->GetEnv(reinterpret_cast<void**>(&env), JVMTI_VERSION_1_2) != JNI_OK)
+    return JVMTI_ERROR_INVALID_ENVIRONMENT;
+  jvmtiCapabilities caps{}; caps.can_suspend = 1;
+  jvmtiError result = env->AddCapabilities(&caps);
+  jthread self = nullptr; jthread* all = nullptr; jint count = 0;
+  if (result == JVMTI_ERROR_NONE) result = env->GetCurrentThread(&self);
+  if (result == JVMTI_ERROR_NONE) result = env->GetAllThreads(&count, &all);
+  std::vector<jthread> others;
+  if (result == JVMTI_ERROR_NONE)
+    for (jint i = 0; i < count; ++i) if (!jni->IsSameObject(self, all[i])) others.push_back(all[i]);
+  std::vector<jvmtiError> errors(others.size(), JVMTI_ERROR_INTERNAL);
+  if (result == JVMTI_ERROR_NONE && !others.empty())
+    result = env->SuspendThreadList(others.size(), others.data(), errors.data());
+  std::vector<jthread> suspended;
+  for (size_t i = 0; i < others.size(); ++i)
+    if (errors[i] == JVMTI_ERROR_NONE) suspended.push_back(others[i]);
+    else if (errors[i] != JVMTI_ERROR_THREAD_SUSPENDED && errors[i] != JVMTI_ERROR_THREAD_NOT_ALIVE) result = errors[i];
+  if (result == JVMTI_ERROR_NONE) promote(*runtime, 1); // JniIdType::kIndices, enum class int.
+  if (!suspended.empty()) {
+    std::vector<jvmtiError> resumed(suspended.size());
+    jvmtiError status = env->ResumeThreadList(suspended.size(), suspended.data(), resumed.data());
+    if (status != JVMTI_ERROR_NONE) result = status;
+    for (auto error : resumed) if (error != JVMTI_ERROR_NONE && error != JVMTI_ERROR_THREAD_NOT_ALIVE) result = error;
+  }
+  for (jint i = 0; i < count; ++i) jni->DeleteLocalRef(all[i]);
+  if (all) env->Deallocate(reinterpret_cast<unsigned char*>(all));
+  if (self) jni->DeleteLocalRef(self);
+  env->DisposeEnvironment();
+  return result;
 }

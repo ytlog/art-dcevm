@@ -87,10 +87,12 @@ uintptr_t CopiedObsoleteCache(void* method) noexcept {
   constexpr uint32_t kCopiedObsolete = 0x01000000 | abi::arm64::kAccObsoleteMethod;
   if (class_verified.load(std::memory_order_acquire) &&
       (prefix->access_flags.load(std::memory_order_relaxed) & kCopiedObsolete) == kCopiedObsolete) {
-    // Class::Alloc creates nonmoving classes. An old frame roots its retained
-    // declaring interface; ART intentionally does not replace this reference.
+    // Class::Alloc creates nonmoving classes. A structural copied method keeps
+    // its interface's DEX identity even when only the implementation changes:
+    // a raw JNI ID can therefore be obsolete while its declaring interface is live.
     void* declaring = reinterpret_cast<void*>(static_cast<uintptr_t>(prefix->declaring_class));
-    if (runtime_roots::Field<uint32_t>(declaring, class_access) & 0x00200000) { // kAccObsoleteObject.
+    if (runtime_roots::Field<uint32_t>(declaring, class_access) &
+        (0x00200000 | evolution::kAccInterface)) { // kAccObsoleteObject or retained interface.
       // A frame from an earlier non-structural redefinition can still be in
       // ART's normal obsolete map. Preserve that historical DEX selection.
       void* ext = reinterpret_cast<void*>(Reference<read_barrier>(runtime_roots::Field<uint32_t>(declaring, class_ext_data)));
@@ -99,8 +101,8 @@ uintptr_t CopiedObsoleteCache(void* method) noexcept {
       for (int32_t i = 0; methods && i < methods->length; ++i)
         if (methods->elements[i] == reinterpret_cast<uintptr_t>(method))
           return (read_barrier ? (original_cache_read ? original_cache_read : named_cache_read) : original_cache_raw)(method);
-      // The original structural copy lives outside the interface's method
-      // array, but its code still belongs to this retained interface's DEX.
+      // A structural copy lives outside the interface's method/obsolete arrays,
+      // but its code still belongs to that interface's DEX.
       // Match Class::GetDexCache's CC/CMC and no-barrier behavior.
       return Reference<read_barrier>(runtime_roots::Field<uint32_t>(declaring, class_dex_cache));
     }

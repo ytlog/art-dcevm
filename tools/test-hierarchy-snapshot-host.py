@@ -17,6 +17,7 @@ SOURCE = r'''
 #include <stdexcept>
 using namespace artdcevm;
 namespace artdcevm::invoke_kind { bool PrepareBoundReceiverClass(JNIEnv*) { return true; } }
+namespace artdcevm::jni_interface_dispatch { bool Prepare() { return true; } }
 struct Type : _jclass {
   Type* parent;
   bool interface;

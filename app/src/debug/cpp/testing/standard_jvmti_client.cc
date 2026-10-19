@@ -17,6 +17,17 @@ jmethodID method_ids[4]{};
 jclass interface_static_class = nullptr;
 std::vector<jmethodID> interface_static_methods;
 std::atomic<jlong> single_step_count{0};
+jclass receiver_loss_owner = nullptr;
+jmethodID receiver_loss_method = nullptr;
+
+jint ReceiverLossV(JNIEnv* jni, jobject receiver, bool nonvirtual, jmethodID method, ...) {
+  va_list args;
+  va_start(args, method);
+  jint result = nonvirtual ? jni->CallNonvirtualIntMethodV(receiver, receiver_loss_owner, method, args)
+                          : jni->CallIntMethodV(receiver, method, args);
+  va_end(args);
+  return result;
+}
 
 void JNICALL SingleStep(jvmtiEnv*, JNIEnv*, jthread, jmethodID, jlocation) {
   single_step_count.fetch_add(1, std::memory_order_relaxed);
@@ -317,6 +328,33 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_callInterfaceDispatch
   if (slot < 0 || slot >= kDispatchSlots || !dispatch_methods[slot]) return nullptr;
   return static_cast<jstring>(jni->CallObjectMethod(receiver, dispatch_methods[slot]));
 }
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheReceiverLossId(
+    JNIEnv* jni, jclass, jclass owner) {
+  // Deliberately needs no JVMTI environment: before-attach runs retain pointer IDs.
+  jmethodID method = jni->GetMethodID(owner, "value", "()I");
+  if (!method) return -1;
+  jclass root = static_cast<jclass>(jni->NewGlobalRef(owner));
+  if (!root) return -1;
+  if (receiver_loss_owner) jni->DeleteGlobalRef(receiver_loss_owner);
+  receiver_loss_owner = root;
+  receiver_loss_method = method;
+  return reinterpret_cast<uintptr_t>(method) & 1u; // Fixed ART ID tag, never expose the value.
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_callReceiverLossInt(
+    JNIEnv* jni, jclass, jobject receiver, jboolean nonvirtual, jint form) {
+  if (!receiver_loss_method || !receiver_loss_owner) return -1;
+  if (form == 1) return ReceiverLossV(jni, receiver, nonvirtual, receiver_loss_method);
+  if (form == 2) return nonvirtual
+      ? jni->CallNonvirtualIntMethodA(receiver, receiver_loss_owner, receiver_loss_method, nullptr)
+      : jni->CallIntMethodA(receiver, receiver_loss_method, nullptr);
+  return nonvirtual ? jni->CallNonvirtualIntMethod(receiver, receiver_loss_owner, receiver_loss_method)
+                    : jni->CallIntMethod(receiver, receiver_loss_method);
+}
+
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_classFileReplacements(JNIEnv*, jclass) {

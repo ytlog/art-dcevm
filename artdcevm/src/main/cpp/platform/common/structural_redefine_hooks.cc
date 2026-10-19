@@ -11,6 +11,7 @@
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/jni_interface_dispatch.h"
 #include "platform/common/method_handle_lookup.h"
 #include "platform/common/runtime_thread.h"
 
@@ -222,6 +223,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     std::vector<std::pair<structural_policy::MemberKey, uint32_t>> changes(symbols.begin(), symbols.end());
     std::string why;
     if (!abilities.interface_symbols || !invoke_kind::EnableInterfaceSymbols()) why = "symbolic interface resolution services unavailable";
+    else if (decision.interfaces_removed && !jni_interface_dispatch::Enable()) why = "JNI interface receiver services unavailable";
     else if (!changes.empty()) why = KindCallers(*thread, self, snapshot, incoming, *batch, changes, true);
     if (!why.empty()) {
       decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;

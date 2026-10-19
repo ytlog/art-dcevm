@@ -64,6 +64,11 @@ void* original_mapping = nullptr;
 void* original_update = nullptr;
 void* original_visit = nullptr;
 void* original_jni_visit = nullptr;
+// Native pointer IDs are not enumerable by JniIdManager. Keep only generated
+// copied-method aliases, using the same committed mappings as ART. Readers are
+// Runnable under the shared mutator lock; writers run under ART's suspend-all.
+// The engine's existing obsolete-class roots retain these method allocations.
+std::map<void*, void*> copied_jni_targets;
 
 // Member mapping of one redefinition, planned while ART may still fail and
 // applied at commit without reading DEX data or calling lookups.
@@ -116,6 +121,29 @@ struct MappingPlan {
   std::map<std::string, std::vector<jobject>> static_compatibility;
   std::vector<MethodMapping> methods;
 };
+
+void ApplyCopiedJniMappings(const MappingPlan* plan) {
+  for (const auto& entry : plan->methods) {
+    if (entry.kind != MethodMapping::kRetired) continue;
+    member_retirement::RetireMethod(entry.old_method);
+    retired_in_update.push_back(entry.old_method);
+  }
+  for (auto& [id, target] : copied_jni_targets) {
+    for (const auto& entry : plan->methods) {
+      if (target != entry.old_method) continue;
+      target = entry.replacement;
+      break;
+    }
+    member_retirement::RegisterJniAlias(target, reinterpret_cast<jmethodID>(id));
+  }
+  for (const auto& entry : plan->methods) {
+    if (static_cast<abi::ArtMethodPrefix*>(entry.old_method)->access_flags.load() & 0x01000000) {
+      copied_jni_targets.emplace(entry.old_method, entry.replacement);
+      member_retirement::RegisterJniAlias(entry.replacement, reinterpret_cast<jmethodID>(entry.old_method));
+      if (auto* context = transaction::Current()) context->retain_method_aliases = true;
+    }
+  }
+}
 
 bool Initializer(const std::string& name) { return name == "<init>" || name == "<clinit>"; }
 
@@ -541,11 +569,8 @@ void CollectMappings(ClassRedefinitionPrefix* self, const RedefinitionDataIter& 
   for (const auto& [field, replacement] : plan->fields)
     abi::LibcppV1PointerMap<ArtField>::Set(field_map, field, replacement);
   member_retirement::RetireFields(plan->retired_fields);
+  ApplyCopiedJniMappings(plan);
   for (const auto& entry : plan->methods) {
-    if (entry.kind == MethodMapping::kRetired) {
-      member_retirement::RetireMethod(entry.old_method);
-      retired_in_update.push_back(entry.old_method);
-    }
     if (entry.kind == MethodMapping::kCopied) copied_resolution_changes.insert(entry.old_method);
     abi::LibcppV1PointerMap<abi::ArtMethod>::Set(
         method_map, static_cast<abi::ArtMethod*>(entry.old_method),
@@ -659,6 +684,12 @@ void Visit(void* runtime, ReflectiveValueVisitor* visitor) noexcept {
 }
 
 }  // namespace
+
+jmethodID CopiedJniTarget(jmethodID id) noexcept {
+  if (reinterpret_cast<uintptr_t>(id) & 1u) return id;
+  const auto found = copied_jni_targets.find(reinterpret_cast<void*>(id));
+  return found == copied_jni_targets.end() ? id : reinterpret_cast<jmethodID>(found->second);
+}
 
 bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, std::string* failure) {
   if (!abi::LibcppV1PointerMap<abi::ArtMethod>::Compatible() ||

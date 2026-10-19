@@ -2,6 +2,7 @@
 #include "evolution/modifiers.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/jni_interface_dispatch.h"
 #include <algorithm>
 #include <string_view>
 
@@ -440,6 +441,10 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
     return JVMTI_ERROR_NONE;
   for (const auto& parent : snapshot->live.interfaces) {
     if (std::find(incoming.interfaces.begin(), incoming.interfaces.end(), parent) != incoming.interfaces.end()) continue;
+    if (!jni_interface_dispatch::Prepare()) {
+      *error = "JNI interface receiver services unavailable in Native snapshot";
+      return JVMTI_ERROR_NOT_AVAILABLE;
+    }
     if (!invoke_kind::PrepareBoundReceiverClass(jni)) {
       if (jni->ExceptionCheck()) jni->ExceptionClear();
       *error = "bound MethodHandle receiver class unavailable in Native snapshot";

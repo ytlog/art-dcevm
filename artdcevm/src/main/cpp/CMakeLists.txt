@@ -22,6 +22,7 @@ add_library(artdcevm SHARED
   platform/common/member_mapping.cc
   platform/common/method_handle_lookup.cc
   platform/common/invoke_kind.cc
+  platform/common/jni_interface_dispatch.cc
   platform/common/narrowed_references.cc
   platform/common/imt_sealing.cc
   platform/common/proxy_relink.cc

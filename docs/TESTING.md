@@ -232,3 +232,19 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 `receiver-loss` 使用与 `compare-jbr-receiver-loss.py --java-home <fixed-jbr> --probe-jni-boundaries` 共享的普通接收者 fixture，覆盖失去接口后的直接／精确／参数转换／精确绑定句柄、缓存类句柄与反射、错误类型／null／方法体异常、保留字段与对象身份、后加载子类、三目标批次反序、两轮规划失败／提交／恢复及 GC。它纳入完整套件。`receiver-loss-bound` 另要求已绑定接口句柄的 `invokeWithArguments` 与 JBR 一致：当前 API 33/36 预期会被验证器判为失败（每次 4 个场景、16 项不匹配，ICCE 对 IllegalStateException），不得计作通过。JBR JNI 非法接收者探针运行于独立进程，CheckJNI 终止只记诊断；正常 Java 对照的每个热调用阶段均要求实际编译证据。
 
 HookOverheadBenchmark schema 2 新增实际接口 `invokeExact` 和精确绑定调用，独立核对每项返回值校验和；设备驱动拒绝缺少 `methodHandleChecks` 的报告。比较应包含 `engine-client,added,removed,art-added,engine-body,selected`，每状态／模式至少三次新进程。`jit` 表示启用 JIT 并预热，不能单凭模式名声称每个 lambda 都已编译。
+
+
+## 接收者失去接口后的保留 JNI ID
+
+普通 Debug APK 用于 `--id-mode index`。另用 `./gradlew -PjniPointerProbe=true :app:assembleDebug` 构建 `--id-mode mixed` 专用 APK，运行前分别冻结 APK。这个显式启用的 Debug [wrap 脚本](https://developer.android.com/ndk/guides/wrap-script) 使用 swapable IDs 并关闭自动提升。仅供 Debug 的探针加载公共 JVMTI 客户端、按要求在附加前缓存 ID，通过公开 JVMTI 挂起其他 Java 线程，再调用固定命名的 `Runtime::SetJniIdType` 服务；复用 ART 自身指针转索引的测试流程，不修改偏移或标志，不进入两份库 AAR。
+
+```sh
+python3 tools/run-jni-receiver-tests.py --serial DEVICE_SELECTOR --device-id android-device-1 \
+  --apk <frozen-pointer-debug.apk> --id-mode mixed
+python3 tools/run-jni-receiver-tests.py --serial DEVICE_SELECTOR --device-id android-device-1 \
+  --apk <frozen-debug.apk> --id-mode index
+```
+
+每次运行 96 个独立进程，组合附加前／后缓存、仅 default／自身实现、接口／类查找、virtual／nonvirtual、普通／V／A 及普通／CheckJNI。mixed 必须实测提升前标签 0、提升后标签 1：48 项完整调用、36 项原 CheckJNI 诊断、12 项单列的 79 拒绝。index 的两种缓存时机都要求标签 1：60 项调用、36 项诊断。79 验证整批失败原子性、旧调用／身份／字段、GC 与后续同伴事务成功，绝不计作接收者失去接口后的调用对齐。调用项覆盖两轮规划失败／提交／恢复、批次反序和 GC；CheckJNI 项在故意非法调用前持久记录成功事务，再要求原接收者或 nonvirtual 声明类参数诊断与 SIGABRT。旧 DEX 缓存断言、其他崩溃、缺少观察项、ID 标签错误或同时篡改 expected／actual，均须判为失败。
+
+每次启动前记录设备时间，以 PID 和启动时间共同限定 logcat；PID 复用不得把旧进程的诊断计入本次结果。原始报告和日志只写入已忽略的 `build/evidence/jni-receiver/`。使用相同 `--apk`／`--id-mode` 以及 `--replay <evidence-directory>` 可独立重验全部原始记录，另写 `audit.json`，保留原运行记录。接受生产改动前须运行两台设备的这些组合、普通／CheckJNI 完整套件及独立失败恢复。固定 JBR 对照覆盖普通／V／A／nonvirtual JNI 边界，不证明 ART 的指针／索引行为。

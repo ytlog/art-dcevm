@@ -358,7 +358,10 @@ B 不在重定义时初始化，其静态初始化照常在首次需要时执行
 - **已有引用**：静态字段遵循[字段退役](#字段退役)中的 JBR FieldCopier 规则。实例字段按固定 JBR 的持有者分类处理：未参与重定义的持有者会检查被移除接口签名的字段；同批受影响、布局不变的持有者保留原引用；字段数量、名称、类型或偏移变化以及新父类变化需要实例更新时才检查，并把这项需求沿最终父类和接口关系传播。检查在实际值的最终类链和各层直接声明接口名中匹配字段签名，不使用一般的传递可赋值关系。已有 `Thread.target` 因此可能被清空，之后 `run()` 无动作；恢复接口不会恢复被清空的字段。已校验代码在收窄后才新建 `Thread(task)` 的引用不会被这次事务追溯清理，其 boot 调用仍须抛 `IncompatibleClassChangeError`。数组元素和局部引用不走这项字段清理。
 - **遍历与快照**：`narrowed_references` 复用 ART 的 `ReplaceObjectReferences` 全堆遍历，只 Hook 固定命名的 `ResizeReferenceVisitor` 非静态字段回调。ART 先完成原引用替换，增强库随后仅对已规划槽位写 null；不另建迁移或引用改写引擎。Native 阶段保留已加载类的有根身份和必要接口事实——这要遍历全部已加载类（约两万个），因此只在提交的 DEX 移除了某个现有接口时才做；若 ClassFileLoadHook 之后的字节才出现移除，`CheckClass` 让本次尝试失败并在下一次强制快照。提交前生成偏移与兼容计划；提交期间只刷新预分配身份表并做有界查询。DEX 不保留原 ClassFile 的字段声明顺序，纯声明重排的实例更新语义仍未证明有等价表示；ART 自身因 vtable 改变而移动的静态偏移不单独视为 JBR 实例更新。生成 Proxy 没有自己的 ClassDef，不能因借用父类 DexCache 而读取伪 DEX 索引，但它继承的实例字段仍参与检查。收窄事务中任何新的 ClassPrepare 都要求完整快照重试，包括不在原目标子树内的新持有者。命名回调缺失或计划无法完成时，收窄在提交前拒绝。
 - **缓存调用**：普通类移除接口也启用共享的最终 IfTable 句柄检查。缓存接口句柄的 `invokeExact` 抛 ICCE，缓存类句柄在丢失 default 时抛 AME，自身实现保留；未绑定句柄的参数转换继续先抛 CCE。精确绑定另需在 libcore `BindTo.transform` 写入已捕获接收者之前检查：Native 快照只加载 bootstrap `Transformers$BindTo` 并保留进程级根，已验证 Class 探针通过命名服务解码其身份。现有 MethodHandle 入口按 Class 身份及命名字段取得 delegate/receiver，由命名 `MethodType::IsExactMatch` 证明完整调用类型后复用接收者检查。错误 MethodType、null、退役成员及目标方法体异常维持原有顺序。全部对象访问处于 ART 现有 Runnable/shared-mutator 作用域，字段偏移由命名查找取得；不在 Native 状态解引用 JNI 句柄。
-- **仍有差异的调用路径**：已绑定接口句柄的 `invokeWithArguments` 在固定 Android 13–17 的 Java `invokeFromTransform` 捷径直接进入 `transform`，绕过上述 Native 入口；丢失接口时仍抛 libcore 的 IllegalStateException，固定 JBR 为 ICCE。独立 `receiver-loss-bound` 探针保留这一失败，不计入通过范围。未丢失接口的类方法 ID 已随同验证；保留的接口 JNI ID 在真正丢失接口的接收者上，以及 V/A/nonvirtual、ID 模式和活动帧组合，仍需 ART 独立边界验证。JBR 的非法接收者 CheckJNI 终止只记为诊断结果。
+- **JNI 接收者边界**：Native 快照在 ART 事务锁外准备命名的 `InvokeVirtualOrInterfaceWithVarArgs<jmethodID>`／`InvokeVirtualOrInterfaceWithJValues<jmethodID>` Hook，移除接口的决策启用它们。入口位于原 CheckJNI 接收者检查之后；普通模式通过引擎自有、进程级 JVMTI 环境取得声明类，以公开 JNI 检查接口兼容性，不兼容抛 ICCE，避免 ART 在虚目标选择失败后解引用空方法。null 与已有异常交给原入口，元数据读取失败显式抛 InternalError。不缓存应用 Class 或方法分类，不借用调用者可释放的 JVMTI 环境；CheckJNI 仍对非法接收者报告原诊断并终止进程。
+- **copied default 的指针 ID**：旧 copy 可以已 obsolete，而它声明的接口仍存活。`GetObsoleteDexCache` 保护先查询 ART 的正常 obsolete 映射，未登记的结构 copy 才读取其保留声明接口的 DexCache，并保留原读屏障语义。指针 ID 无法由 ART 的索引 ID 访问器枚举重写；自有成员映射在真实提交时记录生成 copy 的目标，并随后续同一成员映射更新。命名 `InvokeWithVarArgs<jmethodID>`／`InvokeWithJValues<jmethodID>` 在 CheckJNI 之后跟随这些目标，使 nonvirtual 使用有效成员；不改写 ID 本身、访问标志或 ART ID 数组。退役目标的别名登记到既有 JNI 退役守卫，不因重新添加方法而复活。读取处于既有 Runnable/shared-mutator 作用域，提交写入处于 ART suspend-all；只有 generated copy 发生变化、没有声明成员退役的成功批次，也保留 Native 阶段准备的 obsolete 类根；拒绝批次释放临时根，嵌套事务不继承该决定。此处沿用现有保活路径，不新增独立的应用 Class 缓存。
+- **指针准入限制**：已有普通声明方法的原始指针 ID 仍可能使 ART 以 79 拒绝结构事务。此时验证整批不变、原调用与 GC 安全、后续独立事务可用；该结果仅是安全拒绝，不属于调用对齐，也不关闭 ART 的历史 JNI 标记检查。
+- **仍有差异的调用路径**：已绑定接口句柄的 `invokeWithArguments` 在固定 Android 13–17 的 Java `invokeFromTransform` 捷径直接进入 `transform`，绕过上述 Native 入口；丢失接口时仍抛 libcore 的 IllegalStateException，固定 JBR 为 ICCE。独立 `receiver-loss-bound` 探针保留这一失败，不计入通过范围。JNI 活动帧的完整组合仍未证明。
 
 ## Proxy 实现类
 
@@ -513,6 +516,8 @@ flowchart TD
 - **ART 服务语义漂移**：探测只能核对有 ART 服务或 JVMTI 作对照的声明（Class、ArtField、ArtMethod、DexCache、槽位、map、obsolete 标志、MethodHandle 偏移）；visitor 虚表顺序与来源类型、Handle 与守卫签名依赖源码声明与精确符号名。扩展版本时核对源码与设备行为，差异只放 `platform/abi/arm64/androidNN/`，不复制后端。
 - **接口分派成本**：首次收窄后，保护持续到进程结束并覆盖之后链接的类。下述基准中，`removed` 相对 `added` 的晚加载单态接口调用增加约 51.0%（API 33 解释模式）、2.9%／26.7%（API 36 解释／JIT）；这仅量化该局部调用，完整应用与全堆快照成本仍待测量。覆盖完整链接路径的命名服务缺失时不能启用该能力。
 - **退役访问边界**：保留真实旧 ArtMethod/ArtField 并守卫新访问；`Unsafe` 与字段更新器缓存的原始 offset 无法拦截。
+
+首次收窄启用的 JNI 接收者守卫，对每次 virtual/interface JNI 调用通过公开 JVMTI 读取声明类和修饰符；接口声明再做 JNI 兼容性检查。direct JNI 只查询已提交 copied 指针映射，索引 ID 走标签快路径。下面的历史表不包含这条新增路径，当前成本须比较 `removed` 与 `added`。copied 映射沿用的 obsolete 类根也会把受影响类加载器保留到进程结束，释放策略仍是独立未完成项。
 
 常驻 JNI、反射和解析守卫仍有成本。解释器调用桥只在实际抽象目标需要它时安装；后续链接复用线程证明，仅缓存未命中时上调。以下为受测 API 33/36 配置、关闭 CheckJNI、每种状态／模式五个独立进程的结果。同轮 `engine` 相对 `agent` 的配对中位增量，左值为 `b716affa` 历史基准、右值为本轮；跨提交差异包含其间全部变化和运行条件影响。
 

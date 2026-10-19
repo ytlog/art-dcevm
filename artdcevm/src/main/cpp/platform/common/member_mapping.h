@@ -13,4 +13,7 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
 bool Plan(const runtime_thread::VerifiedThread& thread,
           abi::arm64::ClassRedefinitionPrefix* self, const abi::arm64::RedefinitionDataIter& data,
           int selected, std::string* why);
+// Runnable JNI dispatch only: copied methods can have retained pointer IDs
+// that ART's index-ID visitor cannot rewrite. Follow the committed member map.
+jmethodID CopiedJniTarget(jmethodID id) noexcept;
 }  // namespace artdcevm::member_mapping

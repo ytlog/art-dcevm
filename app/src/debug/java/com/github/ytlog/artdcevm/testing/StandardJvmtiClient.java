@@ -71,6 +71,9 @@ final class StandardJvmtiClient {
     static native void cacheInterfaceDispatch(int slot, Method method);
     static native int callInterfaceDispatchInt(Object receiver, int slot);
     static native String callInterfaceDispatchString(Object receiver, int slot);
+    /** Cache via GetMethodID, optionally before any agent attaches; returns the ID tag only. */
+    static native int cacheReceiverLossId(Class<?> lookupOwner);
+    static native int callReceiverLossInt(Object receiver, boolean nonvirtual, int form);
     /** Enable only this thread's standard JVMTI single-step event. Always disable in finally. */
     static native int setThreadSingleStep(boolean enabled);
     static native long singleStepCount();

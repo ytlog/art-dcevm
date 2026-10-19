@@ -13,7 +13,7 @@ import zipfile
 from evidence_paths import new_evidence_directory
 
 ROOT = Path(__file__).resolve().parents[1]
-TOKENS = ('InterfaceAbortInstrumentation', 'artdcevm::fault_injection::',
+TOKENS = ('InterfaceAbortInstrumentation', 'JniReceiverLossInstrumentation', 'artdcevm::fault_injection::',
           'RejectThreadProbe()', 'ReferenceRead(bool)', 'failure_stage', 'failure_hits',
           'counters', 'Inject(int)')
 EXPORTS = ('configureImtFallback', 'configurePrivateSelfMask', 'configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes', 'primePointerId', 'rejectRuntimeThreadProbe', 'runtimeReferenceReads', 'runtimeMarkingReads')
@@ -102,6 +102,8 @@ def main():
             verify_test_compile_flags(commands)
             if not all('InterfaceAbortInstrumentation_' + export in dynamic for export in EXPORTS):
                 raise ValueError('The lab APK is missing required test JNI exports')
+            if 'JniReceiverLossInstrumentation_promoteIds' not in dynamic:
+                raise ValueError('The lab APK is missing the isolated JNI-ID promotion probe')
             if not all(token in symbols for token in TOKENS):
                 raise ValueError('The app engine is missing abort-test implementation symbols')
         elif any(token in dynamic or token in symbols for token in TOKENS):

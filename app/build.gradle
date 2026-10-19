@@ -33,6 +33,10 @@ android {
         excludes += ['**/armeabi/**', '**/armeabi-v7a/**', '**/x86/**', '**/x86_64/**']
     } }
     sourceSets.debug.assets.srcDir layout.buildDirectory.dir('generated/patchAssets').get().asFile
+    // Opt-in fresh ART process for real swapable-pointer JNI ID probes.
+    if (providers.gradleProperty('jniPointerProbe').getOrElse('false').toBoolean()) {
+        sourceSets.debug.resources.srcDir 'src/debug/jniPointerProbeResources'
+    }
 }
 dependencies {
     implementation project(':artdcevm')

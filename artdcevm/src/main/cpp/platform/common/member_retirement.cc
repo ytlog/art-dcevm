@@ -710,6 +710,9 @@ void RetireFields(const std::vector<RetiredField>& fields) {
   process->any_retired_field.store(true, std::memory_order_release);
 }
 bool IsRetiredMethod(const void* method) { return Retired(method); }
+void RegisterJniAlias(const void* method, jmethodID id) {
+  if (ContainsMethod(method)) RecordId(method, id);
+}
 void RetireMethod(const void* method) { Retire(method); }
 void ConfirmObsolete(const std::vector<const void*>& methods) {
   // ART has now marked every old method obsolete; the guards' fast path

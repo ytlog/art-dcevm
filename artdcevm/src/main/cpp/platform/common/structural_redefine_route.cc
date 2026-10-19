@@ -166,7 +166,7 @@ jvmtiError InvokeStructural(jvmtiEnv* env, jint count, const jvmtiClassDefinitio
   if (std::string late = std::exchange(context->rejection, {}); !late.empty()) Diagnose(late, true);
   if (result == JVMTI_ERROR_NONE && count > 0) {
     Batch* batch = BatchOf(context);
-    if (batch->retires_members) {
+    if (batch->retires_members || context->retain_method_aliases) {
       member_retirement::RetainRoots(std::move(batch->retirement_roots));
       batch->retirement_roots.clear();
     }

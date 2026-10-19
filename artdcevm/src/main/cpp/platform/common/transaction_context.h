@@ -78,6 +78,8 @@ struct Context {
   bool invalidate_interface_symbols = false;
   bool collected_interpreted_callers = false;
   bool narrowing = false;  // Actual accepted input removes an interface.
+  // A committed copied-method JNI alias needs the prepared obsolete-class roots.
+  bool retain_method_aliases = false;
   // An interface removal appeared that the Native phase did not predict (a
   // ClassFileLoadHook changed the bytes): retry with the reference capture.
   bool capture_references_on_retry = false;

@@ -27,6 +27,7 @@ INTERFACE_IMPLEMENTATIONS = tuple(COMMON / name for name in (
 # Every engine module may name structural services.
 STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(COMMON.glob('*.cc')))
 OPTIONAL_CATALOGS = (
+    ('jniInterfaceDispatchServices', 'JNI interface dispatch', 'jni_interface_dispatch_symbols.h', 'jni_interface_dispatch.cc'),
     ('methodHandleLookupServices', 'MethodHandle lookup', 'method_handle_lookup_symbols.h', 'method_handle_lookup.cc'),
     ('invokeKindServices', 'Invoke kind', 'invoke_kind_symbols.h', 'invoke_kind.cc'),
     ('interfaceSelectionServices', 'Interface selection', 'interface_selection_symbols.h', 'interface_method_selection.cc'),

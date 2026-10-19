@@ -426,12 +426,17 @@ int main(int argc, char** argv) {
             use_barrier = false; if (mode == 16) fake_thread.marking = 0;
             Require(call(&method) == 0x9000u, "CMC copied cache used the CC marker");
             use_barrier = true; if (mode == 16) fake_thread.marking = 1;
+            fields[0] = 0x0200;
+            Require(call(&method) == (read ? 0x8000u : 0x9000u), "raw copied ID lost its live interface DEX");
+            obsolete->length = 1; obsolete->elements[0] = reinterpret_cast<uintptr_t>(&method);
+            Require(call(&method) == 0x7000, "live interface obsolete-map history was overwritten");
+            obsolete->length = 0;
             fields[0] = 0;
             Require(call(&method) == 0x7000, "non-structural obsolete cache bypassed ART");
             fields[0] = 0x00200000; method.access_flags.store(0x00040000);
             Require(call(&method) == 0x7000, "declared obsolete cache bypassed ART");
           }
-          Require(cache_reads == (mode == 13 ? 0 : (mode == 11 || mode == 16) ? 4 : 6), "wrong obsolete cache delegation");
+          Require(cache_reads == (mode == 13 ? 0 : (mode == 11 || mode == 16) ? 5 : 8), "wrong obsolete cache delegation");
           if (mode == 12 || mode == 13) {
             uint8_t bytes[256]{};
             uint32_t size = sizeof(bytes), count = 10, offset = 0x70;

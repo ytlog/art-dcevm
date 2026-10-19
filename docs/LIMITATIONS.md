@@ -47,7 +47,7 @@
 
 `lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义。与 JBR 相同，新出现的 default 冲突照常接受，经冲突方法的调用抛 `IncompatibleClassChangeError`，之后消除冲突的事务恢复唯一的 default。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
 
-接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。不能仅切换模式来修复此前缓存的指针 ID。普通类仍按其原有规则验收。
+接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。切换模式不会清除历史 pointer-id 准入标记。普通类仍按 ART 原有规则验收；声明在另一接口上的生成 copy，其保留指针缓存另见[移除接口](#移除接口的语义)。
 
 与 JBR 相同，新增 public abstract 方法不要求已加载的实现类提供实现：已有实现、继承实现、同批补齐的实现与 ART 选中的更具体 default 照常分派；缺少实现、缺少真实 bridge 或被更具体 abstract 遮住的 default，在调用时抛 `AbstractMethodError`。`interfaceMethodSelection=true` 时，package-private/protected 类虚方法（含另一运行时包的父类方法）在接口选择中优先于 default，事务成功，接口调用抛 `IllegalAccessError`；原有类方法调用保留原行为。private 方法本身不实现新增 abstract，调用抛 `AbstractMethodError`。
 
@@ -122,7 +122,7 @@
 
 ## ART 自身的限制
 
-- 普通类结构重定义沿用 ART 的检查：数组、基本类型、代理类、`java.lang.String`、mirror 类，以及 `java.lang.Thread` 本身和它的父类型不可重定义；应用自己的 `Thread` 子类可以重定义，已启动线程的对象身份、名称、ID、中断与 join 保持不变，正在执行的 `run()` 帧继续执行旧方法体；在本线程类初始化过程中不能重定义该类；存在指针形式 JNI ID 的类不能做结构变化。
+- 普通类结构重定义沿用 ART 的检查：数组、基本类型、代理类、`java.lang.String`、mirror 类，以及 `java.lang.Thread` 本身和它的父类型不可重定义；应用自己的 `Thread` 子类可以重定义，已启动线程的对象身份、名称、ID、中断与 join 保持不变，正在执行的 `run()` 帧继续执行旧方法体；在本线程类初始化过程中不能重定义该类；目标或相关子类型的历史 pointer-id 标记会阻止结构变化（79）；持有从另一声明接口获得的 copied default 指针 ID，并不等于目标类自身带有这一标记。成功处理这类缓存不能外推为任意指针模式结构更新。
 - `sun.misc.Unsafe`、`Atomic*FieldUpdater` 等缓存的原始字段 offset 不经过 ART 的任何入口；改变实例布局的结构重定义可能使其失效。固定 JBR 的独立探针也测得原始 offset、旧 FieldUpdater 及未建立访问器的缓存 Field 仍读取旧偏移；这不是所有布局均已对齐的证明。原始 offset 的通用对齐路径仍未建立。
 
 ## 进程内的副作用
@@ -167,4 +167,4 @@
 
 接口收窄字段清理、静态复制及保留的 JNI／MethodHandle 调用路径各有独立规则与验证范围，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。DEX 的字段标识与 class_data 按规范顺序编码；冻结 D8 对只交换字段声明顺序的两个 ClassFile 生成逐字节相同的 DEX。结构事务无法观察这一输入差别，因此不宣称提供 JBR 的纯声明重排语义。
 
-普通类实际移除接口时，已缓存的接口直接／精确绑定句柄抛 ICCE；未绑定的 `invokeWithArguments`／`asType` 在接收者转换时抛 CCE。缓存类句柄失去 default 时抛 AME，自身声明保留。API 33/36 的普通与 CheckJNI 回归另验错误 MethodType、null、方法体异常、两轮失败恢复、批次反序、晚加载与 GC。**仍未对齐**：已绑定接口句柄再经 `invokeWithArguments` 调用仍抛 IllegalStateException，JBR 为 ICCE；`receiver-loss-bound` 是单独的失败探针。接口 JNI ID 的非法接收者与完整 ID／调用形式组合尚未完成设备对齐，不能由有效类 ID 或普通接口调用外推。
+普通类实际移除接口时，已缓存的接口直接／精确绑定句柄抛 ICCE；未绑定的 `invokeWithArguments`／`asType` 在接收者转换时抛 CCE。缓存类句柄失去 default 时抛 AME，自身声明保留。API 33/36 的普通与 CheckJNI 回归另验错误 MethodType、null、方法体异常、两轮失败恢复、批次反序、晚加载与 GC。**仍未对齐**：已绑定接口句柄再经 `invokeWithArguments` 调用仍抛 IllegalStateException，JBR 为 ICCE；`receiver-loss-bound` 是单独的失败探针。保留的接口及 copied default JNI ID 通过 CheckJNI 之后的分派保护处理：普通模式对失去接口的虚调用接收者抛 ICCE，nonvirtual default 保留方法体，CheckJNI 保留声明类／接收者诊断。指针／索引 ID、普通／V／A 与 virtual／nonvirtual 矩阵需独立进程和实际 ID 标签证明。普通声明方法的指针 ID 导致 ART 拒绝 79 时，只记安全拒绝，不能计作调用对齐。JNI 活动帧组合仍未完成。

@@ -41,6 +41,8 @@ SOURCE = r'''
 // Keep the invocation registry visible to this host-only failure harness.
 // All code under test is the production implementation.
 #include "platform/common/interface_method_selection.cc"
+#include "platform/common/member_mapping.cc"
+#include "platform/common/member_retirement.cc"
 #include <iostream>
 #include <cstring>
 #include <cstdlib>
@@ -53,6 +55,7 @@ SOURCE = r'''
 using namespace artdcevm;
 namespace artdcevm::structural_redefine::detail {
 jvmtiError FindActiveBatchFrame(jvmtiEnv*, JNIEnv*, Batch&);
+jvmtiError InvokeStructural(jvmtiEnv*, jint, const jvmtiClassDefinition*, transaction::Context*, const Commit&);
 }
 int api_override = 0, initialize_calls = 0;
 bool missing_initializer = false;
@@ -889,6 +892,67 @@ int main(int argc, char** argv) {
       Require(child_method_reads == 0, "A surviving snapshot collected facts from the invalidated target subtree");
     }
     std::cout << "CAPABILITIES " << structural_redefine::Capabilities() << '\n';
+    if (mode == 0) {
+      namespace mapping = member_mapping;
+      abi::arm64::ArtMethodPrefix copy{}, copy2{}, current{}, newer{}, own{};
+      copy.access_flags.store(0x01000000); copy2.access_flags.store(0x01000000);
+      auto id = reinterpret_cast<jmethodID>(&copy);
+      auto indexed = reinterpret_cast<jmethodID>(3);
+      transaction::Scope aliases;
+      aliases.context().batch = std::make_unique<structural_redefine::detail::Batch>();
+      auto* alias_batch = structural_redefine::detail::BatchOf(&aliases.context());
+      alias_batch->jni = &jni;
+      alias_batch->retirement_roots.push_back(jni.NewGlobalRef(first_type));
+      mapping::MappingPlan first;
+      first.methods.push_back({&copy, &current, mapping::MethodMapping::kCopied});
+      Require(mapping::CopiedJniTarget(id) == id, "Uncommitted copied plan changed JNI ID");
+      mapping::ApplyCopiedJniMappings(&first);
+      Require(aliases.context().retain_method_aliases && !alias_batch->retires_members,
+              "Copied-only mapping did not request obsolete storage retention");
+      const jvmtiClassDefinition alias_definition{first_type, 0, nullptr};
+      structural_redefine::detail::Commit commit{[](const void*, jvmtiEnv*, jint, const jvmtiClassDefinition*) {
+        return JVMTI_ERROR_NONE;
+      }, nullptr};
+      Require(structural_redefine::detail::InvokeStructural(&env, 1, &alias_definition, &aliases.context(), commit) == JVMTI_ERROR_NONE &&
+              alias_batch->retirement_roots.empty() && member_retirement::Rooted(&jni, first_type),
+              "Successful copied-only commit released its obsolete-class roots");
+      {
+        transaction::Scope rejected;
+        Require(!rejected.context().retain_method_aliases, "Nested transaction inherited alias retention");
+        rejected.context().batch = std::make_unique<structural_redefine::detail::Batch>();
+        auto* failed = structural_redefine::detail::BatchOf(&rejected.context());
+        failed->jni = &jni;
+        failed->retirement_roots.push_back(jni.NewGlobalRef(second_type));
+        rejected.context().retain_method_aliases = true;
+        structural_redefine::detail::Commit failure{[](const void*, jvmtiEnv*, jint, const jvmtiClassDefinition*) {
+          return JVMTI_ERROR_INTERNAL;
+        }, nullptr};
+        Require(structural_redefine::detail::InvokeStructural(&env, 1, &alias_definition, &rejected.context(), failure) == JVMTI_ERROR_INTERNAL &&
+                !failed->retirement_roots.empty() && !member_retirement::Rooted(&jni, second_type),
+                "Rejected copied-only transaction retained permanent roots");
+      }
+      Require(global_refs[second_type] == 0, "Rejected copied-only transaction leaked temporary roots");
+      Require(mapping::CopiedJniTarget(id) == reinterpret_cast<jmethodID>(&current) &&
+              mapping::CopiedJniTarget(indexed) == indexed,
+              "Copied pointer mapping lost canonical target or changed index ID");
+      mapping::MappingPlan second;
+      second.methods.push_back({&current, &newer, mapping::MethodMapping::kKept});
+      second.methods.push_back({&copy2, &own, mapping::MethodMapping::kKept});
+      mapping::ApplyCopiedJniMappings(&second);
+      Require(mapping::CopiedJniTarget(id) == reinterpret_cast<jmethodID>(&newer) &&
+              mapping::CopiedJniTarget(reinterpret_cast<jmethodID>(&copy2)) == reinterpret_cast<jmethodID>(&own),
+              "Copied pointer did not follow later ordinary member mapping");
+      mapping::MappingPlan retirement;
+      retirement.methods.push_back({&newer, &newer, mapping::MethodMapping::kRetired});
+      mapping::ApplyCopiedJniMappings(&retirement);
+      Require(member_retirement::RetiredIdMethod(id) == &newer,
+              "Retiring a copied pointer target bypassed the existing JNI retirement guard");
+      mapping::MappingPlan readded;
+      readded.methods.push_back({&own, &current, mapping::MethodMapping::kKept});
+      mapping::ApplyCopiedJniMappings(&readded);
+      Require(mapping::CopiedJniTarget(id) == reinterpret_cast<jmethodID>(&newer),
+              "Unrelated readdition resurrected the retired copied pointer");
+    }
     std::cout << "Installer case " << mode << " PASS\n";
   } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
@@ -945,7 +1009,7 @@ def main():
         source.write_text(SOURCE)
         binary = work / 'test'
         common = native / 'platform/common'
-        sources = [path for path in sorted(common.glob('*.cc')) if path.name != 'interface_method_selection.cc'] + [native / 'evolution/dex_schema.cc']
+        sources = [path for path in sorted(common.glob('*.cc')) if path.name not in ('interface_method_selection.cc', 'member_mapping.cc', 'member_retirement.cc')] + [native / 'evolution/dex_schema.cc']
         # Select the host libc++ platform before enabling only the production
         # Android pointer-map declaration. No target libc headers are loaded.
         prelude = work / 'prelude.h'

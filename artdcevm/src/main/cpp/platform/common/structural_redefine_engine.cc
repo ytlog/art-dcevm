@@ -11,6 +11,7 @@
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/jni_interface_dispatch.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/verification_redirect.h"
 #include "platform/symbols/retransform_symbols.h"
@@ -285,6 +286,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   imt_sealing::Installed(prepared.retirement && sealing_prepared);
   narrowed_references::Installed(prepared.retirement && references_prepared);
   invoke_kind::Installed(prepared.retirement && invoke_kind_prepared);
+  jni_interface_dispatch::Configure(vm, env);
   // ThreadEnd runs on the ending attachment; clear TLS before ART can reuse
   // its Thread/JNIEnv on this OS thread. Failure leaves per-link probing intact.
   jvmtiEventCallbacks callbacks{};
