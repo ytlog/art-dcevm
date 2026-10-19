@@ -29,6 +29,10 @@ public final class InterfaceSymbolState {
     private final MethodHandle classHandle = MethodHandles.publicLookup().findVirtual(InterfaceSymbolFixture.Lost.class, "value", MethodType.methodType(int.class));
     private final MethodHandle parentEcho = MethodHandles.publicLookup().findVirtual(parent,"echo",MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class));
     private final MethodHandle bodyErrorHandle = MethodHandles.publicLookup().findVirtual(parent, "badArgument", MethodType.methodType(int.class));
+    public static class OrdinaryLookup {
+        public InterfaceSymbolFixture.Result objectValue() { return null; }
+        public int echo(InterfaceSymbolFixture.Result value) { return 7; }
+    }
     public Class<?> aliasReturn;
     private Method lateChild, lateParent;
     public InterfaceSymbolState() throws Exception { }
@@ -77,6 +81,15 @@ public final class InterfaceSymbolState {
         check.eq(prefix+"unreflectChildStatic", changed && kind.equals("static") ? 11 :
                 changed && kind.equals("private") ? "java.lang.IllegalAccessException" : "java.lang.NoSuchMethodException",
                 result(() -> MethodHandles.publicLookup().unreflect(child.getDeclaredMethod("value")).invokeWithArguments()));
+        for (Class<?> owner : new Class<?>[]{parent, OrdinaryLookup.class}) {
+            String key=prefix+(owner==parent?"interface":"ordinary");
+            check.eq(key+"AliasedReturn", "java.lang.IllegalAccessException",
+                    result(() -> MethodHandles.publicLookup().findVirtual(owner,"objectValue",MethodType.methodType(aliasReturn))));
+            check.eq(key+"AliasedParameter", "java.lang.IllegalAccessException",
+                    result(() -> MethodHandles.publicLookup().findVirtual(owner,"echo",MethodType.methodType(int.class,aliasReturn))));
+            check.eq(key+"WrongReturn", "java.lang.NoSuchMethodException",
+                    result(() -> MethodHandles.publicLookup().findVirtual(owner,"objectValue",MethodType.methodType(String.class))));
+        }
         check.eq(prefix+"ordinaryStaticHandle", 9,
                 result(() -> MethodHandles.publicLookup().findStatic(Math.class,"abs",MethodType.methodType(int.class,int.class)).invokeWithArguments(-9)));
     }

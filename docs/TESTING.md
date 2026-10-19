@@ -222,3 +222,5 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 `proxy-interface` 组的父接口场景包括正反四目标批次顺序、父接口自身的父接口演进、A+B 与仅 A 的两个 Proxy 类、handler Method 身份、缓存 Proxy 构造器、精确收窄引用规则、热分派、GC 与规划后回滚。验证器独立要求对应两轮的行为记录一致，仅排除输入顺序和拒绝原因的目标前缀。
 
 `compare-jbr-inverse-parents.py --java-home <fixed-jbr>` 与设备组 `inverse-parents` 覆盖已有 private/static 声明新增 default/abstract 父接口的四种组合。同批更新父接口、四个子接口及普通类，交换批次顺序，检查两轮恢复、规划失败、缓存成员、JNI、Proxy、共享父路径、后加载类型与 GC。固定 JBR 对缓存槽别名及旧 private 帧的结果另有精确预期；设备活动帧拒绝场景仅证明失败原子性，不计为活动帧功能已对齐。
+
+`interface-symbols` 还在每轮失败、更新和恢复前后独立验证普通类及接口实例方法的返回／参数加载器别名，要求精确 `IllegalAccessException`，错误返回描述符要求 `NoSuchMethodException`；固定 JBR 工具共享行为夹具，设备报告验证器另行固定预期。

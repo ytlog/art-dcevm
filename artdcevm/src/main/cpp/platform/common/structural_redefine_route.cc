@@ -283,7 +283,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
       if (interfaces && interfaces->Available()) {
         // Public local access can update boot entry points. Request it only for
         // an interface batch, while still Native and before the loaded-class view.
-        method_handle_lookup::Prepare(jni, process->snapshot_env);
+        if (method_handle_lookup::Prepare(jni, process->snapshot_env)) method_handle_lookup::Enable();
         continue;
       }
       Diagnose(Signature(definitions[i].klass) + ": " + (interfaces ? interfaces->RuntimeState() : process->interface_runtime), true);

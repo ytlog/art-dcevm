@@ -28,7 +28,11 @@ jobject reflected=reinterpret_cast<jobject>(42), type=reinterpret_cast<jobject>(
 jclass owner=reinterpret_cast<jclass>(40), requested=reinterpret_cast<jclass>(70);
 jstring name=reinterpret_cast<jstring>(99);
 jobjectArray arguments=reinterpret_cast<jobjectArray>(56);
-std::vector<jclass> parameters;
+std::vector<jclass> parameters, actual_parameters;
+jclass actual_return=reinterpret_cast<jclass>(70);
+jobject actual_method=reinterpret_cast<jobject>(72);
+jobjectArray actual_arguments=reinterpret_cast<jobjectArray>(73);
+jmethodID reflected_return=reinterpret_cast<jmethodID>(17), reflected_parameters=reinterpret_cast<jmethodID>(18);
 jmethodID instance=reinterpret_cast<jmethodID>(11), virtual_method=reinterpret_cast<jmethodID>(12);
 jfieldID return_field=reinterpret_cast<jfieldID>(13), flags_field=reinterpret_cast<jfieldID>(15);
 void* replacement;
@@ -55,8 +59,12 @@ void Clear(JNIEnv*){pending=false;}
 jboolean Instance(JNIEnv*,jobject o,jclass){return o==type&&type_valid;}
 jint IntField(JNIEnv*,jobject o,jfieldID f){Require(o==owner&&f==flags_field,"wrong Class flag field");return (interface_class?0x201:1)|(obsolete?0x00200000:0);}
 jobject ObjectField(JNIEnv*,jobject o,jfieldID f){Require(o==type&&f==return_field,"wrong MethodType field");return requested;}
-jsize Length(JNIEnv*,jarray a){Require(a==arguments,"wrong parameter array");return parameters.size();}
-jobject Element(JNIEnv*,jobjectArray a,jsize i){Require(a==arguments&&i>=0&&size_t(i)<parameters.size(),"wrong parameter element");return parameters[i];}
+jsize Length(JNIEnv*,jarray a){Require(a==arguments||a==actual_arguments,"wrong parameter array");return a==arguments?parameters.size():actual_parameters.size();}
+jobject Element(JNIEnv*,jobjectArray a,jsize i){auto& list=a==arguments?parameters:actual_parameters;Require((a==arguments||a==actual_arguments)&&i>=0&&size_t(i)<list.size(),"wrong parameter element");return list[i];}
+jboolean Same(JNIEnv*,jobject a,jobject b){return a==b;}
+jobject Reflect(JNIEnv*,jclass c,jmethodID m,jboolean st){Require(c==owner&&(reinterpret_cast<uintptr_t>(m)==100||reinterpret_cast<uintptr_t>(m)==101)&&!st,"wrong reflected instance target");return actual_method;}
+jmethodID MethodID(JNIEnv*,jclass,const char* n,const char*){return !std::strcmp(n,"getReturnType")?reflected_return:reflected_parameters;}
+jobject ObjectMethod(JNIEnv*,jobject o,jmethodID m,va_list){Require(o==actual_method,"wrong reflected receiver");return m==reflected_return?static_cast<jobject>(actual_return):static_cast<jobject>(actual_arguments);}
 const char* Utf(JNIEnv*,jstring s,jboolean*){Require(s==name,"wrong lookup name");return requested_name;}
 void Release(JNIEnv*,jstring,const char*){}
 jint Throw(JNIEnv*,jclass c,const char*){if(reinterpret_cast<uintptr_t>(c)==7)internal_throws++;else access_throws++;pending=true;return 0;}
@@ -90,7 +98,7 @@ jvmtiError Local(jvmtiEnv*,jthread t,jint depth,jint slot,jobject* out){Require(
 jvmtiError Signature(jvmtiEnv*,jclass c,char** out,char**){*out=Copy(reinterpret_cast<uintptr_t>(c)>=80?"LParam;":requested_kind?"Ljava/lang/String;":"LResult;");return JVMTI_ERROR_NONE;}
 int main(int argc,char** argv){try{
  Require(argc==2,"mode required");mode=std::stoi(argv[1]);
- JNINativeInterface_ jt{};jt.FindClass=Find;jt.NewGlobalRef=Global;jt.DeleteLocalRef=Delete;jt.ExceptionCheck=Exception;jt.ExceptionClear=Clear;jt.IsInstanceOf=Instance;jt.GetIntField=IntField;jt.GetObjectField=ObjectField;jt.ThrowNew=Throw;jt.GetStaticMethodID=StaticID;jt.CallStaticVoidMethodV=Run;jt.GetArrayLength=Length;jt.GetObjectArrayElement=Element;jt.GetStringUTFChars=Utf;jt.ReleaseStringUTFChars=Release;JNIEnv jni{&jt};
+ JNINativeInterface_ jt{};jt.FindClass=Find;jt.NewGlobalRef=Global;jt.DeleteLocalRef=Delete;jt.ExceptionCheck=Exception;jt.ExceptionClear=Clear;jt.IsInstanceOf=Instance;jt.GetIntField=IntField;jt.GetObjectField=ObjectField;jt.ThrowNew=Throw;jt.GetStaticMethodID=StaticID;jt.GetMethodID=MethodID;jt.CallObjectMethodV=ObjectMethod;jt.ToReflectedMethod=Reflect;jt.IsSameObject=Same;jt.CallStaticVoidMethodV=Run;jt.GetArrayLength=Length;jt.GetObjectArrayElement=Element;jt.GetStringUTFChars=Utf;jt.ReleaseStringUTFChars=Release;JNIEnv jni{&jt};
  jvmtiInterface_1_ vt{};vt.AddCapabilities=Caps;vt.GetClassMethods=Methods;vt.GetMethodName=Name;vt.GetClassFields=Fields;vt.GetFieldName=FieldName;vt.Deallocate=Deallocate;vt.GetMaxLocals=Locals;vt.GetMethodModifiers=Modifiers;vt.GetClassLoader=Loader;vt.GetStackTrace=Stack;vt.GetLocalObject=Local;vt.GetClassSignature=Signature;jvmtiEnv env{&vt};test_env=&env;
  Require(!method_handle_lookup::Available()&&!method_handle_lookup::Enable()&&!installs,"lookup activated before preparation");
  if(mode==4)missing_local=true;
@@ -115,7 +123,13 @@ int main(int argc,char** argv){try{
  missing_local=true;Require(!invoke()&&pending&&internal_throws==1,"unreadable local silently selected parent");missing_local=false;
  type_valid=false;Require(!invoke()&&pending&&internal_throws==2,"unverified argument register used");type_valid=true;
  name_failure=true;Require(!invoke()&&pending&&internal_throws==2&&access_throws==3,"pending metadata exception overwritten");name_failure=false;
- reflected=nullptr;requested_name="missing";Require(!invoke()&&!pending&&access_throws==3,"original missing member failure overwritten");
+ static_method=false;interface_class=false;
+ requested=reinterpret_cast<jclass>(71);Require(!invoke()&&pending&&access_throws==4,"ordinary instance return alias did not throw access exception");requested=reinterpret_cast<jclass>(70);
+ member_signature="(LParam;)LResult;";parameters={reinterpret_cast<jclass>(81)};actual_parameters={reinterpret_cast<jclass>(80)};
+ Require(!invoke()&&pending&&access_throws==5,"ordinary instance parameter alias did not throw access exception");
+ parameters={reinterpret_cast<jclass>(80)};Require(invoke()==reflected&&!pending,"matching instance identities did not delegate");
+ parameters.clear();actual_parameters.clear();member_signature="()LResult;";static_method=true;interface_class=true;
+ reflected=nullptr;requested_name="missing";Require(!invoke()&&!pending&&access_throws==5,"original missing member failure overwritten");
  }
  Require(allocations==frees,"JVMTI buffers leaked");std::cout<<"Lookup guard case "<<mode<<" PASS\n";
  }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}

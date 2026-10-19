@@ -15,6 +15,7 @@ jvmtiEnv* environment = nullptr;
 jclass method_type = nullptr, access_error = nullptr, internal_error = nullptr;
 jfieldID return_field = nullptr, class_flags_field = nullptr;
 jmethodID instance_method = nullptr, find_virtual = nullptr;
+jmethodID reflected_return = nullptr, reflected_parameters = nullptr;
 jint type_slot = -1;
 std::atomic<bool> enabled{false};
 bool probe_verified = false;
@@ -46,16 +47,17 @@ bool ServiceFailure(JNIEnv* jni) {
   if (!jni->ExceptionCheck()) jni->ThrowNew(internal_error, "live MethodHandle lookup argument unavailable");
   return true;
 }
-// Only an exact own static declaration can make this decision. ART still owns
-// every inherited/instance lookup; public JVMTI supplies declared member IDs.
-// Compare descriptors before libcore resolves parameter Class identities, as
-// JBR rejects the invocation kind before same-name loader aliasing.
+// ART still chooses the declaration through getInstanceMethod. At each native
+// declared-method step, public JVMTI describes complete signatures before
+// libcore's parameter/return Class identity checks. A descriptor match with a
+// foreign-loader Class is an access/linkage failure on JBR, not a missing member.
+// Interface static hiding retains its earlier invocation-kind precedence.
 bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   if (!name || !args) return false;  // Preserve the original null checks.
   const jint flags = jni->GetIntField(klass, class_flags_field);
   // dex/modifiers.h, fixed 11--17: leave obsolete mirrors to the original check.
   constexpr jint kAccObsoleteObject = 0x00200000;
-  if (!(flags & evolution::kAccInterface) || (flags & kAccObsoleteObject)) return false;
+  if (flags & kAccObsoleteObject) return false;
   jvmtiFrameInfo frames[3]{};
   jint count = 0;
   if (environment->GetStackTrace(nullptr, 0, 3, frames, &count)) return ServiceFailure(jni);
@@ -80,7 +82,7 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   for (jint i = 0; i < count; ++i) {
     jint modifiers = 0;
     if (environment->GetMethodModifiers(methods.value[i], &modifiers)) return ServiceFailure(jni);
-    if (!(modifiers & evolution::kAccStatic)) continue;
+    if ((modifiers & evolution::kAccStatic) && !(flags & evolution::kAccInterface)) continue;
     Text member_name, signature;
     if (environment->GetMethodName(methods.value[i], &member_name.value, &signature.value, nullptr)) return ServiceFailure(jni);
     if (std::strcmp(member_name.value, requested_name.chars)) continue;
@@ -103,9 +105,31 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
       at += size;
     }
     if (at + 1 != end) continue;
-    if (probing) observed = true;
-    jni->ThrowNew(access_error, "interface method is static");
-    return true;
+    if (modifiers & evolution::kAccStatic) {
+      if (probing) observed = true;
+      jni->ThrowNew(access_error, "interface method is static");
+      return true;
+    }
+    // Use ART's reflection conversion for actual Class identities; do not
+    // resolve descriptor strings through a second class-loader search.
+    Local<jobject> reflected{jni, jni->ToReflectedMethod(static_cast<jclass>(klass), methods.value[i], JNI_FALSE)};
+    if (!reflected.value || jni->ExceptionCheck()) return ServiceFailure(jni);
+    Local<jobject> actual_return{jni, jni->CallObjectMethod(reflected.value, reflected_return)};
+    if (!actual_return.value || jni->ExceptionCheck()) return ServiceFailure(jni);
+    bool aliases = !jni->IsSameObject(requested_return.value, actual_return.value);
+    Local<jobjectArray> actual_parameters{jni, static_cast<jobjectArray>(jni->CallObjectMethod(reflected.value, reflected_parameters))};
+    if (!actual_parameters.value || jni->ExceptionCheck()) return ServiceFailure(jni);
+    if (jni->GetArrayLength(actual_parameters.value) != parameters) return ServiceFailure(jni);
+    for (jsize parameter = 0; parameter < parameters; ++parameter) {
+      Local<jobject> requested_parameter{jni, jni->GetObjectArrayElement(args, parameter)};
+      Local<jobject> actual_parameter{jni, jni->GetObjectArrayElement(actual_parameters.value, parameter)};
+      if (!actual_parameter.value || jni->ExceptionCheck()) return ServiceFailure(jni);
+      aliases |= !jni->IsSameObject(requested_parameter.value, actual_parameter.value);
+    }
+    if (aliases) {
+      jni->ThrowNew(access_error, "method type has a different class-loader identity");
+      return true;
+    }
   }
   return false;
 }
@@ -161,6 +185,10 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   if (!klass.value) { jni->ExceptionClear(); return false; }
   Local<jclass> lookup{jni, jni->FindClass("java/lang/invoke/MethodHandles$Lookup")};
   if (!lookup.value) { jni->ExceptionClear(); return false; }
+  Local<jclass> reflected{jni, jni->FindClass("java/lang/reflect/Method")};
+  if (!reflected.value) { jni->ExceptionClear(); return false; }
+  reflected_return = jni->GetMethodID(reflected.value, "getReturnType", "()Ljava/lang/Class;");
+  reflected_parameters = jni->GetMethodID(reflected.value, "getParameterTypes", "()[Ljava/lang/Class;");
   if (!method_type) method_type = GlobalClass(jni, "java/lang/invoke/MethodType");
   if (!method_type) { jni->ExceptionClear(); return false; }
   if (!access_error) access_error = GlobalClass(jni, "java/lang/IllegalAccessException");
@@ -177,7 +205,7 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     if (find_virtual && !env->GetMaxLocals(find_virtual, &locals) && locals >= 4) type_slot = locals - 1;
   }
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); return false; }
-  if (!return_field || !class_flags_field || !instance_method || !find_virtual || type_slot < 0) return false;
+  if (!return_field || !class_flags_field || !instance_method || !find_virtual || !reflected_return || !reflected_parameters || type_slot < 0) return false;
   Local<jclass> probe{jni, jni->FindClass("com/github/ytlog/artdcevm/internal/MethodHandleLookupProbe")};
   jmethodID run = probe.value ? jni->GetStaticMethodID(probe.value, "run", "()V") : nullptr;
   if (!run || jni->ExceptionCheck()) { jni->ExceptionClear(); return false; }
@@ -204,7 +232,7 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
 }
 bool Available() {
   return probe_verified && target && environment && method_type && access_error && internal_error && return_field && class_flags_field &&
-      instance_method && find_virtual && type_slot >= 0;
+      instance_method && find_virtual && reflected_return && reflected_parameters && type_slot >= 0;
 }
 bool Enable() {
   if (!Available()) return false;

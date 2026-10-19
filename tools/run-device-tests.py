@@ -1437,6 +1437,10 @@ def interface_symbol_checks(kind, changed, late=True):
         ordinaryStaticHandle=9,
         childInstance=True, parentInstance=True, identity=True, marker=31, peerCall=5 if changed else 3,
         newReceiverChild=failure if changed else 7, cachedChildJni=7, cachedParentJni=7)
+    for _owner in ("interface","ordinary"):
+        result.update({_owner+"AliasedReturn":"java.lang.IllegalAccessException",
+                       _owner+"AliasedParameter":"java.lang.IllegalAccessException",
+                       _owner+"WrongReturn":"java.lang.NoSuchMethodException"})
     if changed and kind == "static":
         result.update(freshChildStaticHandle=11, aliasReturnDistinct=True, aliasReturnSameName=True,
                       freshAliasedChildHandle="java.lang.IllegalAccessException", freshAliasedParameterHandle="java.lang.IllegalAccessException")
