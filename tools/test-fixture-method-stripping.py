@@ -30,6 +30,7 @@ def main():
     private int directValue() { return 7; }
     public int throughDirect() { return directValue(); }
     public native int nativeValue();
+    public Object token = new Object();
 }''')
         (directory / 'Probe.java').write_text('''public class Probe {
     public static void main(String[] ignored) throws Exception {
@@ -47,6 +48,14 @@ def main():
         klass = directory / 'Subject.class'
         original = klass.read_bytes()
         assert builder.strip_class_methods(original, []) == original
+        described = builder.strip_class_methods(original, [], field_access_changes=[['token', 'Ljava/lang/Object;', 0x1001]])
+        assert described != original
+        assert builder.strip_class_methods(described, [], field_access_changes=[['token', 'Ljava/lang/Object;', 1]]) == original
+        for entries in ([['missing', 'I', 1]], [['token', 'I', 1]],
+                        [['token', 'Ljava/lang/Object;', 1]] * 2, [['token', 'Ljava/lang/Object;', 65536]]):
+            try: builder.strip_class_methods(original, [], field_access_changes=entries)
+            except ValueError: pass
+            else: raise AssertionError('Invalid field access recipe accepted')
         # Enum kind is independent of its superclass. Recipes must preserve
         # every method/code byte while changing the ClassFile flag word.
         changed = builder.strip_class_methods(original, [], class_access={'clear': 0, 'set': 0x4000})

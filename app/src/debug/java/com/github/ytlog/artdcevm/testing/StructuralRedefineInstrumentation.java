@@ -17,6 +17,8 @@ import com.github.ytlog.artdcevm.fixture.InterfaceInvokeKindFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceParentFixture;
 import com.github.ytlog.artdcevm.fixture.SuperBatchFixture;
 import com.github.ytlog.artdcevm.fixture.ModifierFlagsFixture;
+import com.github.ytlog.artdcevm.fixture.MemberDescriptorFixture;
+import com.github.ytlog.artdcevm.fixture.MemberDescriptorState;
 import com.github.ytlog.artdcevm.fixture.KindFixture;
 import com.github.ytlog.artdcevm.fixture.InvokeKindFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
@@ -180,6 +182,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly && arguments != null && arguments.containsKey("scenario")) {
             String isolated = arguments.getString("scenario");
             if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
+            else if ("member-descriptors".equals(isolated)) runMemberDescriptorScenarios();
             else if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
             else if ("interface-abstract".equals(isolated)) runAbstractInterfaceScenarios();
@@ -392,6 +395,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runInterfaceRemovalScenarios();
         if (!ordinaryOnly) runStaticNarrowingScenarios();
         if (!ordinaryOnly) runClassKindScenarios();
+        if (!ordinaryOnly) runMemberDescriptorScenarios();
     }
 
     // A Proxy implementation of a redefined interface stays: kept methods still
@@ -3820,6 +3824,46 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     private static void scenarioCheckCaller(int value) {
         if (value != 2) throw new AssertionError("KindFixture.Caller precondition: " + value);
+    }
+
+    private void runMemberDescriptorScenarios() throws Exception {
+        MemberDescriptorState state = new MemberDescriptorState();
+        for (int i = 0; i < DISPATCH_CALLS; ++i)
+            if (MemberDescriptorFixture.Calls.call(state.receiver) != 52) throw new AssertionError("descriptor warmup");
+        Class<?>[] targets = {MemberDescriptorFixture.Contract.class, MemberDescriptorFixture.Peer.class};
+        for (int round = 0; round < 2; ++round) {
+            for (String kind : new String[]{"synthetic", "bridge", "varargs", "strict", "field", "all"}) {
+                String suffix = kind + "-" + round, variant = "descriptor-" + kind;
+                runScenario("interface-descriptor-abort-" + suffix, 110, scenario -> {
+                    scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(targets, variant, variant);
+                    scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                    state.verify(scenario::check, "", kind, false);
+                    Runtime.getRuntime().gc();
+                    state.verify(scenario::check, "gc", kind, false);
+                });
+                runScenario("interface-descriptor-apply-" + suffix, 0, scenario -> {
+                    scenario.redefine(targets, variant, variant);
+                    state.verify(scenario::check, "", kind, true);
+                    Runtime.getRuntime().gc();
+                    state.verify(scenario::check, "gc", kind, true);
+                });
+                runScenario("interface-descriptor-restore-abort-" + suffix, 110, scenario -> {
+                    scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(targets, "descriptor-original", "descriptor-original");
+                    scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                    state.verify(scenario::check, "", kind, true);
+                    Runtime.getRuntime().gc();
+                    state.verify(scenario::check, "gc", kind, true);
+                });
+                runScenario("interface-descriptor-restore-" + suffix, 0, scenario -> {
+                    scenario.redefine(targets, "descriptor-original", "descriptor-original");
+                    state.verify(scenario::check, "", kind, false);
+                    Runtime.getRuntime().gc();
+                    state.verify(scenario::check, "gc", kind, false);
+                });
+            }
+        }
     }
 
     // Bridge, varargs, strict and synthetic flags only describe a method.

@@ -88,7 +88,7 @@ else:
     assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
     calls = len(log.read_text().splitlines()); recipe.unlink()
     assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before
-    for name in ('method-access.json', 'rename-strings.json', 'class-method-access.json'):
+    for name in ('method-access.json', 'rename-strings.json', 'class-method-access.json', 'class-field-access.json'):
         recipe = fixtures / 'alpha' / name
         calls = len(log.read_text().splitlines()); recipe.write_text('{}')
         assert len(run()) == calls + 2 and tree(out / 'beta') == beta_before

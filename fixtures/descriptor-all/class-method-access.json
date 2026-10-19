@@ -1,0 +1,39 @@
+{
+  "com/github/ytlog/artdcevm/fixture/MemberDescriptorFixture$Contract.class": [
+    [
+      "staticValue",
+      "()I",
+      4105
+    ],
+    [
+      "hidden",
+      "()I",
+      4098
+    ],
+    [
+      "value",
+      "()I",
+      4161
+    ],
+    [
+      "sum",
+      "([I)I",
+      129
+    ],
+    [
+      "abstractSum",
+      "([I)I",
+      5313
+    ],
+    [
+      "throughPrivate",
+      "()I",
+      4097
+    ],
+    [
+      "half",
+      "(D)D",
+      2049
+    ]
+  ]
+}

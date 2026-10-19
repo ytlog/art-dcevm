@@ -34,8 +34,8 @@
 | --- | --- |
 | 新增 native；direct 方法遮蔽继承的接口／Object 方法；选择服务不可用时 default 与非 public 类方法同签名或旧 ART 无法链接非 public 实现 | `METHOD_ADDED`（63） |
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
-| 字段修饰符变化；成员映射不可用时的字段增删或改类型 | `SCHEMA_CHANGED`（64） |
-| 接口方法 abstract 与 default 互换及调用方式变化之外的修饰符变化；选择服务不可用时改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
+| synthetic 之外的字段修饰符变化；成员映射不可用时的字段变化 | `SCHEMA_CHANGED`（64） |
+| 接口方法描述标志、abstract 与 default 互换及调用方式变化之外的修饰符变化；选择服务不可用时改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
 | 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或选择服务不可用且其 default 出现上述同签名 | `HIERARCHY_CHANGED`（66） |
 | class/interface 跨界时存在已加载子类型；需要实例前置检查却能力不可用或存在直接实例 | 分别为 62、70；允许的种类转换见[转换矩阵](CLASS_KIND_EVOLUTION.md) |
 | boot 接口、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
@@ -58,6 +58,8 @@
 接口方法体修改也会重新分配所有已加载实现类及其子类的实例，保留兼容字段值，改写引用并去优化；代价随受影响实例与堆大小增加。它不会重新执行已有实例的构造器。
 
 `java.lang.reflect.Proxy` 生成的实现类（例如 Retrofit 服务或注解实例）保留原类与 `InvocationHandler`：保留的方法照常交给处理器，处理器收到的是新接口的 `Method`；Proxy 没有的新增 abstract 方法调用时抛 `AbstractMethodError`，新增 default 执行其方法体；之后用同一接口创建的代理复用这个类，行为相同，与 JBR 一致。接口新增父接口时，已有和之后创建的代理都成为该父接口的实例，与 JBR 一致：Proxy 原本没有的父接口方法执行父接口的 default 方法体或抛 `AbstractMethodError`，Proxy 原本就有的方法仍交给处理器。新增 abstract 方法不因 Proxy 缺实现而拒绝（Proxy 没有可以同批补齐的源码），普通实现类同样在调用时按上文规则抛错。父接口按整批的最终关系统一更新：支持移除与恢复、多个接口共同新增父接口，以及新父接口同批重定义；还有其他继承路径的父接口保留，最后一条路径移除后代理才失去该类型。
+
+接口方法的 synthetic、bridge、varargs、strict，以及字段的 synthetic，可经公共结构修饰符路径双向变化。描述标志变化保留成员身份、缓存调用目标和兼容字段值；新反射对象报告新标志，已有反射对象保留创建时的标志，与固定 JBR 一致。接口访问级别及其他字段修饰符限制继续适用。
 
 ## 不支持的变化（以 JVMTI 错误拒绝，旧定义保持不变）
 

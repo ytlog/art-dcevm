@@ -1,0 +1,19 @@
+{
+  "com/github/ytlog/artdcevm/fixture/MemberDescriptorFixture$Contract.class": [
+    [
+      "value",
+      "()I",
+      4097
+    ],
+    [
+      "staticValue",
+      "()I",
+      4105
+    ],
+    [
+      "hidden",
+      "()I",
+      4098
+    ]
+  ]
+}

@@ -104,7 +104,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if ((mode == 2 || mode == 3 || mode == 5 || mode == 10 || mode == 11) && name == std::string(kResolveCaller.name)) return HookAddress(Caller);
   if ((mode == 2 || mode == 3 || mode == 10 || mode == 11) && name == std::string(kResolveCache.name)) return HookAddress(Cache);
   if ((mode == 1 || mode == 2 || mode == 5 || mode >= 6) && name == std::string(kNterpGetMethod.name)) return HookAddress(Nterp);
-  if (mode == 11) {
+  if (mode == 11 || mode == 16) {
     if (name == std::string(kObsoleteCacheLegacy.name)) return HookAddress(CacheRead);
     if (name == std::string(kSelectVirtual.name) || name == std::string(kSelectInterface.name) ||
         name == std::string(kObsoleteCacheRead.name) || name == std::string(kObsoleteCacheRaw.name)) return nullptr;
@@ -119,7 +119,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
     if (name == std::string(kMethodLoader.name)) return HookAddress(Loader);
     if (name == std::string(kObsoleteCacheRead.name) || name == std::string(kObsoleteCacheRaw.name)) return HookAddress(CacheRead);
     if (name == std::string(symbols::runtime_thread::kReadBarrierMark.name)) return HookAddress(Mark);
-    if (name == std::string(symbols::runtime_thread::kUseReadBarrier.name)) return &use_barrier;
+    if (name == std::string(symbols::runtime_thread::kUseReadBarrier.name)) return mode == 16 ? nullptr : &use_barrier;
     if (mode != 9 && name == std::string(symbols::interface_redefinition::kHandleScopeVisitRoots.name)) return HookAddress(Visit);
   }
   return nullptr;
@@ -222,11 +222,18 @@ int main(int argc, char** argv) {
         Require(!invoke_kind::SelfCalls(), "unprobed scope enabled self calls");
         invoke_kind::ObserveScope(&fake_thread,&thread_layout,&layout,{&admission.root});
         Require(!invoke_kind::SelfCalls(), "unprobed Class enabled self calls");
-        if (mode == 11) {
+        if (mode == 11 || mode == 16) {
           for (const auto& hook : hooks)
             if (std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheLegacy.name)
               Require(reinterpret_cast<decltype(&CacheRead)>(hook.replacement)(&method) == 0x7000,
                       "unprobed legacy cache bypassed ART");
+        }
+        if (mode == 16) {
+          bool found = false;
+          for (const auto& hook : hooks) found |= std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheLegacy.name;
+          Require(found, "legacy copied-obsolete cache hook requires an unavailable modern collector flag");
+          self = &fake_thread;
+          fake_thread.marking = 1;
         }
         invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8);
         const bool complete = mode == 6 || mode == 10 || mode == 12;
@@ -237,7 +244,7 @@ int main(int argc, char** argv) {
         for (bool iface : {false, true})
           Require(invoke_kind::SelectionServices(iface) == (invoke_kind::SelectionUnavailable(iface) == nullptr),
                   "selection reason disagrees with capability");
-        if (complete || mode == 7 || mode == 8 || mode == 9 || mode == 14 || mode == 15 || mode == 11 || mode == 13) {
+        if (complete || mode == 7 || mode == 8 || mode == 9 || mode == 14 || mode == 15 || mode == 11 || mode == 13 || mode == 16) {
           void* klass = mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
           Require(klass != MAP_FAILED, "unable to allocate low-address class fixture");
           auto* fields = static_cast<uint32_t*>(klass); fields[0] = 0x00200000; fields[1] = 0x9000;
@@ -256,15 +263,15 @@ int main(int argc, char** argv) {
             obsolete->length = 1; obsolete->elements[0] = reinterpret_cast<uintptr_t>(&method);
             Require(call(&method) == 0x7000, "earlier non-structural frame lost its obsolete-map DEX");
             obsolete->length = 0;
-            use_barrier = false;
+            use_barrier = false; if (mode == 16) fake_thread.marking = 0;
             Require(call(&method) == 0x9000u, "CMC copied cache used the CC marker");
-            use_barrier = true;
+            use_barrier = true; if (mode == 16) fake_thread.marking = 1;
             fields[0] = 0;
             Require(call(&method) == 0x7000, "non-structural obsolete cache bypassed ART");
             fields[0] = 0x00200000; method.access_flags.store(0x00040000);
             Require(call(&method) == 0x7000, "declared obsolete cache bypassed ART");
           }
-          Require(cache_reads == (mode == 13 ? 0 : mode == 11 ? 4 : 6), "wrong obsolete cache delegation");
+          Require(cache_reads == (mode == 13 ? 0 : (mode == 11 || mode == 16) ? 4 : 6), "wrong obsolete cache delegation");
           if (mode == 12 || mode == 13) {
             uint8_t bytes[256]{};
             uint32_t size = sizeof(bytes), count = 10, offset = 0x70;
@@ -386,7 +393,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(16):
+        for case in range(17):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')

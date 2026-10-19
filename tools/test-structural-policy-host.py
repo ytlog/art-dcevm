@@ -63,7 +63,7 @@ void MappingRequirements() {
     for (uint32_t method_access : {acc::kAccPublic, acc::kAccPrivate,
          acc::kAccPublic | acc::kAccStatic, acc::kAccPublic | acc::kAccAbstract}) {
       live.methods[0].access = method_access;
-      for (int change = 0; change < 25; ++change) {
+      for (int change = 0; change < 27; ++change) {
         auto before = live;
         auto next = live;
         policy::LoadedHierarchy hierarchy;
@@ -123,6 +123,10 @@ void MappingRequirements() {
             mapping_change = true; break;
           case 24: next.fields.clear(); next.methods.erase(next.methods.begin());
             mapping_change = true; break;
+          case 25: next.fields[0].access |= acc::kAccSynthetic;
+            mapping_change = interface_target; break;
+          case 26: next.methods[0].access |= acc::kAccSynthetic;
+            mapping_change = interface_target; break;
         }
         // Additional combinations exercise dependency marks surviving multiple
         // accepted branches and disappearing when a later branch rejects.
@@ -646,6 +650,16 @@ int main(int argc, char** argv) {
         auto changed = field; changed.fields[0].access &= ~acc::kAccFinal;
         Require(policy::Evaluate(field, changed, hierarchy, members).error ==
                 JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED, "interface field modifier change must be rejected");
+        auto descriptive = field; descriptive.fields[0].access |= acc::kAccSynthetic;
+        const auto described = policy::Evaluate(field, descriptive, hierarchy, members);
+        Require(described.error == JVMTI_ERROR_NONE && described.fields_structural && described.requires_member_mapping,
+                "interface field synthetic must use structural mapping");
+        Require(policy::Evaluate(descriptive, field, hierarchy, members).error == JVMTI_ERROR_NONE,
+                "interface field synthetic must restore");
+        for (const auto& abilities : {body_only, unmapped})
+          Require(policy::Evaluate(field, descriptive, hierarchy, abilities).error ==
+                  JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
+                  "interface field synthetic requires interface mapping");
         for (const auto& abilities : {body_only, unmapped})
           Require(policy::Evaluate(contract, field, hierarchy, abilities).error ==
                   JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
@@ -688,6 +702,27 @@ int main(int argc, char** argv) {
              "static addition unrelated to virtual dispatch must be accepted");
       // Kept methods still keep their modifiers, and a retired identity keeps its kind.
       {
+        for (uint32_t before : {acc::kAccPublic, acc::kAccPrivate, acc::kAccPublic | acc::kAccStatic,
+                                acc::kAccPublic | acc::kAccAbstract}) {
+          for (uint32_t flag : {0x1000u, 0x40u, 0x80u, 0x800u, 0x10c0u}) {
+            if ((before & acc::kAccAbstract) && (flag & 0x800u)) continue;
+            auto original = contract; original.methods = {{"flags", "([I)I", before}};
+            auto changed = original; changed.methods[0].access |= flag;
+            for (const auto& pair : {std::make_pair(original, changed), std::make_pair(changed, original)}) {
+              const auto result = policy::Evaluate(pair.first, pair.second, hierarchy, members);
+              Require(result.error == JVMTI_ERROR_NONE && result.methods_structural && result.requires_member_mapping &&
+                      result.kind_changes.empty() && result.retired_methods.empty(),
+                      "descriptive flags must preserve method identity and invoke kind");
+              Require(policy::Evaluate(pair.first, pair.second, hierarchy, body_only).error == kModifiers,
+                      "interface descriptive flags require interface mapping");
+            }
+          }
+        }
+        auto original = contract; original.methods = {{"flags", "([I)I", acc::kAccPublic | acc::kAccAbstract}};
+        auto changed = original; changed.methods[0].access = acc::kAccPublic | 0x10c0u;
+        Require(policy::Evaluate(original, changed, hierarchy, members).error == JVMTI_ERROR_NONE &&
+                policy::Evaluate(changed, original, hierarchy, members).error == JVMTI_ERROR_NONE,
+                "descriptive bits must compose with abstract/default changes");
         auto widened = contract; widened.methods[2].access = acc::kAccPublic | acc::kAccStatic;
         reject(widened, kModifiers, "interface method modifier change must be rejected");
         const policy::RetiredMethods retired{{{"gone", "()I"}, acc::kAccPrivate | acc::kAccStatic}};

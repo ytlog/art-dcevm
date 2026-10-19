@@ -286,7 +286,11 @@ bool Prepare(std::vector<Hook>* hooks) {
   use_read_barrier = static_cast<const bool*>(symbols::Find(symbols::runtime_thread::kUseReadBarrier));
   // Profile Saver also reads copied obsolete methods. Older ART has the
   // same DEX ownership rule without switch-selector services or templates.
-  if (cache_legacy && !cache_read && !cache_raw && mark && use_read_barrier)
+  // ART 11--13's non-template getter uses the build-time read barrier. Most
+  // modules do not export the later collector-selection flag. Reference()
+  // already uses the verified Thread marking declaration in that case; the
+  // Class proof gates all private reads until that declaration is available.
+  if (cache_legacy && !cache_read && !cache_raw && mark)
     prepared.push_back({cache_legacy, HookAddress(CopiedObsoleteCache<true>),
                         HookSlot(&original_cache_read), kObsoleteCacheLegacy.name});
   // Obsolete copied defaults need their retained DEX even when an invoke-kind

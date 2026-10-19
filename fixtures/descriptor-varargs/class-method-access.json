@@ -1,0 +1,14 @@
+{
+  "com/github/ytlog/artdcevm/fixture/MemberDescriptorFixture$Contract.class": [
+    [
+      "sum",
+      "([I)I",
+      129
+    ],
+    [
+      "abstractSum",
+      "([I)I",
+      1153
+    ]
+  ]
+}

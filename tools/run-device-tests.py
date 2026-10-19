@@ -404,6 +404,14 @@ CLASS_KIND_SCENARIOS.extend((f"class-kind-enum-reject-{kind}", [f"class-kind-enu
 CLASS_KIND_SCENARIOS.extend((f"class-kind-{kind}-enum", [f"class-kind-{kind}-e"], 66) for kind in ("c", "i", "a"))
 SCENARIOS += tuple(CLASS_KIND_SCENARIOS)
 
+MEMBER_DESCRIPTOR_SCENARIOS = []
+for _round in range(2):
+    for _kind in ("synthetic", "bridge", "varargs", "strict", "field", "all"):
+        for _phase, _code in (("abort", 110), ("apply", 0), ("restore-abort", 110), ("restore", 0)):
+            _variant = "descriptor-original" if _phase.startswith("restore") else "descriptor-" + _kind
+            MEMBER_DESCRIPTOR_SCENARIOS.append((f"interface-descriptor-{_phase}-{_kind}-{_round}", [_variant] * 2, _code))
+SCENARIOS += tuple(MEMBER_DESCRIPTOR_SCENARIOS)
+
 MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
                     "multi-interface-family", "multi-interface-shared", "multi-interface-after-shared", "multi-interface-covered",
                     "interface-overlap-uncovered","interface-overlap-body", "interface-overlap-structural", "interface-overlap-recovery","interface-implementation-body", "interface-implementation-add",
@@ -439,7 +447,7 @@ MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "
 MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy", "tool-retransform-structural", "tool-retransform-restore"})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith(("interface-shadow-", "interface-selection-")) and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("proxy-interface-") and code == 0)
-MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private")))
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private", "interface-descriptor-")))
 VAR_HANDLE_API = 33
 def release_expectation(name, code, required, api, self_selection):
     """Expected code and checks given the reported per-kind selection services."""
@@ -1343,6 +1351,45 @@ for _combination, _default in ((3, 8), (5, 6), (6, 10)):
 
 REQUIRED_CHECKS.update(INTERFACE_SELECTION_REQUIRED)
 
+def member_descriptor_checks(kind, changed, late=True):
+    all_flags = kind == "all"
+    flags = dict(value=1, sum=1, half=1, abstractSum=0x401, hidden=2, throughPrivate=1, staticValue=9)
+    if changed:
+        if all_flags or kind == "synthetic":
+            for name in ("value", "hidden", "staticValue"): flags[name] |= 0x1000
+        if all_flags or kind == "bridge": flags["value"] |= 0x40
+        if all_flags or kind == "varargs":
+            flags["sum"] |= 0x80; flags["abstractSum"] |= 0x10c0 if all_flags else 0x80
+        if all_flags or kind == "strict": flags["half"] |= 0x800
+        if all_flags: flags["throughPrivate"] |= 0x1000
+    result = {}
+    for name, value in flags.items():
+        result[name + "Flags"] = value
+        for label, bit in (("Synthetic", 0x1000), ("Bridge", 0x40), ("Varargs", 0x80), ("Strict", 0x800)):
+            result[name + label] = bool(value & bit)
+    fields = changed and (all_flags or kind == "field")
+    result.update(fieldFlags=0x1019 if fields else 0x19, peerFieldFlags=0x1001 if fields else 1,
+                  inheritedFlags=flags["value"], cachedInheritedFlags=1,
+                  cachedInheritedReflection=11 if changed else 7, virtualCall=11 if changed else 7,
+                  cachedFlags=1, cachedFieldFlags=0x19, cachedPeerFieldFlags=1,
+                  oldCall=64 if changed else 52, newInstance=64 if changed else 52,
+                  cachedReflection=11 if changed else 7, freshReflection=11 if changed else 7,
+                  cachedArrayReflection=7 if changed else 6, cachedHandle=11 if changed else 7,
+                  fieldIdentity=True, peerFieldIdentity=True, peerCall=13 if changed else 3,
+                  marker=31, receiverClass=True)
+    if late: result["lateCall"] = 64 if changed else 52
+    return result
+
+for _name, _, _code in MEMBER_DESCRIPTOR_SCENARIOS:
+    _suffix = _name.removeprefix("interface-descriptor-")
+    _phase, _kind, _round = _suffix.rsplit("-", 2)
+    _changed = _phase in ("apply", "restore-abort")
+    _late = _suffix != "abort-synthetic-0"
+    _checks = member_descriptor_checks(_kind, _changed, _late)
+    REQUIRED_CHECKS[_name] = {**_checks, **{"gc" + key: value for key, value in _checks.items()}}
+    if _code: REQUIRED_CHECKS[_name].update(armed=0, failureHits=1)
+
+
 def scenario_sequence(scenario_group, api=None, self_selection=None):
     if scenario_group == "batch-combinations":
         return [(name, variants, code) for name, variants, code in SCENARIOS if name.startswith("batch-combination-s")]
@@ -1350,6 +1397,8 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         return tuple(item for item in scenario_sequence(scenario_group, api)
                      if not item[0].endswith("-retain") or
                      any(self_selection.values()))
+    if scenario_group == "member-descriptors":
+        return tuple(MEMBER_DESCRIPTOR_SCENARIOS)
     if scenario_group == "class-kinds":
         return tuple(CLASS_KIND_SCENARIOS)
     if scenario_group == "interface-selection":
@@ -1393,7 +1442,7 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         names = [item[0] for item in SCENARIOS]
         return tuple(item for item in SCENARIOS[:names.index("interface-method-bodies")]
                      + SCENARIOS[names.index("interface-hidden"):]
-                     if not item[0].startswith(("static-narrow-", "class-kind-")))
+                     if not item[0].startswith(("static-narrow-", "class-kind-", "interface-descriptor-")))
     raise RunFailure("Unsupported scenario group")
 
 
@@ -1622,7 +1671,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

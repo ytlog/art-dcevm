@@ -160,7 +160,8 @@ def publish(staged, out, state, name, fingerprint):
         shutil.rmtree(backup, ignore_errors=True)
 
 
-def strip_class_methods(data, removals, access_changes=(), renames=None, class_access=None):
+def strip_class_methods(data, removals, access_changes=(), renames=None, class_access=None,
+                        field_access_changes=()):
     """Remove declared classfile methods while preserving caller bytecode verbatim.
 
     This validates fixture identities and supports the standalone JVM probe.
@@ -200,7 +201,8 @@ def strip_class_methods(data, removals, access_changes=(), renames=None, class_a
         return (pool[name], pool[descriptor]), data[start:offset]
     class_flags_offset = offset
     take(6); take(number(2) * 2)
-    for _ in range(number(2)): member()
+    fields_offset = offset
+    fields = [member() for _ in range(number(2))]
     methods_offset = offset
     methods = [member() for _ in range(number(2))]
     trailing_offset = offset
@@ -211,16 +213,24 @@ def strip_class_methods(data, removals, access_changes=(), renames=None, class_a
     for identity in wanted:
         if sum(candidate == identity for candidate, _ in methods) != 1:
             raise ValueError('Method removal did not identify exactly one declaration')
-    changes = {(name.encode('utf-8'), descriptor.encode('utf-8')): access
-               for name, descriptor, access in access_changes}
-    if len(changes) != len(access_changes): raise ValueError('Duplicate classfile access change')
-    if any(identity in wanted or sum(candidate == identity for candidate, _ in methods) != 1
-           for identity in changes): raise ValueError('Classfile access change has no retained declaration')
-    if any(type(access) is not int or not 0 <= access <= 0xffff for access in changes.values()):
-        raise ValueError('Invalid classfile method access flags')
+    def access_overrides(records, entries, removed=()):
+        changes = {(name.encode('utf-8'), descriptor.encode('utf-8')): access
+                   for name, descriptor, access in entries}
+        if len(changes) != len(entries): raise ValueError('Duplicate classfile access change')
+        if any(identity in removed or sum(candidate == identity for candidate, _ in records) != 1
+               for identity in changes): raise ValueError('Classfile access change has no retained declaration')
+        if any(type(access) is not int or not 0 <= access <= 0xffff for access in changes.values()):
+            raise ValueError('Invalid classfile member access flags')
+        return changes
+    changes = access_overrides(methods, access_changes, wanted)
+    field_changes = access_overrides(fields, field_access_changes)
     kept = [(struct.pack('>H', changes[identity]) + raw[2:] if identity in changes else raw)
             for identity, raw in methods if identity not in wanted]
     prefix = bytearray(data[:methods_offset])
+    field_offset = fields_offset + 2
+    for identity, raw in fields:
+        if identity in field_changes: struct.pack_into('>H', prefix, field_offset, field_changes[identity])
+        field_offset += len(raw)
     if class_access is not None:
         if (not isinstance(class_access, dict) or set(class_access) != {'clear', 'set'} or
                 any(type(value) is not int or not 0 <= value <= 0xffff for value in class_access.values())):
@@ -446,6 +456,16 @@ def compile_variant(variant, sources, java, sdk, env, staged, work):
         class_renames = {change[0]: change[3] for change in changes if len(change) == 4}
         klass = classes / path
         klass.write_bytes(strip_class_methods(klass.read_bytes(), [], [change[:3] for change in changes], class_renames))
+    field_recipe = variant / 'class-field-access.json'
+    field_changes = json.loads(field_recipe.read_text()) if field_recipe.exists() else {}
+    if not isinstance(field_changes, dict): raise ValueError('Invalid classfile field access recipe')
+    for relative, changes in field_changes.items():
+        path = Path(relative)
+        if (path.is_absolute() or '..' in path.parts or path.suffix != '.class' or not isinstance(changes, list)
+                or any(not isinstance(change, list) or len(change) != 3 for change in changes)):
+            raise ValueError('Invalid classfile field access recipe entry')
+        klass = classes / path
+        klass.write_bytes(strip_class_methods(klass.read_bytes(), [], field_access_changes=changes))
     kind_recipe = variant / 'class-access.json'
     kind_changes = json.loads(kind_recipe.read_text()) if kind_recipe.exists() else {}
     if not isinstance(kind_changes, dict): raise ValueError('Invalid classfile class access recipe')
@@ -561,7 +581,7 @@ def build(sdk, java, out, fixtures=ROOT / 'fixtures'):
         for manifest in state.glob('*.json'):
             if manifest.stem not in live | {'hier-invalid'}: manifest.unlink()
         for variant, sources in variants:
-            recipes = [variant / name for name in ('remove-methods.json', 'method-access.json', 'rename-strings.json', 'class-method-access.json', 'class-access.json')]
+            recipes = [variant / name for name in ('remove-methods.json', 'method-access.json', 'rename-strings.json', 'class-method-access.json', 'class-field-access.json', 'class-access.json')]
             inputs = sources + [recipe for recipe in recipes if recipe.exists()]
             fingerprint = key({'common': common, 'sources': [(p.relative_to(variant).as_posix(), digest(p)) for p in inputs]})
             if hit(state, variant.name, fingerprint, out / variant.name):

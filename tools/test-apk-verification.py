@@ -216,6 +216,23 @@ class ApkVerificationTests(unittest.TestCase):
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(report, scenario_group="proxy-interface")
 
+    def test_member_descriptors_require_flags_calls_and_atomic_failures(self):
+        for api in (33, 36):
+            report = complete_report(api)
+            report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("interface-descriptor-")]
+            self.assertEqual(len(report["scenarios"]), 48)
+            runner.validate_report(report, scenario_group="member-descriptors")
+            for scenario_name, check in (("interface-descriptor-apply-all-0", "gcvalueFlags"),
+                                         ("interface-descriptor-apply-field-0", "peerFieldIdentity"),
+                                         ("interface-descriptor-abort-synthetic-0", "failureHits"),
+                                         ("interface-descriptor-restore-abort-varargs-1", "cachedArrayReflection"),
+                                         ("interface-descriptor-restore-all-1", "lateCall")):
+                broken = copy.deepcopy(report)
+                scenario = next(s for s in broken["scenarios"] if s["name"] == scenario_name)
+                scenario["checks"] = [c for c in scenario["checks"] if c["name"] != check]
+                with self.subTest(api=api, scenario=scenario_name, check=check), self.assertRaises(runner.RunFailure):
+                    runner.validate_report(broken, scenario_group="member-descriptors")
+
     def test_interface_shadow_requires_jbr_dispatch_on_every_release(self):
         for api in (30, 33, 34, 35, 36, 37):
             report = complete_report(api)

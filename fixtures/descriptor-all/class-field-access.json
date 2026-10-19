@@ -1,0 +1,16 @@
+{
+  "com/github/ytlog/artdcevm/fixture/MemberDescriptorFixture$Contract.class": [
+    [
+      "TOKEN",
+      "Ljava/lang/Object;",
+      4121
+    ]
+  ],
+  "com/github/ytlog/artdcevm/fixture/MemberDescriptorFixture$Peer.class": [
+    [
+      "token",
+      "Ljava/lang/Object;",
+      4097
+    ]
+  ]
+}

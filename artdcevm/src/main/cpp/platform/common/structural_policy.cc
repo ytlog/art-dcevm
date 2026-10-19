@@ -25,7 +25,7 @@ constexpr uint32_t kClassAllowed = kAccessLevel | acc::kAccStatic | acc::kAccFin
     acc::kAccAbstract | kAccSynthetic;
 constexpr uint32_t kClassKinds = acc::kAccInterface | acc::kAccAnnotation | acc::kAccEnum;
 constexpr uint32_t kFieldTransient = 0x0080;
-constexpr uint32_t kFieldAllowed = kAccessLevel | acc::kAccFinal | acc::kAccVolatile | kFieldTransient;
+constexpr uint32_t kFieldAllowed = kAccessLevel | acc::kAccFinal | acc::kAccVolatile | kFieldTransient | kAccSynthetic;
 // Bridge, varargs, strict and synthetic only describe the method to reflection
 // and linking; the structural path gives the new method its new flags.
 constexpr uint32_t kMethodDescriptive = 0x0040 | 0x0080 | 0x0800 | kAccSynthetic;
@@ -244,6 +244,11 @@ Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarch
 Decision CheckInterfaceKindChange(const MemberKey& key, uint32_t before, uint32_t after,
                                   const LoadedHierarchy& hierarchy, bool supported, bool selection) {
   const std::string method = key.first + key.second;
+  // Descriptive bits use the common modifier path, including combinations
+  // with abstract/default changes. They do not change interface selection.
+  before &= ~kMethodDescriptive;
+  after &= ~kMethodDescriptive;
+  if (supported && before == after) return {};
   // Restoring a private instance declaration as public gives implementations
   // a default or miranda again. Reuse addition's visibility/shadow checks;
   // old invoke-direct self calls remain valid without a caller scan.
@@ -353,10 +358,14 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
       continue;
     }
     const uint32_t changed = old.access ^ it->second;
-    if (changed && (interface_target || (changed & ~kFieldAllowed)))
+    const uint32_t allowed = interface_target ? kAccSynthetic : kFieldAllowed;
+    if ((changed & ~allowed) || (changed && interface_target && !interface_members))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_SCHEMA_CHANGED,
                     "unsupported field modifier change: " + old.name);
-    if (changed) decision.fields_structural = true;
+    if (changed) {
+      decision.fields_structural = true;
+      decision.requires_member_mapping |= interface_target;
+    }
     new_fields.erase(it);
   }
   if (!new_fields.empty()) {
