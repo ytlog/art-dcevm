@@ -7,6 +7,18 @@ import java.lang.invoke.MethodType;
 public final class MethodHandleLookupProbe {
     private MethodHandleLookupProbe() { }
     public interface StaticOwner { static int value() { return 1; } }
+    public interface Parent { default int inherited() { return 2; } }
+    public interface Child extends Parent { }
+    public static void runStatic() throws NoSuchMethodException, IllegalAccessException {
+        try {
+            MethodHandles.publicLookup().findStatic(Child.class, "inherited", MethodType.methodType(int.class));
+            throw new AssertionError("inherited instance static lookup accepted");
+        } catch (IllegalAccessException expected) { }
+        try {
+            MethodHandles.publicLookup().findStatic(Child.class, "inherited", MethodType.methodType(String.class));
+            throw new AssertionError("wrong static return lookup accepted");
+        } catch (NoSuchMethodException expected) { }
+    }
     public static void run() throws NoSuchMethodException {
         try {
             MethodHandles.publicLookup().findVirtual(StaticOwner.class, "value", MethodType.methodType(int.class));

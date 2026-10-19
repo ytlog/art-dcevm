@@ -1,8 +1,12 @@
 #include "platform/common/method_handle_lookup.h"
 #include <atomic>
+#include <android/api-level.h>
 #include <cstring>
 #include <mutex>
 #include "platform/common/art_hook.h"
+#include "platform/abi/arm64/common/runtime_objects.h"
+#include "platform/abi/arm64/android11/method_lookup.h"
+#include "platform/abi/arm64/android15/method_lookup.h"
 #include "platform/symbols/method_handle_lookup_symbols.h"
 
 namespace artdcevm::method_handle_lookup {
@@ -12,10 +16,21 @@ Lookup original = nullptr;
 void* target = nullptr;
 void* hook = nullptr;
 jvmtiEnv* environment = nullptr;
-jclass method_type = nullptr, access_error = nullptr, internal_error = nullptr;
+jclass method_type = nullptr, access_error = nullptr, internal_error = nullptr, missing_error = nullptr;
 jfieldID return_field = nullptr, class_flags_field = nullptr;
 jmethodID instance_method = nullptr, find_virtual = nullptr;
 jmethodID reflected_return = nullptr, reflected_parameters = nullptr;
+jmethodID find_static = nullptr, declared_method = nullptr, class_get_method = nullptr;
+jint static_type_slot = -1;
+JavaVM* runtime_vm = nullptr;
+// base/pointer_size.h, fixed 11--17: the helper runs under the FastNative
+// caller's shared mutator access and does not allocate or suspend.
+void* find_interface = nullptr;
+int runtime_api = 0;
+void* (*decode_global)(JavaVM*, jobject) = nullptr;
+jobject (*new_local)(JNIEnv*, void*) = nullptr;
+bool static_verified = false;
+thread_local bool observed_static = false;
 jint type_slot = -1;
 std::atomic<bool> enabled{false};
 bool probe_verified = false;
@@ -58,10 +73,15 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   // dex/modifiers.h, fixed 11--17: leave obsolete mirrors to the original check.
   constexpr jint kAccObsoleteObject = 0x00200000;
   if (flags & kAccObsoleteObject) return false;
-  jvmtiFrameInfo frames[3]{};
+  jvmtiFrameInfo frames[4]{};
   jint count = 0;
-  if (environment->GetStackTrace(nullptr, 0, 3, frames, &count)) return ServiceFailure(jni);
-  if (count != 3 || frames[1].method != instance_method || frames[2].method != find_virtual) return false;
+  if (environment->GetStackTrace(nullptr, 0, 4, frames, &count)) return ServiceFailure(jni);
+  const bool virtual_lookup = count >= 3 && frames[1].method == instance_method && frames[2].method == find_virtual;
+  const bool static_lookup = (probing || static_verified) && runtime_vm && find_interface && decode_global && new_local &&
+      static_type_slot >= 0 && count == 4 && frames[1].method == class_get_method &&
+      frames[2].method == declared_method && frames[3].method == find_static;
+  if (!virtual_lookup && !static_lookup) return false;
+  if (static_lookup && (!(flags & evolution::kAccInterface) || !(flags & evolution::kAccPublic))) return false;
   Local<jobject> loader{jni};
   if (environment->GetClassLoader(static_cast<jclass>(klass), &loader.value)) return ServiceFailure(jni);
   if (!loader.value) return false; // Boot interfaces cannot be enhanced; keep hidden-API filtering.
@@ -71,14 +91,66 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   } requested_name{jni, name, jni->GetStringUTFChars(name, nullptr)};
   if (!requested_name.chars) return ServiceFailure(jni);
   if (requested_name.chars[0] == '<') return false;
+  Local<jobject> type{jni};
+  Local<jclass> requested_return{jni};
+  Text requested_signature;
+  const auto read_type = [&] {
+    if (type.value) return true;
+    if (environment->GetLocalObject(nullptr, static_lookup ? 3 : 2,
+                                   static_lookup ? static_type_slot : type_slot, &type.value) ||
+        !type.value || !jni->IsInstanceOf(type.value, method_type)) { ServiceFailure(jni); return false; }
+    requested_return.value = static_cast<jclass>(jni->GetObjectField(type.value, return_field));
+    if (!requested_return.value || environment->GetClassSignature(requested_return.value, &requested_signature.value, nullptr)) {
+      ServiceFailure(jni); return false;
+    }
+    return true;
+  };
+  if (static_lookup) {
+    if (!read_type()) return true;
+    std::string descriptor("(");
+    for (jsize i = 0, n = jni->GetArrayLength(args); i < n; ++i) {
+      Local<jclass> parameter{jni, static_cast<jclass>(jni->GetObjectArrayElement(args, i))};
+      Text signature;
+      if (!parameter.value || environment->GetClassSignature(parameter.value, &signature.value, nullptr)) return ServiceFailure(jni);
+      descriptor += signature.value;
+    }
+    descriptor += ")"; descriptor += requested_signature.value;
+    struct Global {
+      JNIEnv* jni; jobject value;
+      ~Global() { if (value) jni->DeleteGlobalRef(value); }
+    } root{jni, jni->NewGlobalRef(klass)};
+    if (!root.value) return ServiceFailure(jni);
+    void* owner = decode_global(runtime_vm, root.value);
+    if (!owner) return ServiceFailure(jni);
+    auto* method = runtime_api >= 35
+        ? reinterpret_cast<abi::arm64::android15::FindInterfaceMethod>(find_interface)(
+            owner, requested_name.chars, descriptor, abi::arm64::android15::PointerSize::k64)
+        : reinterpret_cast<abi::arm64::android11::FindInterfaceMethod>(find_interface)(
+            owner, requested_name.chars, descriptor, abi::arm64::android11::PointerSize::k64);
+    if (!method) {
+      jni->ThrowNew(missing_error, "no interface method with the requested descriptor");
+      return true;
+    }
+    // Class objects are nonmoving (Class::Alloc, fixed 11--17). Root the
+    // resolved declaration through ART's JNI bridge before public inspection;
+    // a boot declaration must retain libcore's hidden-API filtering.
+    Local<jclass> declaring{jni, static_cast<jclass>(new_local(jni,
+        reinterpret_cast<void*>(static_cast<uintptr_t>(method->declaring_class))))};
+    if (!declaring.value) return ServiceFailure(jni);
+    Local<jobject> declaring_loader{jni};
+    if (environment->GetClassLoader(declaring.value, &declaring_loader.value)) return ServiceFailure(jni);
+    if (!declaring_loader.value || (jni->GetIntField(declaring.value, class_flags_field) & kAccObsoleteObject)) return false;
+    if (!(method->access_flags.load(std::memory_order_relaxed) & evolution::kAccStatic)) {
+      if (probing) observed_static = true;
+      jni->ThrowNew(access_error, "interface method is not static");
+      return true;
+    }
+  }
   struct Methods {
     jmethodID* value = nullptr;
     ~Methods() { if (value) environment->Deallocate(reinterpret_cast<unsigned char*>(value)); }
   } methods;
   if (environment->GetClassMethods(static_cast<jclass>(klass), &count, &methods.value)) return ServiceFailure(jni);
-  Local<jobject> type{jni};
-  Local<jclass> requested_return{jni};
-  Text requested_signature;
   for (jint i = 0; i < count; ++i) {
     jint modifiers = 0;
     if (environment->GetMethodModifiers(methods.value[i], &modifiers)) return ServiceFailure(jni);
@@ -86,12 +158,7 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
     Text member_name, signature;
     if (environment->GetMethodName(methods.value[i], &member_name.value, &signature.value, nullptr)) return ServiceFailure(jni);
     if (std::strcmp(member_name.value, requested_name.chars)) continue;
-    if (!type.value) {
-      if (environment->GetLocalObject(nullptr, 2, type_slot, &type.value) || !type.value ||
-          !jni->IsInstanceOf(type.value, method_type)) return ServiceFailure(jni);
-      requested_return.value = static_cast<jclass>(jni->GetObjectField(type.value, return_field));
-      if (!requested_return.value || environment->GetClassSignature(requested_return.value, &requested_signature.value, nullptr)) return ServiceFailure(jni);
-    }
+    if (!read_type()) return true;
     const size_t end = ReturnOffset(signature.value);
     if (end == std::string_view::npos || std::strcmp(signature.value + end, requested_signature.value)) continue;
     size_t at = 1;
@@ -105,14 +172,14 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
       at += size;
     }
     if (at + 1 != end) continue;
-    if (modifiers & evolution::kAccStatic) {
+    if ((modifiers & evolution::kAccStatic) && virtual_lookup) {
       if (probing) observed = true;
       jni->ThrowNew(access_error, "interface method is static");
       return true;
     }
     // Use ART's reflection conversion for actual Class identities; do not
     // resolve descriptor strings through a second class-loader search.
-    Local<jobject> reflected{jni, jni->ToReflectedMethod(static_cast<jclass>(klass), methods.value[i], JNI_FALSE)};
+    Local<jobject> reflected{jni, jni->ToReflectedMethod(static_cast<jclass>(klass), methods.value[i], (modifiers & evolution::kAccStatic) ? JNI_TRUE : JNI_FALSE)};
     if (!reflected.value || jni->ExceptionCheck()) return ServiceFailure(jni);
     Local<jobject> actual_return{jni, jni->CallObjectMethod(reflected.value, reflected_return)};
     if (!actual_return.value || jni->ExceptionCheck()) return ServiceFailure(jni);
@@ -133,9 +200,12 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   }
   return false;
 }
-jobject DeclaredMethod(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) noexcept {
+jobject DeclaredMethod(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) noexcept try {
   if ((probing || enabled.load(std::memory_order_acquire)) && !jni->ExceptionCheck() && Reject(jni, klass, name, args)) return nullptr;
   return original(jni, klass, name, args);
+} catch (...) {
+  ServiceFailure(jni);
+  return nullptr;
 }
 jmethodID Method(jclass klass, const char* name, const char* signature) {
   jint count = 0;
@@ -181,6 +251,11 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   capabilities.can_access_local_variables = 1;
   if (env->AddCapabilities(&capabilities)) return false;
   environment = env;
+  find_interface = symbols::Find(kFindInterfaceMethod);
+  runtime_api = android_get_device_api_level();
+  decode_global = reinterpret_cast<decltype(decode_global)>(symbols::Find(kDecodeGlobal));
+  new_local = reinterpret_cast<decltype(new_local)>(symbols::Find(kNewLocalRef));
+  if (jni->GetJavaVM(&runtime_vm)) runtime_vm = nullptr;
   Local<jclass> klass{jni, jni->FindClass("java/lang/Class")};
   if (!klass.value) { jni->ExceptionClear(); return false; }
   Local<jclass> lookup{jni, jni->FindClass("java/lang/invoke/MethodHandles$Lookup")};
@@ -195,14 +270,20 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   if (!access_error) { jni->ExceptionClear(); return false; }
   if (!internal_error) internal_error = GlobalClass(jni, "java/lang/InternalError");
   if (!internal_error) { jni->ExceptionClear(); return false; }
+  if (!missing_error) missing_error = GlobalClass(jni, "java/lang/NoSuchMethodException");
+  if (!missing_error) { jni->ExceptionClear(); return false; }
   {
     instance_method = Method(klass.value, "getInstanceMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
     find_virtual = Method(lookup.value, "findVirtual", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+    find_static = Method(lookup.value, "findStatic", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+    declared_method = Method(klass.value, "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+    class_get_method = Method(klass.value, "getMethod", "(Ljava/lang/String;[Ljava/lang/Class;Z)Ljava/lang/reflect/Method;");
     return_field = Field(method_type, "rtype", "Ljava/lang/Class;");
     class_flags_field = Field(klass.value, "accessFlags", "I");
     jint locals = 0;
     // All fixed libcore versions retain the last incoming argument (MethodType).
     if (find_virtual && !env->GetMaxLocals(find_virtual, &locals) && locals >= 4) type_slot = locals - 1;
+    if (find_static && !env->GetMaxLocals(find_static, &locals) && locals >= 4) static_type_slot = locals - 1;
   }
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); return false; }
   if (!return_field || !class_flags_field || !instance_method || !find_virtual || !reflected_return || !reflected_parameters || type_slot < 0) return false;
@@ -222,6 +303,17 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   probing = false;
   const bool passed = observed && !jni->ExceptionCheck();
   if (jni->ExceptionCheck()) jni->ExceptionClear();
+  // Optional static resolution proof must not disable the existing virtual guard.
+  static_verified = false;
+  jmethodID run_static = jni->GetStaticMethodID(probe.value, "runStatic", "()V");
+  if (jni->ExceptionCheck()) jni->ExceptionClear();
+  if (passed && run_static && runtime_vm && find_interface && decode_global && new_local && find_static && declared_method && class_get_method && static_type_slot >= 0) {
+    observed_static = false; probing = true;
+    jni->CallStaticVoidMethod(probe.value, run_static);
+    probing = false;
+    static_verified = observed_static && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
   {
     std::lock_guard<std::mutex> lock(install_mutex);
     if (shadowhook_unhook(hook)) return false;

@@ -226,3 +226,5 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 `interface-symbols` 还在每轮失败、更新和恢复前后独立验证普通类及接口实例方法的返回／参数加载器别名，要求精确 `IllegalAccessException`，错误返回描述符要求 `NoSuchMethodException`；固定 JBR 工具共享行为夹具，设备报告验证器另行固定预期。
 
 `compare-jbr-layout-contracts.py --java-home <fixed-jbr> [--sdk <android-sdk>]` 在独立解释器／batch 进程固定新父类字段的偏移借用、构造器未执行、兼容字段保留与 GC，以及只读的 Unsafe／FieldUpdater／冷反射偏移行为。它还检查 ClassFile 字段顺序确实不同、冻结 D8 的 DEX 完全相同。batch 运行不作为已编译热点的证据；原始 offset 探针只读扩大后对象内的 primitive 槽，不进行引用 offset 写入。
+
+`interface-symbols` 还逐状态检查子接口 `findStatic` 的继承实例／自身 private／自身 static 选择，错误返回／参数描述符、返回／参数加载器别名和 null 名称。static 活参数证明与原 virtual 证明独立；宿主回归分别调用 Android 11–14 与 15–17 的 PointerSize 声明。

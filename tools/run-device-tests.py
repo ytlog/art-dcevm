@@ -1441,6 +1441,10 @@ def interface_symbol_checks(kind, changed, late=True):
         result.update({_owner+"AliasedReturn":"java.lang.IllegalAccessException",
                        _owner+"AliasedParameter":"java.lang.IllegalAccessException",
                        _owner+"WrongReturn":"java.lang.NoSuchMethodException"})
+    result.update(childStaticResolution="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else "java.lang.IllegalAccessException",
+                  childStaticWrongReturn="java.lang.NoSuchMethodException",parentStaticWrongReturn="java.lang.NoSuchMethodException",
+                  parentStaticAliasedParameter="java.lang.IllegalAccessException",childStaticAliasedReturn="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException",
+                  childStaticWrongParameter="java.lang.NoSuchMethodException",childStaticNullName="java.lang.NullPointerException")
     if changed and kind == "static":
         result.update(freshChildStaticHandle=11, aliasReturnDistinct=True, aliasReturnSameName=True,
                       freshAliasedChildHandle="java.lang.IllegalAccessException", freshAliasedParameterHandle="java.lang.IllegalAccessException")

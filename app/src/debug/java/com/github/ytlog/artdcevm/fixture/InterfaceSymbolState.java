@@ -90,6 +90,20 @@ public final class InterfaceSymbolState {
             check.eq(key+"WrongReturn", "java.lang.NoSuchMethodException",
                     result(() -> MethodHandles.publicLookup().findVirtual(owner,"objectValue",MethodType.methodType(String.class))));
         }
+        check.eq(prefix+"childStaticResolution", changed && kind.equals("drop") ? "java.lang.NoSuchMethodException" : changed && kind.equals("static") ? 11 : "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(child,"value",type).invokeWithArguments()));
+        check.eq(prefix+"childStaticWrongReturn", "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().findStatic(child,"value",MethodType.methodType(String.class))));
+        check.eq(prefix+"parentStaticWrongReturn", "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().findStatic(parent,"value",MethodType.methodType(String.class))));
+        check.eq(prefix+"parentStaticAliasedParameter", "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(parent,"echo",MethodType.methodType(int.class,aliasReturn))));
+        check.eq(prefix+"childStaticAliasedReturn", changed && kind.equals("drop") ? "java.lang.NoSuchMethodException" : "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(child,"objectValue",MethodType.methodType(aliasReturn))));
+        check.eq(prefix+"childStaticWrongParameter", "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().findStatic(child,"echo",MethodType.methodType(int.class,String.class))));
+        check.eq(prefix+"childStaticNullName", "java.lang.NullPointerException",
+                result(() -> MethodHandles.publicLookup().findStatic(child,null,type)));
         check.eq(prefix+"ordinaryStaticHandle", 9,
                 result(() -> MethodHandles.publicLookup().findStatic(Math.class,"abs",MethodType.methodType(int.class,int.class)).invokeWithArguments(-9)));
     }
