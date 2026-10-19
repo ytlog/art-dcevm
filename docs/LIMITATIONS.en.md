@@ -24,6 +24,8 @@ Member retirement also requires Native-phase thread and named read-barrier check
 
 ## Redefining interfaces
 
+The final class-level allocation order accepts s1/s3/s4/s5/s6 from the fixed JBR comparison; s2 remains 66. Old instances preserve compatible own/old-ancestor values, and inserted-parent fields start at zero. JBR 21.0.11+10-b1163.116 instead reads 3 for the s1/s4 inserted-parent sentinel; this project intentionally keeps zero. See the [comparison table](COMPATIBILITY.en.md#same-batch-class-combinations-and-jbr).
+
 Interface targets support body edits to default, static and private methods, new public abstract/default/static methods and private instance methods, deletion or signature changes of any method including default/abstract ones, switching an existing public instance method between abstract and default, changing a method's invoke kind among default/abstract, static and private (same rules as ordinary classes; see 71 below), adding, deleting or retyping static fields, and adding or removing parent interfaces. Static additions may have any access level, including synthetic methods. Top-level and nested interfaces may share an atomic batch with implementations, their subclasses or unrelated classes, including multiple interfaces and parent/child interfaces; any failure preserves the whole batch. New classes, such as lambda synthetic classes, must first be appended by the reload tool, with changed existing synthetic classes redefined in the same batch.
 
 This capability is available on Android 11–17 (API 30–37) arm64 devices. API 33–36 are device-verified. API 30–32 and 37 are enabled from fixed AOSP declarations and the named services present in every stored device library of those releases; they have not yet run the interface suites on a device, and `interfaceRuntime` says so once probes pass. Runtime declarations must still pass probes; a version number alone does not establish availability.
@@ -35,9 +37,7 @@ This capability is available on Android 11–17 (API 30–37) arm64 devices. API
 | Field modifier changes; field additions, deletions or type changes without member mapping | `SCHEMA_CHANGED` (64) |
 | Interface method modifier changes other than abstract/default switches and invoke-kind changes; without selection services, switching to default where it would share such an identity | `METHOD_MODIFIERS_CHANGED` (71) |
 | Removing a parent interface without member mapping or dispatch sealing; adding one without member mapping; a static/private method hiding a new parent's method, or, without selection services, a new parent default sharing such an identity | `HIERARCHY_CHANGED` (66) |
-| An added interface is rebuilt by the batch, and the new class and that rebuild depend on each other, or the new class precedes it within one rebuild | `HIERARCHY_CHANGED` (66) |
 | A class/interface conversion with loaded subtypes, or without the required exact-instance precheck | 62 or 70; see the [kind conversion matrix](CLASS_KIND_EVOLUTION.md) |
-| An implementation's superclass outside the interface rebuild group changes its own superclass in the batch | `HIERARCHY_CHANGED` (66) |
 | A boot interface, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
 
@@ -80,7 +80,7 @@ The following conflicts reject the transaction:
 - A class becomes final while it has a loaded subclass (70).
 - A class becomes abstract while instances of that class itself still exist (70). Instances of its subclasses do not prevent the change.
 - An added interface cannot be resolved through the target's loader, is not an interface, or is inaccessible to the target (`JVMTI_ERROR_FAILS_VERIFICATION`, 62).
-- The new superclass cannot be resolved, is an interface, is final, is inaccessible, or has a final method overridden by the new definition or a loaded subclass (62); the new superclass extends the target itself (`JVMTI_ERROR_CIRCULAR_CLASS_DEFINITION`, 61); it does not extend the original superclass (66, narrowing); or the same batch also structurally redefines a supertype of the target or an interface of the new superclass chain, a subclass that changes its superclass too, or a structurally changed new-chain class that also changes its superclass (66); those supertypes may share the batch when they change only method bodies, ordinary classes of the new chain below the old superclass may change structurally, and a subclass that only changes members may share it and verifies against the new superclass chain.
+- An unresolved, interface, final or inaccessible superclass, or an overridden final method, rejects with 62; a superclass extending the target rejects with 61; superclass narrowing rejects with 66. Two moving targets in the same old superclass subtree still reject with 66. Structural dependencies that require an unavailable batch allocator reject with 66. Structural ancestors, new-chain classes, interfaces and ancestors of unsubmitted implementations compose through the final batch hierarchy; see the [JBR comparison](COMPATIBILITY.en.md#same-batch-class-combinations-and-jbr).
 - When retirement is unavailable, adding an instance method or changing its access level may displace a loaded subclass's copied default/miranda method.
 
 ## Superclass changes
