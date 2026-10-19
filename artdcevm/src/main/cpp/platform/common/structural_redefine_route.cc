@@ -1,4 +1,5 @@
 #include "platform/common/structural_redefine_internal.h"
+#include "platform/common/method_handle_lookup.h"
 
 #include <android/api-level.h>
 #include <algorithm>
@@ -279,7 +280,12 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
     if (definitions[i].klass &&
         process->snapshot_env->GetClassModifiers(definitions[i].klass, &access) == JVMTI_ERROR_NONE &&
         (access & evolution::kAccInterface)) {
-      if (interfaces && interfaces->Available()) continue;
+      if (interfaces && interfaces->Available()) {
+        // Public local access can update boot entry points. Request it only for
+        // an interface batch, while still Native and before the loaded-class view.
+        method_handle_lookup::Prepare(jni, process->snapshot_env);
+        continue;
+      }
       Diagnose(Signature(definitions[i].klass) + ": " + (interfaces ? interfaces->RuntimeState() : process->interface_runtime), true);
       return JVMTI_ERROR_NOT_AVAILABLE;
     }

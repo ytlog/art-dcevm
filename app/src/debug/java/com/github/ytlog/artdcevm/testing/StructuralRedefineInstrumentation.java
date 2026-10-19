@@ -3829,8 +3829,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     private void runInterfaceSymbolScenarios() throws Exception {
         InterfaceSymbolState state = new InterfaceSymbolState();
+        state.aliasReturn = new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(readAsset(
+                "interface-symbol-original/" + InterfaceSymbolFixture.Result.class.getName().replace('.', '/') + ".dex")),
+                context.getClassLoader().getParent()).loadClass(InterfaceSymbolFixture.Result.class.getName());
         for (int i = 0; i < DISPATCH_CALLS; ++i)
-            if (InterfaceSymbolFixture.Calls.child(state.receiver) != 7) throw new AssertionError("symbol warmup");
+            if (InterfaceSymbolFixture.Calls.child(state.receiver) != 7 || !Integer.valueOf(7).equals(state.freshChildHandleResult()))
+                throw new AssertionError("symbol/lookup warmup");
         StandardJvmtiClient.cacheInterfaceDispatch(0, state.cachedChild);
         StandardJvmtiClient.cacheInterfaceDispatch(1, state.cachedParent);
         Class<?>[] targets = {InterfaceSymbolFixture.Child.class, InterfaceSymbolFixture.Peer.class};
@@ -3845,6 +3849,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                     scenario.redefine(targets, variant, variant);
                     if (fail) scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
                     state.verify(scenario::check, "", kind, changed);
+                    state.verifyFreshLookup(scenario::check, "", kind, changed);
                     scenario.check("cachedChildJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 0));
                     scenario.check("cachedParentJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 1));
                     for (int i = 0; i < 128; ++i) {
@@ -3852,10 +3857,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                                 : kind.equals("private") ? IllegalAccessError.class.getName() : IncompatibleClassChangeError.class.getName();
                         if (!expected.equals(InterfaceSymbolState.result(() -> InterfaceSymbolFixture.Calls.child(state.receiver))))
                             throw new AssertionError("repeated symbolic resolution");
+                        final Object lookup = !changed ? 7 : kind.equals("drop") ? NoSuchMethodException.class.getName() : IllegalAccessException.class.getName();
+                        if (!lookup.equals(state.freshChildHandleResult())) throw new AssertionError("repeated fresh lookup");
                     }
                     scenario.check("repeatedCalls", 128, 128);
+                    scenario.check("repeatedLookups", 128, 128);
                     System.gc(); System.runFinalization(); System.gc();
                     state.verify(scenario::check, "gc", kind, changed);
+                    state.verifyFreshLookup(scenario::check, "gc", kind, changed);
                     scenario.check("gcCachedChildJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 0));
                     scenario.check("gcCachedParentJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 1));
                 });

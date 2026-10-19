@@ -4,6 +4,16 @@
       "value",
       "()I",
       9
+    ],
+    [
+      "objectValue",
+      "()Lcom/github/ytlog/artdcevm/fixture/InterfaceSymbolFixture$Result;",
+      9
+    ],
+    [
+      "echo",
+      "(Lcom/github/ytlog/artdcevm/fixture/InterfaceSymbolFixture$Result;)I",
+      9
     ]
   ]
 }

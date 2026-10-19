@@ -27,15 +27,58 @@ public final class InterfaceSymbolState {
     private final MethodHandle childHandle = MethodHandles.publicLookup().findVirtual(child, "value", MethodType.methodType(int.class));
     private final MethodHandle parentHandle = MethodHandles.publicLookup().unreflect(cachedParent);
     private final MethodHandle classHandle = MethodHandles.publicLookup().findVirtual(InterfaceSymbolFixture.Lost.class, "value", MethodType.methodType(int.class));
+    private final MethodHandle parentEcho = MethodHandles.publicLookup().findVirtual(parent,"echo",MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class));
     private final MethodHandle bodyErrorHandle = MethodHandles.publicLookup().findVirtual(parent, "badArgument", MethodType.methodType(int.class));
+    public Class<?> aliasReturn;
     private Method lateChild, lateParent;
     public InterfaceSymbolState() throws Exception { }
-    // Record fresh lookup separately: libcore filters static declarations before
-    // searching parent interfaces. It is not an already-linked symbolic call.
+    public Object freshChildHandleResult() {
+        return result(() -> MethodHandles.publicLookup().findVirtual(child,"value",MethodType.methodType(int.class)).invokeWithArguments(receiver));
+    }
     public void verifyFreshLookup(Check check, String prefix, String kind, boolean changed) throws Exception {
+        MethodType type = MethodType.methodType(int.class);
         check.eq(prefix+"freshChildHandle", changed ? kind.equals("drop") ? "java.lang.NoSuchMethodException" :
-                kind.equals("private") ? "java.lang.IllegalAccessException" : "java.lang.IllegalAccessException" : 7,
-                result(() -> MethodHandles.publicLookup().findVirtual(child,"value",MethodType.methodType(int.class)).invokeWithArguments(receiver)));
+                "java.lang.IllegalAccessException" : 7,
+                freshChildHandleResult());
+        check.eq(prefix+"wrongReturnHandle", "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().findVirtual(child,"value",MethodType.methodType(String.class))));
+        check.eq(prefix+"cachedParentEchoHandle", 7, result(() -> parentEcho.invokeWithArguments(receiver,new InterfaceSymbolFixture.Result())));
+        check.eq(prefix+"freshParentEchoHandle", 7,
+                result(() -> MethodHandles.publicLookup().findVirtual(parent,"echo",MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class)).invokeWithArguments(receiver,new InterfaceSymbolFixture.Result())));
+        check.eq(prefix+"freshObjectParentHandle", true,
+                result(() -> MethodHandles.publicLookup().findVirtual(parent,"objectValue",MethodType.methodType(InterfaceSymbolFixture.Result.class)).type().returnType() == InterfaceSymbolFixture.Result.class));
+        check.eq(prefix+"freshObjectChildHandle", changed && kind.equals("static") ? "java.lang.IllegalAccessException" :
+                changed && kind.equals("drop") ? "java.lang.NoSuchMethodException" : true,
+                result(() -> MethodHandles.publicLookup().findVirtual(child,"objectValue",MethodType.methodType(InterfaceSymbolFixture.Result.class)).type().returnType() == InterfaceSymbolFixture.Result.class));
+        if (changed && kind.equals("static")) {
+            check.eq(prefix+"aliasReturnDistinct", true, aliasReturn != InterfaceSymbolFixture.Result.class);
+            check.eq(prefix+"aliasReturnSameName", true, aliasReturn.getName().equals(InterfaceSymbolFixture.Result.class.getName()));
+            check.eq(prefix+"freshAliasedParameterHandle", "java.lang.IllegalAccessException",
+                    result(() -> MethodHandles.publicLookup().findVirtual(child,"echo",MethodType.methodType(int.class,aliasReturn))));
+            check.eq(prefix+"freshAliasedChildHandle", "java.lang.IllegalAccessException",
+                    result(() -> MethodHandles.publicLookup().findVirtual(child,"objectValue",MethodType.methodType(aliasReturn))));
+        }
+        check.eq(prefix+"freshParentHandle", 7,
+                result(() -> MethodHandles.publicLookup().findVirtual(parent,"value",type).invokeWithArguments(receiver)));
+        check.eq(prefix+"freshParentOverrideHandle", 17,
+                result(() -> MethodHandles.publicLookup().findVirtual(parent,"value",type).invokeWithArguments(override)));
+        check.eq(prefix+"freshParentLostHandle", changed && kind.equals("drop") ? "java.lang.ClassCastException" : 7,
+                result(() -> MethodHandles.publicLookup().findVirtual(parent,"value",type).invokeWithArguments(lost)));
+        if (changed && kind.equals("static"))
+            check.eq(prefix+"freshChildStaticHandle", 11,
+                    result(() -> MethodHandles.publicLookup().findStatic(child,"value",type).invokeWithArguments()));
+        check.eq(prefix+"freshParentStaticHandle", "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(parent,"value",type).invokeWithArguments()));
+        check.eq(prefix+"declaredChildReflection", changed && kind.equals("static") ? 11 :
+                changed && kind.equals("private") ? "java.lang.IllegalAccessException" : "java.lang.NoSuchMethodException",
+                result(() -> child.getDeclaredMethod("value").invoke(receiver)));
+        check.eq(prefix+"declaredChildStatic", changed && !kind.equals("drop") ? kind.equals("static") : "java.lang.NoSuchMethodException",
+                result(() -> java.lang.reflect.Modifier.isStatic(child.getDeclaredMethod("value").getModifiers())));
+        check.eq(prefix+"unreflectChildStatic", changed && kind.equals("static") ? 11 :
+                changed && kind.equals("private") ? "java.lang.IllegalAccessException" : "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().unreflect(child.getDeclaredMethod("value")).invokeWithArguments()));
+        check.eq(prefix+"ordinaryStaticHandle", 9,
+                result(() -> MethodHandles.publicLookup().findStatic(Math.class,"abs",MethodType.methodType(int.class,int.class)).invokeWithArguments(-9)));
     }
     public void verify(Check check, String prefix, String kind, boolean changed) throws Exception {
         Object failure = !changed ? null : kind.equals("drop") ? "java.lang.NoSuchMethodError"

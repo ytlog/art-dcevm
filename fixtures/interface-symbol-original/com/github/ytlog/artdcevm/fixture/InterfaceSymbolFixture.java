@@ -2,7 +2,10 @@ package com.github.ytlog.artdcevm.fixture;
 
 /** The symbolic child owner and the canonical parent declaration are distinct. */
 public final class InterfaceSymbolFixture {
+    public static class Result { }
     public interface Parent {
+        default Result objectValue() { return null; }
+        default int echo(Result value) { return 7; }
         default int value() { return 7; }
         default int badArgument() { throw new IllegalArgumentException(); }
     }

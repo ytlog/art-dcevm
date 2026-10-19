@@ -1414,15 +1414,29 @@ def interface_symbol_checks(kind, changed, late=True):
         lostParentInstance=not (changed and kind=="drop"), cachedChildReflection=7, cachedParentReflection=7,
         cachedChildHandle=7, cachedParentHandle=7, freshChildLookup="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else 7,
         freshParentReflection=7,
+        freshChildHandle="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException" if changed else 7,
+        cachedParentEchoHandle=7, freshParentEchoHandle=7,
+        wrongReturnHandle="java.lang.NoSuchMethodException", freshObjectParentHandle=True,
+        freshObjectChildHandle="java.lang.IllegalAccessException" if changed and kind=="static" else "java.lang.NoSuchMethodException" if changed and kind=="drop" else True,
+        freshParentHandle=7, freshParentOverrideHandle=17,
+        freshParentLostHandle="java.lang.ClassCastException" if changed and kind=="drop" else 7,
+        freshParentStaticHandle="java.lang.IllegalAccessException",
+        declaredChildReflection=11 if changed and kind=="static" else "java.lang.IllegalAccessException" if changed and kind=="private" else "java.lang.NoSuchMethodException",
+        declaredChildStatic=(kind=="static") if changed and kind!="drop" else "java.lang.NoSuchMethodException",
+        unreflectChildStatic=11 if changed and kind=="static" else "java.lang.IllegalAccessException" if changed and kind=="private" else "java.lang.NoSuchMethodException",
+        ordinaryStaticHandle=9,
         childInstance=True, parentInstance=True, identity=True, marker=31, peerCall=5 if changed else 3,
         newReceiverChild=failure if changed else 7, cachedChildJni=7, cachedParentJni=7)
+    if changed and kind == "static":
+        result.update(freshChildStaticHandle=11, aliasReturnDistinct=True, aliasReturnSameName=True,
+                      freshAliasedChildHandle="java.lang.IllegalAccessException", freshAliasedParameterHandle="java.lang.IllegalAccessException")
     if late: result.update(lateChild=failure if changed else 7, lateParent=7)
     return result
 
 for _name, _, _code in INTERFACE_SYMBOL_SCENARIOS:
     _phase, _kind, _round = _name.removeprefix("interface-symbol-").rsplit("-", 2)
     _checks = interface_symbol_checks(_kind, _phase in ("apply", "restore-abort"), _name != "interface-symbol-abort-drop-0")
-    REQUIRED_CHECKS[_name] = {**_checks, **{"gc" + key[0].upper() + key[1:] if key in ("cachedChildJni", "cachedParentJni") else "gc"+key: value for key, value in _checks.items()}, "repeatedCalls":128}
+    REQUIRED_CHECKS[_name] = {**_checks, **{"gc" + key[0].upper() + key[1:] if key in ("cachedChildJni", "cachedParentJni") else "gc"+key: value for key, value in _checks.items()}, "repeatedCalls":128, "repeatedLookups":128}
     if _code: REQUIRED_CHECKS[_name].update(armed=0, failureHits=1)
 
 def scenario_sequence(scenario_group, api=None, self_selection=None):

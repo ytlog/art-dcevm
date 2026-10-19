@@ -39,8 +39,13 @@ public class InterfaceSymbolOracle {
   public static void main(String[] args) throws Exception {
     System.load(args[1]);
     InterfaceSymbolState state = new InterfaceSymbolState();
+    state.aliasReturn = new java.net.URLClassLoader(new java.net.URL[]{InterfaceSymbolFixture.Result.class.getProtectionDomain().getCodeSource().getLocation()}, null)
+        .loadClass(InterfaceSymbolFixture.Result.class.getName());
     cache(0, state.cachedChild); cache(1, state.cachedParent);
-    for (int i = 0; i < 30000; ++i) eq("warmup", 7, InterfaceSymbolFixture.Calls.child(state.receiver));
+    for (int i = 0; i < 30000; ++i) {
+      eq("warmup", 7, InterfaceSymbolFixture.Calls.child(state.receiver));
+      eq("lookup warmup", 7, state.freshChildHandleResult());
+    }
     for (int round = 0; round < 2; ++round) {
       for (String kind : new String[]{"drop", "private", "static"}) {
         Path patch = Paths.get(args[0], "interface-symbol-" + kind), original = Paths.get(args[0], "interface-symbol-original");
@@ -53,6 +58,8 @@ public class InterfaceSymbolOracle {
           state.verifyFreshLookup(InterfaceSymbolOracle::eq, "", kind, changed);
           eq("cached child JNI", 7, invoke(state.receiver, 0));
           eq("cached parent JNI", 7, invoke(state.receiver, 1));
+          for (int i = 0; i < 128; ++i)
+            eq("repeated lookup", !changed ? 7 : kind.equals("drop") ? "java.lang.NoSuchMethodException" : "java.lang.IllegalAccessException", state.freshChildHandleResult());
           System.gc();
           state.verify(InterfaceSymbolOracle::eq, "gc", kind, changed);
           state.verifyFreshLookup(InterfaceSymbolOracle::eq, "gc", kind, changed);
@@ -130,12 +137,18 @@ def main():
     agent = evidence / 'agent.jar'
     run('agent', [java / 'bin/jar', 'cfm', agent, mf, '-C', classes, 'InterfaceSymbolOracle.class'])
     for name, flags in (('interpreter', ['-Xint']), ('jit', ['-Xbatch', '-XX:+PrintCompilation',
-            '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.InterfaceSymbolFixture$Calls::child'])):
+            '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.InterfaceSymbolFixture$Calls::child',
+            '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.InterfaceSymbolState::freshChildHandleResult',
+            '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.InterfaceSymbolState::lambda$freshChildHandleResult$*'])):
         output = run(name, [java / 'bin/java', *flags, '-Xcheck:jni', '-XX:+AllowEnhancedClassRedefinition', '-javaagent:' + str(agent),
                            '-cp', str(classes) + ':' + str(old), 'InterfaceSymbolOracle', patches, binary])
         if output.count(' PASS\n') != 24: raise RuntimeError('Incomplete symbolic resolution matrix')
         if name == 'jit' and not any('InterfaceSymbolFixture$Calls::child' in line and 'CompileCommand:' not in line
                                     for line in output.splitlines()): raise RuntimeError('Missing compiled old caller evidence')
+        if name == 'jit' and not any('InterfaceSymbolState::freshChildHandleResult' in line and 'CompileCommand:' not in line
+                                    for line in output.splitlines()): raise RuntimeError('Missing compiled fresh lookup evidence')
+        if name == 'jit' and not any('InterfaceSymbolState::lambda$freshChildHandleResult$' in line and 'CompileCommand:' not in line
+                                    for line in output.splitlines()): raise RuntimeError('Missing compiled direct findVirtual caller evidence')
         checks = int(re.search(r'^PASS checks=(\d+)$', output, re.M)[1])
         manifest['runs'].append({'mode': name, 'states': 24, 'checks': checks, 'passed': True})
     manifest['passed'] = True

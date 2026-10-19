@@ -9,3 +9,6 @@
 -keep class com.github.ytlog.artdcevm.internal.ImtLinkProbeMethods { *; }
 # The linker calls this preloaded native entry to verify each callback thread.
 -keep class com.github.ytlog.artdcevm.internal.InterfaceLinkProbe { *; }
+# Native startup verifies lookup arguments through this exact Java contract.
+-keep class com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe { *; }
+-keep interface com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe$StaticOwner { *; }

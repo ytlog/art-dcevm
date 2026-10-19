@@ -11,6 +11,7 @@
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/method_handle_lookup.h"
 #include "platform/common/runtime_thread.h"
 
 namespace artdcevm::structural_redefine::detail {
@@ -182,6 +183,11 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       const structural_policy::MemberKey key{next.name, next.descriptor};
       if (!(next.access & (evolution::kAccStatic | evolution::kAccPrivate)) ||
           !snapshot.hierarchy.inherited_interface.count(key)) continue;
+      if (next.IsStatic() && !method_handle_lookup::Enable()) {
+        decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
+        decision.reason = "fresh interface MethodHandle lookup services unavailable";
+        break;
+      }
       bool declared = false;
       for (const auto& old : snapshot.live.methods)
         declared |= old.name == next.name && old.descriptor == next.descriptor;
