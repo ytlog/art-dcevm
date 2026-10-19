@@ -632,7 +632,9 @@ void Visit(void* runtime, ReflectiveValueVisitor* visitor) noexcept {
   if (!in_update) { reinterpret_cast<Function>(original_visit)(runtime, visitor); return; }
   // ART's copy phase is over; its visitor and fix-ups need the real arrays.
   RestoreFieldArrays();
-  member_retirement::Visitor retirement(visitor, copied_resolution_changes);
+  const auto* context = transaction::Current();
+  member_retirement::Visitor retirement(visitor, copied_resolution_changes,
+      context && context->invalidate_interface_symbols);
   reinterpret_cast<Function>(original_visit)(runtime, &retirement);
 }
 

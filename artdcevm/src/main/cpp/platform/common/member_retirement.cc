@@ -588,8 +588,17 @@ bool InstallJniTable(JavaVM* vm, jvmtiEnv* jvmti, std::string* failure) {
 
 abi::ArtMethod* Visitor::VisitMethod(abi::ArtMethod* method, const ReflectionSourceInfo& info) noexcept {
   const bool retired = ContainsMethod(method);
-  if (info.type == abi::kSourceDexCacheResolvedMethod && (retired || cleared_.count(method)))
-    return nullptr;
+  if (info.type == abi::kSourceDexCacheResolvedMethod) {
+    const auto& source = reinterpret_cast<const abi::DexCacheSourceInfo&>(info);
+    // Canonical mappings preserve the parent declaration for retained members.
+    // A DEX entry, however, belongs to its symbolic owner: the old child may
+    // no longer inherit that method or may now declare a private/static one.
+    // Let ART invalidate the entry and resolve that symbol through its normal
+    // resolver on the next invocation. Do not retire the unchanged parent.
+    if (retired || cleared_.count(method) || (interface_symbols_ &&
+        invoke_kind::InterfaceResolution(reinterpret_cast<void*>(source.cache), source.index)))
+      return nullptr;
+  }
   if (retired && info.type == abi::kSourceJniMethodId)
     RecordId(method, reinterpret_cast<const abi::JniMethodIdSourceInfo&>(info).id);
   return original_->VisitMethod(method, info);

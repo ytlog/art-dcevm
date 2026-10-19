@@ -60,7 +60,7 @@ struct LoadedHierarchy {
   // Present when the new superclass differs and could be resolved.
   std::optional<NewSuperclass> new_superclass;
   // Interface targets: virtual methods the target inherits from its
-  // superinterfaces and java.lang.Object. An added direct method with one of
+  // superinterfaces. Object public methods are in inherited_public. An added direct method with one of
   // these identities would be resolved by verified invoke-interface callers.
   std::set<MemberKey> inherited_interface;
   // Interface targets: package-private methods declared by loaded subtypes, or
@@ -108,6 +108,8 @@ struct Abilities {
   bool interface_removal = false;
   // Pre-publication linking preserves JBR non-public class-method selection.
   bool interface_selection = false;
+  // Old symbolic interface owners are re-resolved after a committed hierarchy change.
+  bool interface_symbols = false;
   // Kind changes use a new ART Class, verified member mapping and protected
   // old virtual/interface callers. Class -> interface additionally requires
   // no exact instances; changing the interface bit requires no loaded subtypes.

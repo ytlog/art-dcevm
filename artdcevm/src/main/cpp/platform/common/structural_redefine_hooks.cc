@@ -21,7 +21,7 @@ namespace {
 std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedefinitionPrefix* self,
                         const Snapshot& snapshot, const evolution::ClassSchema& incoming, Batch& batch,
                         const std::vector<std::pair<structural_policy::MemberKey, uint32_t>>& changes,
-                        bool class_kind = false) {
+                        bool symbolic_change = false) {
   const std::string method = changes.front().first.first + changes.front().first.second;
   const bool interface_target = snapshot.live.access & evolution::kAccInterface;
   const auto* subtypes = interface_target ? &snapshot.interface_subtypes : snapshot.subtypes;
@@ -39,12 +39,12 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
   for (const auto& [klass, ignored] : batch.classes)
     submitted.insert(class_layout::DecodeClass(process->layout_services.mirror_class, self, klass));
   for (const auto& [key, access] : changes) {
-    bool protected_change = class_kind, private_change = false;
+    bool protected_change = symbolic_change, private_change = false;
     for (const auto& next : incoming.methods) {
       if (next.name != key.first || next.descriptor != key.second) continue;
       private_change = !(access & (evolution::kAccStatic | evolution::kAccPrivate)) &&
           !next.IsStatic() && (next.access & evolution::kAccPrivate);
-      protected_change = class_kind || ((bool(access & evolution::kAccStatic) != next.IsStatic() || private_change) &&
+      protected_change = symbolic_change || ((bool(access & evolution::kAccStatic) != next.IsStatic() || private_change) &&
           invoke_kind::Enable());
     }
     // Old self frames require a probed selector that bypasses the vtable/IMT.
@@ -131,6 +131,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
   // that throws at the call.
   abilities.interface_members = abilities.member_mapping;
   abilities.interface_selection = interface_method_selection::Available();
+  abilities.interface_symbols = abilities.member_mapping && batch->loaded && invoke_kind::InterfaceSymbols();
   abilities.class_kinds = abilities.member_mapping &&
       (!((snapshot.live.access ^ incoming.access) & evolution::kAccInterface) ||
        (process->capabilities.subclass_watch && invoke_kind::ClassKinds()));
@@ -173,6 +174,37 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     }
   }
 
+  if (decision.error == JVMTI_ERROR_NONE && (snapshot.live.access & evolution::kAccInterface)) {
+    std::map<structural_policy::MemberKey, uint32_t> symbols;
+    if (decision.interfaces_removed)
+      for (const auto& key : snapshot.hierarchy.inherited_interface) symbols.emplace(key, 0);
+    for (const auto& next : incoming.methods) {
+      const structural_policy::MemberKey key{next.name, next.descriptor};
+      if (!(next.access & (evolution::kAccStatic | evolution::kAccPrivate)) ||
+          !snapshot.hierarchy.inherited_interface.count(key)) continue;
+      bool declared = false;
+      for (const auto& old : snapshot.live.methods)
+        declared |= old.name == next.name && old.descriptor == next.descriptor;
+      if (!declared) {
+        if ((next.access & evolution::kAccPrivate) && !next.IsStatic() && !snapshot.changes_invoke_kind) {
+          decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
+          decision.reason = "private interface hiding requires a Native snapshot of batch frames";
+          break;
+        }
+        symbols.emplace(key, 0);
+      }
+    }
+    if (decision.error == JVMTI_ERROR_NONE && !symbols.empty()) {
+      std::vector<std::pair<structural_policy::MemberKey, uint32_t>> changes(symbols.begin(), symbols.end());
+      std::string why;
+      if (!abilities.interface_symbols || !invoke_kind::EnableInterfaceSymbols()) why = "symbolic interface resolution services unavailable";
+      else why = KindCallers(*thread, self, snapshot, incoming, *batch, changes, true);
+      if (!why.empty()) {
+        decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
+        decision.reason = std::move(why);
+      } else context->invalidate_interface_symbols = true;
+    }
+  }
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
     if (std::string callers = KindCallers(*thread, self, snapshot, incoming, *batch, decision.kind_changes);
         !callers.empty()) {

@@ -60,8 +60,8 @@ void ConfirmObsolete(const std::vector<const void*>& methods);
 // reflective objects of retired fields to their placeholders.
 class Visitor final : public abi::arm64::ReflectiveValueVisitor {
  public:
-  Visitor(ReflectiveValueVisitor* original, const std::set<const void*>& cleared)
-      : original_(original), cleared_(cleared) {}
+  Visitor(ReflectiveValueVisitor* original, const std::set<const void*>& cleared, bool interface_symbols = false)
+      : original_(original), cleared_(cleared), interface_symbols_(interface_symbols) {}
   abi::arm64::ArtMethod* VisitMethod(abi::arm64::ArtMethod* method,
                                      const abi::arm64::ReflectionSourceInfo& info) noexcept override;
   abi::arm64::ArtField* VisitField(abi::arm64::ArtField* field,
@@ -70,6 +70,7 @@ class Visitor final : public abi::arm64::ReflectiveValueVisitor {
  private:
   ReflectiveValueVisitor* original_;
   const std::set<const void*>& cleared_;
+  bool interface_symbols_;
 };
 
 // JNI globals are prepared before entering ART; ReplaceReferences updates them

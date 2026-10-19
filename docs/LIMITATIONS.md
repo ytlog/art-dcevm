@@ -32,7 +32,7 @@
 
 | 接口目标的拒绝情况 | JVMTI 错误码 |
 | --- | --- |
-| 新增 native；direct 方法遮蔽继承的接口／Object 方法；选择服务不可用时 default 与非 public 类方法同签名或旧 ART 无法链接非 public 实现 | `METHOD_ADDED`（63） |
+| 新增 native；遮蔽 Object 方法，或符号守卫不可用时遮蔽继承的接口方法；选择服务不可用时 default 与非 public 类方法同签名或旧 ART 无法链接非 public 实现 | `METHOD_ADDED`（63） |
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | synthetic 之外的字段修饰符变化；成员映射不可用时的字段变化 | `SCHEMA_CHANGED`（64） |
 | 接口方法描述标志、abstract 与 default 互换及调用方式变化之外的修饰符变化；选择服务不可用时改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
@@ -42,6 +42,8 @@
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
 删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 相同，未实现它的类调用时抛 `AbstractMethodError`；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法与新增 abstract 相同；其 default 由实现类获得 copied default。
+
+移除父接口后，若方法已不属于最终层级，旧的子接口符号字节码调用抛 `NoSuchMethodError`。新增 private/static 声明遮蔽父接口方法时，旧子接口调用分别抛 `IllegalAccessError`／`IncompatibleClassChangeError`，包括 null 接收者；仍实现父接口的接收者保留父接口调用及缓存的父声明反射、JNI、MethodHandle 引用。对象丢失父接口时，缓存反射抛 `IllegalArgumentException`，子接口句柄抛 ICCE，缓存类虚句柄抛 AME，父接口类型的句柄在接收者转换时抛 `ClassCastException`。static 遮蔽后新建 `findVirtual(子接口, ...)` 仍走 libcore 查找，返回父方法，JBR 则抛 `IllegalAccessException`。固定 Class.java 在 Java 层过滤 static 声明，本次使用的命名 ART 解析边界不经过该查找；这仍是独立的对齐缺口。
 
 `lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义。与 JBR 相同，新出现的 default 冲突照常接受，经冲突方法的调用抛 `IncompatibleClassChangeError`，之后消除冲突的事务恢复唯一的 default。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
 

@@ -37,6 +37,7 @@ uint32_t* marking = nullptr;
 bool missing_mark = false, export_config = false, cc = true;
 int marks = 0;
 int platform_api = 30;
+extern "C" void* shadowhook_hook_sym_addr(void*, void*, void**) { return nullptr; }
 extern "C" int android_get_device_api_level() { return platform_api; }
 static_assert(!std::is_default_constructible_v<runtime_thread::VerifiedThread>);
 static_assert(!std::is_constructible_v<runtime_thread::VerifiedThread, const transaction::Part*>);
@@ -239,7 +240,8 @@ def main():
             'extern "C" int __android_log_write(int, const char*, const char*);\n')
         (work / 'shadowhook.h').write_text('#pragma once\nextern "C" {\n'
             'void* shadowhook_dlopen(const char*);\nvoid shadowhook_dlclose(void*);\n'
-            'void* shadowhook_dlsym(void*, const char*);\nvoid* shadowhook_dlsym_dynsym(void*, const char*);\n}\n')
+            'void* shadowhook_dlsym(void*, const char*);\nvoid* shadowhook_dlsym_dynsym(void*, const char*);\n'
+            'void* shadowhook_hook_sym_addr(void*, void*, void**);\n}\n')
         (work / 'android/api-level.h').write_text('#pragma once\nextern \"C\" int android_get_device_api_level();\n')
         (work / 'sys/syscall.h').write_text('#pragma once\n#define __NR_gettid 1\n')
         (work / 'unistd.h').write_text('#pragma once\ninline long syscall(long, ...) { return 42; }\n')

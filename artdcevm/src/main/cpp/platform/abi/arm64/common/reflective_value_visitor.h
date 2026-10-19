@@ -30,6 +30,14 @@ struct HeapSourceInfo {
 };
 static_assert(offsetof(JniMethodIdSourceInfo, id) == 16 && offsetof(JniFieldIdSourceInfo, id) == 16 &&
               offsetof(HeapSourceInfo, source) == 16);
+// DexCacheSourceInfo: MethodId/FieldId index and ObjPtr<DexCache>; this is
+// the symbolic cache key, not the cached method's declaring class/index.
+struct DexCacheSourceInfo {
+  ReflectionSourceInfo base;
+  size_t index;
+  uintptr_t cache;
+};
+static_assert(offsetof(DexCacheSourceInfo, index) == 16 && offsetof(DexCacheSourceInfo, cache) == 24);
 // ReflectionSourceType.
 inline constexpr int32_t kSourceJavaLangReflectField = 2;
 inline constexpr int32_t kSourceJavaLangInvokeFieldVarHandle = 4;

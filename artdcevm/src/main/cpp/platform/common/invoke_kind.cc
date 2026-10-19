@@ -2,7 +2,9 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <string_view>
 #include <mutex>
+#include "shadowhook.h"
 #include "platform/common/runtime_roots.h"
 #include "platform/common/art_dex_view.h"
 #include "platform/common/fault_injection.h"
@@ -48,6 +50,21 @@ std::atomic<bool> class_verified{false};
 size_t class_access = 0, class_dex_cache = 0, class_ext_data = 0, ext_obsolete_methods = 0;
 size_t gc_marking_offset = ~size_t{0};
 size_t method_index_offset = ~size_t{0};
+size_t class_iftable = ~size_t{0};
+abi::arm64::FrameReference frame_reference = nullptr;
+abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
+bool (*descriptor_equals)(void*, const char*) = nullptr;
+bool legacy_handle_refine = false;
+void* handle_dispatch_target = nullptr;
+void* handle_dispatch_hook = nullptr;
+std::mutex handle_dispatch_mutex;
+std::atomic<bool> interface_symbols_enabled{false};
+using HandleDispatch = bool (*)(void*, void*, Handle, const abi::arm64::InstructionOperands*, uint64_t*);
+using HandleRefine = void* (*)(void*, void*, const int&, Handle, Handle, uint32_t, void*);
+HandleDispatch original_handle_dispatch = nullptr;
+HandleRefine original_handle_refine = nullptr;
+std::atomic<int64_t> handle_kind_offset{-1}, handle_target_offset{-1}, handle_type_offset{-1}, ptypes_offset{-1}, frame_refs_offset{-1};
+
 
 template <bool read_barrier>
 uintptr_t Reference(uint32_t reference) {
@@ -83,6 +100,90 @@ uintptr_t CopiedObsoleteCache(void* method) noexcept {
     }
   }
   return (read_barrier ? (original_cache_read ? original_cache_read : named_cache_read) : original_cache_raw)(method);
+}
+
+// Find field offsets through the named ART declaration service, as the
+// retirement guards do. No MethodHandle/MethodType object offsets are guessed.
+int64_t HandleField(void* object, const char* name, const char* descriptor, std::atomic<int64_t>& cached) {
+  int64_t offset = cached.load(std::memory_order_acquire);
+  if (offset < 0) {
+    void* klass = reinterpret_cast<void*>(Reference<true>(static_cast<abi::arm64::Object*>(object)->klass));
+    const auto* field = find_instance_field(klass, name, descriptor);
+    if (!field) return -1;
+    offset = field->offset;
+    cached.store(offset, std::memory_order_release);
+  }
+  return offset;
+}
+void* HandleReceiverType(void* type) {
+  if (!type) return nullptr;
+  int64_t offset = HandleField(type, "ptypes", "[Ljava/lang/Class;", ptypes_offset);
+  const auto* params = offset < 0 ? nullptr : reinterpret_cast<const abi::arm64::ObjectArray*>(
+      Reference<true>(runtime_roots::Field<uint32_t>(type, offset)));
+  return params && params->length ? reinterpret_cast<void*>(Reference<true>(params->elements[0])) : nullptr;
+}
+bool RejectInterfaceReceiver(void* self, uint32_t reference, void* target, void* receiver_type) {
+  if (!reference || !target || !receiver_type) return false;  // ART retains its null/error ordering.
+  auto* method = static_cast<abi::arm64::ArtMethodPrefix*>(target);
+  void* declaring = reinterpret_cast<void*>(Reference<true>(method->declaring_class));
+  if (!(runtime_roots::Field<uint32_t>(declaring, class_access) & evolution::kAccInterface)) return false;
+  void* receiver = reinterpret_cast<void*>(static_cast<uintptr_t>(reference));
+  void* klass = reinterpret_cast<void*>(Reference<true>(static_cast<abi::arm64::Object*>(receiver)->klass));
+  const auto* table = reinterpret_cast<const abi::arm64::ObjectArray*>(
+      Reference<true>(runtime_roots::Field<uint32_t>(klass, class_iftable)));
+  for (int32_t i = 0; table && i + 1 < table->length; i += 2)
+    if (Reference<true>(table->elements[i]) == reinterpret_cast<uintptr_t>(declaring)) return false;
+  // RefineTargetMethod would use reflection's VerifyObjectIsClass and throw
+  // IllegalArgumentException. A linked interface handle instead fails dispatch
+  // with ICCE on JBR; a class-owned virtual handle has lost its slot (AME).
+  // ART releases choose handle kinds differently for inherited defaults. The
+  // original receiver type preserves the symbolic class/interface convention.
+  // Argument conversions have already run at this boundary.
+  const bool interface_owner = runtime_roots::Field<uint32_t>(receiver_type, class_access) & evolution::kAccInterface;
+  throw_exception(self, interface_owner ? "Ljava/lang/IncompatibleClassChangeError;" : "Ljava/lang/AbstractMethodError;",
+                  "MethodHandle receiver lost the declaring interface");
+  return true;
+}
+bool DispatchHandle(void* self, void* frame, Handle handle,
+                    const abi::arm64::InstructionOperands* operands, uint64_t* result) noexcept {
+  if (interface_symbols_enabled.load(std::memory_order_acquire)) {
+    void* object = handle.Get<void>();
+    int64_t kind = HandleField(object, "handleKind", "I", handle_kind_offset);
+    int64_t target = HandleField(object, "artFieldOrMethod", "J", handle_target_offset);
+    int64_t type = HandleField(object, "type", "Ljava/lang/invoke/MethodType;", handle_type_offset);
+    if (kind >= 0 && target >= 0 && type >= 0) {
+      const int value = runtime_roots::Field<int>(object, kind);
+      if ((value == 0 || value == 4) && operands->num_operands &&
+          RejectInterfaceReceiver(self, frame_reference(frame, operands->GetOperand(0)),
+              reinterpret_cast<void*>(runtime_roots::Field<uintptr_t>(object, target)), HandleReceiverType(
+                  reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(object, type)))))) {
+        if (result) *result = 0;
+        return false;
+      }
+    }
+  }
+  return original_handle_dispatch(self, frame, handle, operands, result);
+}
+void* RefineHandle(void* self, void* frame, const int& kind, Handle type, Handle callsite,
+                   uint32_t reg, void* target) noexcept {
+  if (interface_symbols_enabled.load(std::memory_order_acquire) && (kind == 0 || kind == 4)) {
+    uint32_t receiver = frame_reference(frame, reg);
+    // Android 11--12's RefineTargetMethod unwraps a caller-transformer frame
+    // here, before checking its receiver. Match that fixed-source decision.
+    int64_t offset = HandleField(callsite.Get<void>(), "ptypes", "[Ljava/lang/Class;", ptypes_offset);
+    const auto* params = offset < 0 ? nullptr : reinterpret_cast<const abi::arm64::ObjectArray*>(
+        Reference<true>(runtime_roots::Field<uint32_t>(callsite.Get<void>(), offset)));
+    if (receiver && params && params->length == 1 && descriptor_equals(
+          reinterpret_cast<void*>(Reference<true>(params->elements[0])), "Ldalvik/system/EmulatedStackFrame;")) {
+      void* emulated = reinterpret_cast<void*>(static_cast<uintptr_t>(receiver));
+      offset = HandleField(emulated, "references", "[Ljava/lang/Object;", frame_refs_offset);
+      const auto* refs = offset < 0 ? nullptr : reinterpret_cast<const abi::arm64::ObjectArray*>(
+          Reference<true>(runtime_roots::Field<uint32_t>(emulated, offset)));
+      receiver = refs && refs->length ? static_cast<uint32_t>(Reference<true>(refs->elements[0])) : 0;
+    }
+    if (RejectInterfaceReceiver(self, receiver, target, HandleReceiverType(type.Get<void>()))) return nullptr;
+  }
+  return original_handle_refine(self, frame, kind, type, callsite, reg, target);
 }
 
 bool OwnClass(void* caller, void* resolved) {
@@ -254,6 +355,17 @@ bool Prepare(std::vector<Hook>* hooks) {
   current_thread = reinterpret_cast<decltype(current_thread)>(symbols::Find(symbols::runtime_thread::kCurrentThread));
   throw_exception = reinterpret_cast<decltype(throw_exception)>(symbols::Find(symbols::structural::kThrowNewException));
   if (!current_thread || !throw_exception) return false;
+  find_instance_field = reinterpret_cast<decltype(find_instance_field)>(symbols::Find(symbols::structural::kFindInstanceField));
+  descriptor_equals = reinterpret_cast<decltype(descriptor_equals)>(symbols::Find(kClassDescriptorEquals));
+  // Resolve names now; activation waits for the first accepted symbolic change.
+  // RefineTargetMethod's older ABI has one extra rooted method-type argument.
+  for (const auto& symbol : {kHandleDispatch0, kHandleDispatch1, kHandleDispatch2,
+                            kHandleDispatch3, kHandleDispatch4, kHandleDispatch5})
+    if ((handle_dispatch_target = symbols::Find(symbol))) break;
+  if (!handle_dispatch_target) {
+    handle_dispatch_target = symbols::Find(kHandleRefineLegacy);
+    legacy_handle_refine = true;
+  }
   resolve_method_id = reinterpret_cast<MethodId>(symbols::Find(kResolveMethodId));
   void* caller = symbols::Find(kResolveCaller);
   void* cache = symbols::Find(kResolveCache);
@@ -329,7 +441,7 @@ void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
   scope_layout = layout;
   scope_verified.store(true, std::memory_order_release);
 }
-void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods, size_t gc_marking, size_t method_index) {
+void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods, size_t gc_marking, size_t method_index, size_t iftable, abi::arm64::FrameReference reference) {
   std::lock_guard<std::mutex> lock(scope_mutex);
   if (class_verified.load(std::memory_order_relaxed)) return;
   class_access = access_flags;
@@ -338,6 +450,8 @@ void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, 
   ext_obsolete_methods = obsolete_methods;
   gc_marking_offset = gc_marking;
   method_index_offset = method_index;
+  class_iftable = iftable;
+  frame_reference = reference;
   class_verified.store(true, std::memory_order_release);
 }
 bool SelectionServices() {
@@ -372,6 +486,29 @@ const char* ClassKindUnavailable() {
   if (!original_cache_read && !named_cache_read) return "named obsolete DexCache service unavailable";
   if (!mark || (!use_read_barrier && gc_marking_offset == ~size_t{0})) return "read barrier collector declaration unavailable";
   return nullptr;
+}
+bool InterfaceSymbols() {
+  return ClassKinds() && frame_reference && class_iftable != ~size_t{0} && find_instance_field &&
+      handle_dispatch_target && (!legacy_handle_refine || descriptor_equals);
+}
+bool EnableInterfaceSymbols() {
+  if (!InterfaceSymbols() || !Enable()) return false;
+  std::lock_guard<std::mutex> lock(handle_dispatch_mutex);
+  if (!handle_dispatch_hook) {
+    handle_dispatch_hook = legacy_handle_refine
+        ? shadowhook_hook_sym_addr(handle_dispatch_target, HookAddress(RefineHandle), HookSlot(&original_handle_refine))
+        : shadowhook_hook_sym_addr(handle_dispatch_target, HookAddress(DispatchHandle), HookSlot(&original_handle_dispatch));
+    if (!handle_dispatch_hook) return false;
+  }
+  interface_symbols_enabled.store(true, std::memory_order_release);
+  return true;
+}
+bool InterfaceResolution(void* cache, uint32_t index) {
+  if (!ClassKinds() || !cache) return false;
+  void* loader = reinterpret_cast<void*>(Reference<true>(static_cast<abi::arm64::DexCache*>(cache)->class_loader));
+  bool valid = false;
+  void* owner = SymbolicOwner(cache, index, loader, &valid);
+  return owner && (runtime_roots::Field<uint32_t>(owner, class_access) & evolution::kAccInterface);
 }
 bool EnableClassKinds() {
   if (!ClassKinds() || !Enable()) return false;

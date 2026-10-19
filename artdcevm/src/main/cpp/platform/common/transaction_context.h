@@ -75,6 +75,7 @@ struct Context {
   // Borrowed loaded-class roots remain valid through the standard entry.
   std::set<jclass> interpreted_callers;
   bool protect_invocations = false;
+  bool invalidate_interface_symbols = false;
   bool collected_interpreted_callers = false;
   bool narrowing = false;  // Actual accepted input removes an interface.
   // An interface removal appeared that the Native phase did not predict (a

@@ -181,7 +181,7 @@ Decision CheckSuperclass(const ClassSchema& live, const ClassSchema& incoming,
 // subtype. Missing abstract implementations fail at the call. `modifiers`
 // is the JVMTI view.
 Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
-                                const LoadedHierarchy& hierarchy, bool supported, bool selection) {
+                                const LoadedHierarchy& hierarchy, bool supported, bool selection, bool symbols = false) {
   const std::string method = key.first + key.second;
   if (!supported)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
@@ -190,9 +190,9 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                   "interface redefinition does not support added native methods: " + method);
   if (!Virtual(modifiers)) {
-    // Verified invoke-interface callers would resolve the direct method and
-    // dispatch it as the virtual method it is not.
-    if (hierarchy.inherited_interface.count(key))
+    // Inherited interface symbols need cache invalidation and invocation
+    // guards before a direct declaration can replace their resolution.
+    if (hierarchy.inherited_public.count(key) || (hierarchy.inherited_interface.count(key) && !symbols))
       return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_ADDED,
                     "added static or private method hides an inherited interface method: " + method);
     return {};
@@ -448,7 +448,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   }
   if (incoming_interface) {
     for (const auto& [key, now] : new_methods) {
-      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members, abilities.interface_selection);
+      Decision added = CheckInterfaceAddition(key, now, hierarchy, interface_members, abilities.interface_selection, abilities.interface_symbols);
       if (added.error != JVMTI_ERROR_NONE) return added;
       decision.requires_member_mapping = true;
     }

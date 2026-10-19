@@ -216,6 +216,27 @@ class ApkVerificationTests(unittest.TestCase):
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(report, scenario_group="proxy-interface")
 
+    def test_interface_symbols_require_resolution_caches_and_atomic_recovery(self):
+        for api in (33, 36):
+            report = complete_report(api)
+            report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("interface-symbol-")]
+            self.assertEqual(len(report["scenarios"]), 24)
+            runner.validate_report(report, scenario_group="interface-symbols")
+            for scenario_name, check in (("interface-symbol-apply-drop-0", "oldChild"),
+                                         ("interface-symbol-apply-drop-0", "lostChildHandle"),
+                                         ("interface-symbol-apply-drop-0", "lostChildExactHandle"),
+                                         ("interface-symbol-apply-drop-0", "bodyIllegalArgument"),
+                                         ("interface-symbol-apply-private-0", "nullChild"),
+                                         ("interface-symbol-apply-static-0", "cachedChildHandle"),
+                                         ("interface-symbol-abort-private-1", "failureHits"),
+                                         ("interface-symbol-restore-abort-static-1", "gcCachedParentJni"),
+                                         ("interface-symbol-restore-drop-1", "lateChild")):
+                broken = copy.deepcopy(report)
+                scenario = next(s for s in broken["scenarios"] if s["name"] == scenario_name)
+                scenario["checks"] = [c for c in scenario["checks"] if c["name"] != check]
+                with self.subTest(api=api, scenario=scenario_name, check=check), self.assertRaises(runner.RunFailure):
+                    runner.validate_report(broken, scenario_group="interface-symbols")
+
     def test_member_descriptors_require_flags_calls_and_atomic_failures(self):
         for api in (33, 36):
             report = complete_report(api)

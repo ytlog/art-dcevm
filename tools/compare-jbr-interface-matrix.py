@@ -141,7 +141,7 @@ public class InterfaceMatrixOracle {
           for (int row = 0; row < NAMES.length; ++row) {
             final Object value = values[row]; final int index = row;
             Object selected = restore ? "java.lang.NoSuchMethodError" : expected(row, abstractKind, parentLane);
-            if (!(restore && parentLane)) {
+            {
               result(label + "/" + NAMES[row] + "/old site", selected, () -> call.invoke(null, value));
               result(label + "/" + NAMES[row] + "/new site", selected, () -> freshCall.invoke(null, value));
             }
@@ -180,7 +180,7 @@ public class InterfaceMatrixOracle {
           System.gc();
           eq(label + "/isolated loader", 19, isolatedStable.invoke(isolated));
           eq(label + "/different contract", false, contract.isInstance(isolated));
-          if (!(restore && parentLane)) result(label + "/after GC", restore ? "java.lang.NoSuchMethodError" : expected(2, abstractKind, parentLane),
+          result(label + "/after GC", restore ? "java.lang.NoSuchMethodError" : expected(2, abstractKind, parentLane),
             () -> call.invoke(null, values[2]));
           System.out.println("matrix " + label + " PASS");
         }

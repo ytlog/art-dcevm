@@ -93,7 +93,7 @@ jvmtiError CollectInheritedPublic(jvmtiEnv* env, JNIEnv* jni, jclass target, Sna
 }
 
 // Virtual methods an interface target inherits from its superinterfaces and
-// java.lang.Object (LoadedHierarchy::inherited_interface).
+// java.lang.Object (inherited_interface and inherited_public respectively).
 jvmtiError CollectInheritedInterface(jvmtiEnv* env, JNIEnv* jni, jclass target, Snapshot* snapshot,
                                      std::string* error) {
   auto& inherited = snapshot->hierarchy.inherited_interface;
@@ -113,7 +113,7 @@ jvmtiError CollectInheritedInterface(jvmtiEnv* env, JNIEnv* jni, jclass target, 
   if (read != JVMTI_ERROR_NONE) return static_cast<jvmtiError>(read);
   for (const auto& method : methods)
     if (Virtual(method) && (method.access & evolution::kAccPublic))
-      inherited.insert({method.name, method.descriptor});
+      snapshot->hierarchy.inherited_public.insert({method.name, method.descriptor});
   return JVMTI_ERROR_NONE;
 }
 
@@ -445,6 +445,17 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
       constexpr uint32_t kDirect = evolution::kAccStatic | evolution::kAccPrivate;
       if (((old.access ^ now) & evolution::kAccStatic) || (!(old.access & kDirect) && (now & evolution::kAccPrivate)))
         snapshot->changes_invoke_kind = true;
+    }
+  // A newly declared private interface method can replace resolution of an
+  // inherited symbol in an obsolete self frame. Capture the same Native frame
+  // proof as virtual-to-private changes; admission still checks inheritance.
+  if (snapshot->live.access & evolution::kAccInterface)
+    for (const auto& next : incoming.methods) {
+      if (!(next.access & evolution::kAccPrivate) || next.IsStatic()) continue;
+      bool declared = false;
+      for (const auto& old : snapshot->live.methods)
+        declared |= old.name == next.name && old.descriptor == next.descriptor;
+      snapshot->changes_invoke_kind |= !declared;
     }
   // A reference field whose type changes keeps a compatible old value: the
   // commit needs the new type's class, resolved here without initializing it.

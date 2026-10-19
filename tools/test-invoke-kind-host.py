@@ -28,6 +28,23 @@ using namespace artdcevm;
 using abi::arm64::Handle;
 abi::arm64::ArtMethodPrefix method{};
 int mode, exceptions = 0, original_calls = 0;
+int hook_attempts = 0;
+bool hook_failure = false;
+void* installed_replacement = nullptr;
+abi::arm64::ArtField kind_field{}, target_field{}, type_field{}, params_field{}, refs_field{};
+abi::arm64::ArtField* FindField(void*, std::string_view name, std::string_view) {
+  kind_field.offset = 8; target_field.offset = 16; type_field.offset = 12; params_field.offset = refs_field.offset = 8;
+  return name == "handleKind" ? &kind_field : name == "artFieldOrMethod" ? &target_field :
+      name == "type" ? &type_field : name == "ptypes" ? &params_field : name == "references" ? &refs_field : nullptr;
+}
+bool DescriptorEquals(void* klass, const char* descriptor) {
+  return klass == reinterpret_cast<void*>(0x10000900) && std::strcmp(descriptor,"Ldalvik/system/EmulatedStackFrame;") == 0;
+}
+bool Dispatch(void*, void*, Handle, const abi::arm64::InstructionOperands*, uint64_t* result) {
+  original_calls++; *result = 42; return true;
+}
+void* Refine(void*, void*, const int&, Handle, Handle, uint32_t, void*) { original_calls++; return &method; }
+
 void* linker = reinterpret_cast<void*>(0x1000);
 void* self = reinterpret_cast<void*>(0x2000);
 void* referrer = reinterpret_cast<void*>(0x3000);
@@ -92,11 +109,22 @@ void* Cache(void* l, uint32_t index, Handle cache, Handle loader, void* caller, 
 uintptr_t Nterp(void* thread, void* caller, const uint16_t*) {
   Require(thread == self && caller == referrer, "incorrect nterp ABI"); original_calls++; return 42;
 }
+extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void** original) {
+  hook_attempts++;
+  if (hook_failure) return nullptr;
+  installed_replacement = replacement; *original = target; return target;
+}
 extern "C" void* shadowhook_dlopen(const char*) { return linker; }
 extern "C" void shadowhook_dlclose(void*) {}
 extern "C" void* shadowhook_dlsym(void*, const char* name) {
   using namespace symbols::invoke_kind;
   if (mode == 0) return nullptr;
+  if (mode >= 17) {
+    if (name == std::string(symbols::structural::kFindInstanceField.name)) return HookAddress(FindField);
+    if (name == std::string(kClassDescriptorEquals.name)) return HookAddress(DescriptorEquals);
+    if (mode != 19 && name == std::string(kHandleDispatch0.name)) return HookAddress(Dispatch);
+    if (mode == 19 && name == std::string(kHandleRefineLegacy.name)) return HookAddress(Refine);
+  }
   if (name == std::string(symbols::runtime_thread::kCurrentThread.name)) return HookAddress(Current);
   if (name == std::string(symbols::structural::kThrowNewException.name)) return HookAddress(Throw);
   // Case 10 is the Android 14--15 shape: selectors without ResolveMethodId.
@@ -110,7 +138,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
         name == std::string(kObsoleteCacheRead.name) || name == std::string(kObsoleteCacheRaw.name)) return nullptr;
   }
   if (mode >= 6) {
-    if ((mode == 12 || mode == 13) && name == std::string(symbols::interface_redefinition::kLookupCache.name)) return HookAddress(LookupType);
+    if ((mode == 12 || mode == 13 || mode >= 17) && name == std::string(symbols::interface_redefinition::kLookupCache.name)) return HookAddress(LookupType);
     if (mode == 13 && (name == std::string(kSelectVirtual.name) || name == std::string(kSelectInterface.name) ||
         name == std::string(kMethodLoader.name) || name == std::string(symbols::runtime_thread::kUseReadBarrier.name))) return nullptr;
     if (mode != 14 && mode != 15 && name == std::string(kSelectVirtual.name)) return HookAddress(Selection);
@@ -151,6 +179,78 @@ int main(int argc, char** argv) {
       Require(!invoke_kind::Enable(), "enabled without observed ClassLinker");
       invoke_kind::ObserveClassLinker(linker);
       Require(invoke_kind::Enable(), "could not enable complete guards");
+      if (mode >= 17) {
+        Require(hook_attempts == 0 && !invoke_kind::InterfaceSymbols() && !invoke_kind::EnableInterfaceSymbols(),
+                "MethodHandle guard installed before verified declarations");
+        constexpr auto legacy = abi::arm64::FrameReferenceFor<abi::arm64::android13::Class>();
+        constexpr auto modern = abi::arm64::FrameReferenceFor<abi::arm64::android16::Class>();
+        invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8,12,mode==20 ? modern : legacy);
+        Require(invoke_kind::InterfaceSymbols(), "complete symbolic services unavailable");
+        if (mode == 18) {
+          hook_failure = true;
+          Require(!invoke_kind::EnableInterfaceSymbols() && !installed_replacement, "failed lazy installation escaped admission");
+          hook_failure = false;
+        }
+        Require(invoke_kind::EnableInterfaceSymbols(), "could not install symbolic MethodHandle selection");
+        const int installed = hook_attempts;
+        Require(invoke_kind::EnableInterfaceSymbols() && hook_attempts == installed, "installed lazy guard twice");
+        void* page = mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
+        Require(page != MAP_FAILED, "cannot map MethodHandle fixtures");
+        auto* declaring = reinterpret_cast<uint32_t*>(0x10000200); declaring[0] = 0x0200;
+        method.declaring_class = 0x10000200;
+        auto* receiver = reinterpret_cast<abi::arm64::Object*>(0x10000100); receiver->klass = 0x10000300;
+        auto* klass = reinterpret_cast<uint32_t*>(0x10000300); klass[3] = 0x10000400;
+        auto* table = reinterpret_cast<abi::arm64::ObjectArray*>(0x10000400); table->length = 2; table->elements[0] = 0x10000200;
+        auto* mh = reinterpret_cast<uint32_t*>(0x10000500); mh[0] = 0x10000000; mh[2] = 4; mh[3] = 0x10000c00;
+        *reinterpret_cast<uintptr_t*>(mh+4) = reinterpret_cast<uintptr_t>(&method);
+        uint32_t mh_root = 0x10000500;
+        alignas(8) uint8_t frame[128]{};
+        size_t regs = mode == 20 ? offsetof(abi::arm64::android16::ShadowFrame,vregs) : offsetof(abi::arm64::android13::ShadowFrame,vregs);
+        size_t count = mode == 20 ? offsetof(abi::arm64::android16::ShadowFrame,number_of_vregs) : offsetof(abi::arm64::android13::ShadowFrame,number_of_vregs);
+        *reinterpret_cast<uint32_t*>(frame+count) = 4;
+        auto* frame_receiver = reinterpret_cast<uint32_t*>(frame+regs+6*4); *frame_receiver = 0x10000100;
+        struct Operands : abi::arm64::InstructionOperands {
+          Operands() : InstructionOperands(1) {} uint32_t GetOperand(size_t i) const override { Require(i==0,"wrong operand");return 2; }
+        } operands;
+        auto* callsite = reinterpret_cast<uint32_t*>(0x10000600); callsite[0]=0x10000000;callsite[2]=0x10000700;
+        auto* params = reinterpret_cast<abi::arm64::ObjectArray*>(0x10000700); params->length=1;params->elements[0]=0x10000b00;
+        auto* handle_type=reinterpret_cast<uint32_t*>(0x10000c00); handle_type[0]=0x10000000;handle_type[2]=0x10000d00;
+        auto* handle_params=reinterpret_cast<abi::arm64::ObjectArray*>(0x10000d00);handle_params->length=1;handle_params->elements[0]=0x10000b00;
+        *reinterpret_cast<uint32_t*>(0x10000b00)=0x0200;
+        uint32_t handle_type_root=0x10000c00;
+        uint32_t callsite_root=0x10000600; int kind=4;
+        auto call = [&]() {
+          uint64_t result = 91;
+          if (mode == 19) return reinterpret_cast<decltype(&Refine)>(installed_replacement)(self,frame,kind,{&handle_type_root}, {&callsite_root},2,&method) != nullptr;
+          bool ok = reinterpret_cast<decltype(&Dispatch)>(installed_replacement)(self,frame,{&mh_root},&operands,&result);
+          Require(result == (ok ? 42u : 0u), "wrong MethodHandle result on failure"); return ok;
+        };
+        Require(call() && original_calls==1, "valid parent handle did not delegate");
+        table->length=0;
+        Require(!call() && exceptions==1 && original_calls==1, "lost interface did not throw ICCE before ART reflection verification");
+        handle_params->elements[0]=0x10000300;kind=0;mh[2]=0;expected_type="Ljava/lang/AbstractMethodError;";
+        Require(!call() && exceptions==2, "virtual MethodHandle lost-slot failure was not AME");
+        kind=4;mh[2]=4;
+        Require(!call() && exceptions==3, "class receiver type was confused with ART interface kind");
+        handle_params->elements[0]=0x10000b00;kind=0;mh[2]=0;expected_type="Ljava/lang/IncompatibleClassChangeError;";
+        Require(!call() && exceptions==4, "interface receiver type was confused with ART virtual kind");
+        handle_params->elements[0]=0x10000b00;kind=4;mh[2]=4;expected_type="Ljava/lang/IncompatibleClassChangeError;";
+        *frame_receiver=0;
+        Require(call(), "null receiver no longer delegates to ART NPE");
+        *frame_receiver=0x10000100; declaring[0]=0;
+        Require(call(), "ordinary class MethodHandle was intercepted");
+        declaring[0]=0x0200; mh[2]=3;kind=3;
+        Require(call(), "static handle was treated as interface dispatch");
+        if (mode == 19) {
+          kind=4; params->elements[0]=0x10000900;
+          auto* emulated=reinterpret_cast<uint32_t*>(0x10000800);emulated[0]=0x10000000;emulated[2]=0x10000a00;
+          auto* refs=reinterpret_cast<abi::arm64::ObjectArray*>(0x10000a00);refs->length=1;refs->elements[0]=0x10000100;
+          *frame_receiver=0x10000800;
+          Require(!call() && exceptions==5, "legacy caller-transformer receiver was not unwrapped");
+        }
+        munmap(page,4096);
+        std::cout << "Invocation guard case " << mode << " PASS\n"; return 0;
+      }
       uint16_t instructions[] = {0x6e, 9, 0};
       method.access_flags.store(8);
       for (const auto& hook : hooks) {
@@ -291,6 +391,16 @@ int main(int argc, char** argv) {
               own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);
             }
             referrer = &own_caller; method.access_flags.store(1);
+            *symbolic_flags = 0x0200;
+            fields[0] = 0;
+            Require(invoke_kind::InterfaceResolution(cache, 9), "canonical class target lost its interface symbolic owner");
+            *symbolic_flags = 0;
+            fields[0] = 0x0200;
+            Require(!invoke_kind::InterfaceResolution(cache, 9), "copied default confused class-owned cache identity");
+            Require(!invoke_kind::InterfaceResolution(cache, 10), "invalid method ID became an interface entry");
+            symbolic_type = nullptr;
+            Require(!invoke_kind::InterfaceResolution(cache, 9), "unresolved owner was accepted");
+            symbolic_type = reinterpret_cast<void*>(0x10000500);
             Require(invoke_kind::ClassKinds() && invoke_kind::EnableClassKinds(), "complete kind guards unavailable");
             for (const auto& hook : hooks) {
               if (std::string(hook.name) != symbols::invoke_kind::kNterpGetMethod.name) continue;
@@ -381,6 +491,7 @@ def main():
         work = Path(temp)
         (work / 'shadowhook.h').write_text('#pragma once\nextern "C" {\n'
             'void* shadowhook_dlopen(const char*); void shadowhook_dlclose(void*);\n'
+            'void* shadowhook_hook_sym_addr(void*,void*,void**);\n'
             'void* shadowhook_dlsym(void*,const char*); void* shadowhook_dlsym_dynsym(void*,const char*);\n}\n')
         source = work / 'test.cc'; source.write_text(SOURCE)
         native = ROOT / 'artdcevm/src/main/cpp'; binary = work / 'test'
@@ -393,7 +504,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(17):
+        for case in range(21):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')

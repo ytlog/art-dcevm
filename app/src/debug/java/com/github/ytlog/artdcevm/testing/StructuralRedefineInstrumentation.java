@@ -19,6 +19,8 @@ import com.github.ytlog.artdcevm.fixture.SuperBatchFixture;
 import com.github.ytlog.artdcevm.fixture.ModifierFlagsFixture;
 import com.github.ytlog.artdcevm.fixture.MemberDescriptorFixture;
 import com.github.ytlog.artdcevm.fixture.MemberDescriptorState;
+import com.github.ytlog.artdcevm.fixture.InterfaceSymbolFixture;
+import com.github.ytlog.artdcevm.fixture.InterfaceSymbolState;
 import com.github.ytlog.artdcevm.fixture.KindFixture;
 import com.github.ytlog.artdcevm.fixture.InvokeKindFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
@@ -182,6 +184,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly && arguments != null && arguments.containsKey("scenario")) {
             String isolated = arguments.getString("scenario");
             if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
+            else if ("interface-symbols".equals(isolated)) runInterfaceSymbolScenarios();
             else if ("member-descriptors".equals(isolated)) runMemberDescriptorScenarios();
             else if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
             else if ("snapshot-benchmark".equals(isolated)) runSnapshotBenchmark();
@@ -396,6 +399,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly) runStaticNarrowingScenarios();
         if (!ordinaryOnly) runClassKindScenarios();
         if (!ordinaryOnly) runMemberDescriptorScenarios();
+        if (!ordinaryOnly) runInterfaceSymbolScenarios();
     }
 
     // A Proxy implementation of a redefined interface stays: kept methods still
@@ -3061,7 +3065,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             for (int row = 0; row < values.length; ++row) {
                 final int index = row; final Object value = values[row]; String prefix = SELECTION_ROWS[row] + ".";
                 Object selected = restore ? NoSuchMethodError.class.getName() : selectionExpected(row, abstractKind, parentLane);
-                if (!(restore && parentLane)) {
+                {
                     selectionResult(scenario, prefix + "oldSite", selected, () -> call.invoke(null, value));
                     selectionResult(scenario, prefix + "newSite", selected, () -> freshCall.invoke(null, value));
                 }
@@ -3101,8 +3105,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("isolatedLoader", 19, isolatedStable.invoke(isolated));
             scenario.check("differentContract", false, contract.isInstance(isolated));
             scenario.check("splitRuntimePackage", split, load("PackageChild").getSuperclass().getClassLoader() != loader);
-            if (restore && parentLane) scenario.check("afterGc", 19, stable.invoke(values[2]));
-            else selectionResult(scenario, "afterGc", restore ? NoSuchMethodError.class.getName() : selectionExpected(2, abstractKind, parentLane),
+            selectionResult(scenario, "afterGc", restore ? NoSuchMethodError.class.getName() : selectionExpected(2, abstractKind, parentLane),
                     () -> call.invoke(null, values[2]));
         }
     }
@@ -3399,12 +3402,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         InterfaceEvolutionFixture.HidingImpl hiding = new InterfaceEvolutionFixture.HidingImpl();
         for (String kind : new String[]{"static", "private"}) {
             String name = "interface-hide-parent-" + kind;
-            String schema = memberSchema(InterfaceEvolutionFixture.Hiding.class);
-            runScenario(name, 63, scenario -> {
+            runScenario(name, 0, scenario -> {
                 scenario.redefine(new Class<?>[]{InterfaceEvolutionFixture.Hiding.class}, name);
-                scenario.check("rejectionReason", true, DcevmRuntime.capabilities().getString("lastRejection")
-                        .contains("hides an inherited interface method: clash()I"));
-                scenario.check("unchangedMembers", schema, memberSchema(InterfaceEvolutionFixture.Hiding.class));
+                scenario.check("addedFlags", kind.equals("static") ? 9 : 2,
+                        InterfaceEvolutionFixture.Hiding.class.getDeclaredMethod("clash").getModifiers());
                 scenario.check("oldDispatch", 31, hiding.clash());
                 scenario.check("newDispatch", 31, new InterfaceEvolutionFixture.HidingImpl().clash());
                 System.gc(); System.runFinalization(); System.gc();
@@ -3824,6 +3825,42 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     private static void scenarioCheckCaller(int value) {
         if (value != 2) throw new AssertionError("KindFixture.Caller precondition: " + value);
+    }
+
+    private void runInterfaceSymbolScenarios() throws Exception {
+        InterfaceSymbolState state = new InterfaceSymbolState();
+        for (int i = 0; i < DISPATCH_CALLS; ++i)
+            if (InterfaceSymbolFixture.Calls.child(state.receiver) != 7) throw new AssertionError("symbol warmup");
+        StandardJvmtiClient.cacheInterfaceDispatch(0, state.cachedChild);
+        StandardJvmtiClient.cacheInterfaceDispatch(1, state.cachedParent);
+        Class<?>[] targets = {InterfaceSymbolFixture.Child.class, InterfaceSymbolFixture.Peer.class};
+        for (int round = 0; round < 2; ++round) for (String kind : new String[]{"drop", "private", "static"}) {
+            for (int phase = 0; phase < 4; ++phase) {
+                boolean restoring = phase >= 2, fail = phase % 2 == 0;
+                boolean changed = phase == 1 || phase == 2;
+                String name = "interface-symbol-" + new String[]{"abort", "apply", "restore-abort", "restore"}[phase] + "-" + kind + "-" + round;
+                String variant = "interface-symbol-" + (restoring ? "original" : kind);
+                runScenario(name, fail ? 110 : 0, scenario -> {
+                    if (fail) scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(targets, variant, variant);
+                    if (fail) scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                    state.verify(scenario::check, "", kind, changed);
+                    scenario.check("cachedChildJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 0));
+                    scenario.check("cachedParentJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 1));
+                    for (int i = 0; i < 128; ++i) {
+                        final Object expected = !changed ? 7 : kind.equals("drop") ? NoSuchMethodError.class.getName()
+                                : kind.equals("private") ? IllegalAccessError.class.getName() : IncompatibleClassChangeError.class.getName();
+                        if (!expected.equals(InterfaceSymbolState.result(() -> InterfaceSymbolFixture.Calls.child(state.receiver))))
+                            throw new AssertionError("repeated symbolic resolution");
+                    }
+                    scenario.check("repeatedCalls", 128, 128);
+                    System.gc(); System.runFinalization(); System.gc();
+                    state.verify(scenario::check, "gc", kind, changed);
+                    scenario.check("gcCachedChildJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 0));
+                    scenario.check("gcCachedParentJni", 7, StandardJvmtiClient.callInterfaceDispatchInt(state.receiver, 1));
+                });
+            }
+        }
     }
 
     private void runMemberDescriptorScenarios() throws Exception {

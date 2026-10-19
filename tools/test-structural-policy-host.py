@@ -514,7 +514,8 @@ int main(int argc, char** argv) {
       const policy::Abilities body_only{true, true, true, true, false};
       const policy::Abilities unmapped{false, false, true, false, true};
       policy::LoadedHierarchy hierarchy;
-      hierarchy.inherited_interface = {{"parent", "()I"}, {"hashCode", "()I"}};
+      hierarchy.inherited_interface = {{"parent", "()I"}};
+      hierarchy.inherited_public = {{"hashCode", "()I"}};
       hierarchy.subtype_shadows[{"hidden", "()I"}] = "Lfixture/Base;";
       const auto accept = [&](const ClassSchema& candidate, size_t retired, jvmtiError former,
                               const char* what) {
@@ -685,6 +686,14 @@ int main(int argc, char** argv) {
              "static method hiding a superinterface method must be rejected");
       reject(with({{"hashCode", "()I", acc::kAccPrivate}}), kAdded,
              "private method hiding an Object method must be rejected");
+      for (uint32_t access : {acc::kAccPrivate, acc::kAccPublic | acc::kAccStatic}) {
+        auto guarded = members; guarded.interface_symbols = true;
+        const auto allowed = policy::Evaluate(contract, with({{"parent", "()I", access}}), hierarchy, guarded);
+        Require(allowed.error == JVMTI_ERROR_NONE && allowed.requires_member_mapping,
+                "interface symbolic guards must admit inherited private/static hiding");
+        Require(policy::Evaluate(contract, with({{"hashCode", "()I", access}}), hierarchy, guarded).error == kAdded,
+                "Object hiding remains outside the verified interface matrix");
+      }
       accept(with({{"parent", "()I", acc::kAccPublic}}), 0, kAdded,
              "default overriding a superinterface method must be accepted");
       // A default must not take over calls resolved by a static or non-public

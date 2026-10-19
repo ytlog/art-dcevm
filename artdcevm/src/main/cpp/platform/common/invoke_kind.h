@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
 #include <cstdint>
+#include "platform/abi/arm64/shadow_frame_table.h"
 #include "platform/common/art_hook.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/abi/arm64/common/runtime_thread.h"
@@ -18,7 +19,8 @@ bool Protecting();
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, abi::arm64::Handle target);
 void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods,
-                        size_t gc_marking = ~size_t{0}, size_t method_index = ~size_t{0});
+                        size_t gc_marking = ~size_t{0}, size_t method_index = ~size_t{0}, size_t iftable = ~size_t{0},
+                        abi::arm64::FrameReference frame_reference = nullptr);
 // Class and interface selectors are independent. The no-argument form is the
 // compatibility capability requiring both; admission uses the target's kind.
 // Each transaction still needs the Class/Thread/HandleScope probes.
@@ -30,6 +32,12 @@ const char* SelectionUnavailable(bool interface_target);
 // Probed Class/DexCache/collector declarations and named type lookup check
 // the symbolic owner, including inherited defaults and Object methods.
 bool ClassKinds();
+// Commit visitor only: identify interface-owned DEX entries independently of
+// their cached canonical ArtMethod. Reflection/JNI/MethodHandle identities stay mapped.
+bool InterfaceResolution(void* cache, uint32_t index);
+bool InterfaceSymbols();
+// Install the post-adaptation MethodHandle guard before accepting the transaction.
+bool EnableInterfaceSymbols();
 const char* ClassKindUnavailable();
 bool EnableClassKinds();
 bool ClassKindProtection();

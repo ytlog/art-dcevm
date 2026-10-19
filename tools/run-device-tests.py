@@ -47,7 +47,7 @@ for _split in (False, True):
                         else "java.lang.IllegalAccessError" if 4 <= _row <= 8 or 15 <= _row <= 17
                         else "java.lang.AbstractMethodError" if _abstract or _row in (3, 14) or _row >= 19 else 17 if _parent else 7)
                     if _restore: _selected = "java.lang.NoSuchMethodError"
-                    for _transport in (() if _restore and _parent else ("oldSite", "newSite")) + (() if _restore else
+                    for _transport in ("oldSite", "newSite") + (() if _restore else
                             ("reflection", "cachedReflection", "cachedHandle", "cachedJni", "fresh")):
                         _required[_type + "." + _transport] = _selected
                     _old = (100,101,102,102,111,112,121,122,131,102,142,143,131,103,102,112,122,131,145,104,105,106)[_row]
@@ -64,7 +64,7 @@ for _split in (False, True):
                     if _phase == 2 and _row in (2,3,5,11):
                         _required[_type + ".hot"] = 30000 * (_selected if isinstance(_selected, int)
                             else -1 if _selected == "java.lang.IllegalAccessError" else -2)
-                    if _row == 2: _required["afterGc"] = 19 if _restore and _parent else _selected
+                    if _row == 2: _required["afterGc"] = _selected
                 INTERFACE_SELECTION_REQUIRED[_name] = _required
 
 SCENARIOS = (
@@ -199,8 +199,8 @@ SCENARIOS = (
     ('interface-miranda-prepare', ['interface-miranda-prepare'], 0),
     ('interface-miranda-add', ['interface-miranda-add'], 0),
     ('interface-default-conflict', ['interface-default-conflict'], 0),
-    ('interface-hide-parent-static', ['interface-hide-parent-static'], 63),
-    ('interface-hide-parent-private', ['interface-hide-parent-private'], 63),
+    ('interface-hide-parent-static', ['interface-hide-parent-static'], 0),
+    ('interface-hide-parent-private', ['interface-hide-parent-private'], 0),
     ('interface-hide-object', ['interface-hide-object'], 63),
     *[("interface-shadow-" + kind + suffix,
        ["interface-shadow-original" if suffix == "-restore" else "interface-shadow-abstract" if suffix == "-abstract"
@@ -412,6 +412,14 @@ for _round in range(2):
             MEMBER_DESCRIPTOR_SCENARIOS.append((f"interface-descriptor-{_phase}-{_kind}-{_round}", [_variant] * 2, _code))
 SCENARIOS += tuple(MEMBER_DESCRIPTOR_SCENARIOS)
 
+INTERFACE_SYMBOL_SCENARIOS = []
+for _round in range(2):
+    for _kind in ("drop", "private", "static"):
+        for _phase, _code in (("abort", 110), ("apply", 0), ("restore-abort", 110), ("restore", 0)):
+            _variant = "interface-symbol-" + ("original" if _phase.startswith("restore") else _kind)
+            INTERFACE_SYMBOL_SCENARIOS.append((f"interface-symbol-{_phase}-{_kind}-{_round}", [_variant] * 2, _code))
+SCENARIOS += tuple(INTERFACE_SYMBOL_SCENARIOS)
+
 MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
                     "multi-interface-family", "multi-interface-shared", "multi-interface-after-shared", "multi-interface-covered",
                     "interface-overlap-uncovered","interface-overlap-body", "interface-overlap-structural", "interface-overlap-recovery","interface-implementation-body", "interface-implementation-add",
@@ -447,7 +455,7 @@ MAPPED_SCENARIOS.update({"nested-interface-add", "nested-interface-modifiers", "
 MAPPED_SCENARIOS.update({"kind-static", "interface-kind-static-legacy", "tool-retransform-structural", "tool-retransform-restore"})
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith(("interface-shadow-", "interface-selection-")) and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("proxy-interface-") and code == 0)
-MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private", "interface-descriptor-")))
+MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private", "interface-descriptor-", "interface-symbol-", "interface-hide-parent-")))
 VAR_HANDLE_API = 33
 def release_expectation(name, code, required, api, self_selection):
     """Expected code and checks given the reported per-kind selection services."""
@@ -918,7 +926,7 @@ REQUIRED_CHECKS.update({
     "interface-default-conflict": {"before": 21, "oldDispatch": "java.lang.IncompatibleClassChangeError",
         "newDispatch": "java.lang.IncompatibleClassChangeError", "left": 12, "marker": 89,
         "afterGc": "java.lang.IncompatibleClassChangeError"},
-    **{"interface-hide-parent-" + kind: {"rejectionReason": True, "oldDispatch": 31,
+    **{"interface-hide-parent-" + kind: {"addedFlags": 9 if kind == "static" else 2, "oldDispatch": 31,
         "newDispatch": 31, "afterGc": 31} for kind in ("static", "private")},
     "interface-hide-object": {"rejectionReason": True, "oldDispatch": 41, "newDispatch": 41, "afterGc": 41},
     **{"interface-shadow-" + kind: {"interfaceShadow": 1, "oldDispatch": 0, "newDispatch": 0,
@@ -951,7 +959,6 @@ REQUIRED_CHECKS.update({
 UNCHANGED_CHECKS = {
     **{f"batch-combination-s{n}-abort": ("unchangedDefinition0", "unchangedDefinition1") for n in (1, 3, 4, 5, 6)},
     **{name: ("unchangedMembers",) for name in ("tool-retransform-structural", "tool-retransform-restore")},
-    **{name: ("unchangedMembers",) for name in ['interface-hide-parent-static', 'interface-hide-parent-private']},
     **{name: ("unchangedSubject",) for name in ("super-batch-moving",)},
     **{"interface-implementation-" + variant: ("unchangedInterface", "unchangedImplementation")
        for variant in ("invalid", "abstract")},
@@ -1390,6 +1397,34 @@ for _name, _, _code in MEMBER_DESCRIPTOR_SCENARIOS:
     if _code: REQUIRED_CHECKS[_name].update(armed=0, failureHits=1)
 
 
+def interface_symbol_checks(kind, changed, late=True):
+    failure = {"drop": "java.lang.NoSuchMethodError", "private": "java.lang.IllegalAccessError", "static": "java.lang.IncompatibleClassChangeError"}[kind]
+    result = dict(oldChild=failure if changed else 7, oldOverrideChild=failure if changed else 17,
+        nullChild=failure if changed else "java.lang.NullPointerException", parentCall=7, parentOverride=17,
+        virtualCall=7, virtualOverride=17, cachedChildOwner=True,
+        lostChild=failure if changed else 7,
+        lostParent="java.lang.IncompatibleClassChangeError" if changed and kind=="drop" else 7,
+        lostVirtual="java.lang.NoSuchMethodError" if changed and kind=="drop" else 7,
+        lostReflection="java.lang.IllegalArgumentException" if changed and kind=="drop" else 7,
+        lostChildHandle="java.lang.IncompatibleClassChangeError" if changed and kind=="drop" else 7,
+        lostParentHandle="java.lang.ClassCastException" if changed and kind=="drop" else 7,
+        lostChildExactHandle="java.lang.IncompatibleClassChangeError" if changed and kind=="drop" else 7,
+        lostClassHandle="java.lang.AbstractMethodError" if changed and kind=="drop" else 7,
+        nullChildHandle="java.lang.NullPointerException", bodyIllegalArgument="java.lang.IllegalArgumentException",
+        lostParentInstance=not (changed and kind=="drop"), cachedChildReflection=7, cachedParentReflection=7,
+        cachedChildHandle=7, cachedParentHandle=7, freshChildLookup="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else 7,
+        freshParentReflection=7,
+        childInstance=True, parentInstance=True, identity=True, marker=31, peerCall=5 if changed else 3,
+        newReceiverChild=failure if changed else 7, cachedChildJni=7, cachedParentJni=7)
+    if late: result.update(lateChild=failure if changed else 7, lateParent=7)
+    return result
+
+for _name, _, _code in INTERFACE_SYMBOL_SCENARIOS:
+    _phase, _kind, _round = _name.removeprefix("interface-symbol-").rsplit("-", 2)
+    _checks = interface_symbol_checks(_kind, _phase in ("apply", "restore-abort"), _name != "interface-symbol-abort-drop-0")
+    REQUIRED_CHECKS[_name] = {**_checks, **{"gc" + key[0].upper() + key[1:] if key in ("cachedChildJni", "cachedParentJni") else "gc"+key: value for key, value in _checks.items()}, "repeatedCalls":128}
+    if _code: REQUIRED_CHECKS[_name].update(armed=0, failureHits=1)
+
 def scenario_sequence(scenario_group, api=None, self_selection=None):
     if scenario_group == "batch-combinations":
         return [(name, variants, code) for name, variants, code in SCENARIOS if name.startswith("batch-combination-s")]
@@ -1397,6 +1432,8 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         return tuple(item for item in scenario_sequence(scenario_group, api)
                      if not item[0].endswith("-retain") or
                      any(self_selection.values()))
+    if scenario_group == "interface-symbols":
+        return tuple(INTERFACE_SYMBOL_SCENARIOS)
     if scenario_group == "member-descriptors":
         return tuple(MEMBER_DESCRIPTOR_SCENARIOS)
     if scenario_group == "class-kinds":
@@ -1442,7 +1479,7 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         names = [item[0] for item in SCENARIOS]
         return tuple(item for item in SCENARIOS[:names.index("interface-method-bodies")]
                      + SCENARIOS[names.index("interface-hidden"):]
-                     if not item[0].startswith(("static-narrow-", "class-kind-", "interface-descriptor-")))
+                     if not item[0].startswith(("static-narrow-", "class-kind-", "interface-descriptor-", "interface-symbol-", "interface-hide-parent-")))
     raise RunFailure("Unsupported scenario group")
 
 
@@ -1671,7 +1708,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

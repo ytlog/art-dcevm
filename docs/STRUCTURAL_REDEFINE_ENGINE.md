@@ -167,7 +167,9 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 新增方法还须满足以下检查：
 
-1. 新增 static/private 方法不得遮蔽从父接口继承的虚方法或 Object 的 public 实例方法，否则拒绝 63。`CollectInheritedInterface` 将这些身份记录到 `LoadedHierarchy::inherited_interface`。已校验的旧 `invoke-interface` 可能仍按 IMT 分派，引擎不能靠新声明使它安全地抛调用方式错误。
+1. 已验证符号缓存与调用守卫时，允许新增 static/private 方法遮蔽继承的父接口方法；能力不可用时仍返回 63。遮蔽 Object 方法继续拒绝 63。`CollectInheritedInterface` 把真实父接口方法记入 `inherited_interface`，Object 方法记入 `inherited_public`。事务复用调用方式变化的调用者扫描与编译保护；新增 private 声明还须有 Native 活动帧快照，obsolete 自身帧继续要求对应命名选择服务。
+
+   保留父接口的 canonical ArtMethod 对父接口调用及缓存反射、JNI ID、MethodHandle 仍然有效，但不能证明旧的子接口 DEX 符号仍可解析。在 ART 现有复制后反射访问器中，已接受的父接口移除或 direct 遮蔽按固定 `DexCacheSourceInfo` 的 cache/index 与命名类型查找，清除以接口为符号所有者的 resolved-method 缓存条目。缓存失效由 ART 执行；增强库不另写解析器，也不退役未变化的父接口声明。之后复用 ART 解析与现有调用守卫：缺失的继承符号抛 NSME、private 遮蔽抛 IAE、static 遮蔽抛 ICCE，均先于 null 接收者及 IMT 选择。访问器只在不可失败的更新阶段执行，规划失败不发布缓存变化。首次这类事务延迟安装命名 MethodHandle 细化守卫，安装失败即拒绝事务。Android 13--17 使用参数转换后的 `DoMethodHandleInvokeMethod`，11--12 使用 `RefineTargetMethod` 并按固定源码解开 caller-transformer 帧。固定 ShadowFrame/InstructionOperands 声明、保存的 MethodType 接收者类型与已探测 Class IfTable 区分接口句柄丢失声明接口的 ICCE，以及缓存类虚句柄丢失 default 槽位的 AME。反射保持 IllegalArgumentException；句柄参数转换、null 接收者及目标方法体自身异常保留原有次序。不增加 Java 上调或全局异常替换。
 2. 新增 default 与类链 protected/package-private 虚方法同签名时，`Abilities::interface_selection` 决定能否按 JBR 接受：类方法优先，接口调用抛 `IllegalAccessError`，原有类方法调用保留；更具体 public 覆写仍优先。`subtype_shadows` 保留服务不可用时的拒绝依据，命名服务与运行时声明探测通过后才放开新增 default、abstract/default 切换和新增父接口带来的 default。
 3. 与 JBR 相同，新出现的 default 冲突照常接受：ART 为两个无关接口的同签名 default 链接冲突方法，调用时抛 `IncompatibleClassChangeError`；`PlanMethods` 把旧 copied default 映射到该冲突方法，缓存的旧解析随之失效。之后的事务消除冲突时，调用恢复到唯一的 default。
 
@@ -291,7 +293,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 旧字段的名称、类型或存储不再出现在新类中时，该旧字段退役：保留真实旧 ArtField，不制造墓碑；新类中同名的新字段从默认值开始。
 
-实例引用字段只改变声明类型时（同名、同存储，新旧描述符均为 `L`），Native 阶段解析新类型，提交时按固定 [JBR `DcevmSharedGC::is_compatible`](https://github.com/JetBrains/JetBrainsRuntime/blob/cf1f197170a0f04c6559feb873e362583be021d1/src/hotspot/share/gc/shared/dcevmSharedGC.cpp) 判断旧值：值的最终类（参与本批时取替换类）及其父类链中，有类名等于新字段类型，或某一层直接声明了该名称的接口，才保留；只经父接口实现的不算，按名称而不是类身份比较；其余从 null 开始，数组改类型同样从 null 开始。直接接口取自 ClassDef 的接口列表；Proxy 类取其 `interfaces` 静态字段，数组类取其 IfTable。ART 代理共享 `java.lang.reflect.Proxy` 的 DexCache，但 ClassDef 索引仍为 `kDexNoIndex16`，不能把该缓存当作代理自身的定义读取。实例字段从 `Object` 改为代理直接声明的接口或 `Proxy` 父类时保留原值，继承字段同样适用；仅经父接口实现时仍清空。值只在提交时确定，因此这是提交阶段唯一读取 DEX 的地方：只读映射中的 ClassDef 接口表，按类缓存，读取失败按不兼容清空。
+实例引用字段只改变声明类型时（同名、同存储，新旧描述符均为 `L`），Native 阶段解析新类型，提交时按固定 [JBR `DcevmSharedGC::is_compatible`](https://github.com/JetBrains/JetBrainsRuntime/blob/cf1f197170a0f04c6559feb873e362583be021d1/src/hotspot/share/gc/shared/dcevmSharedGC.cpp) 判断旧值：值的最终类（参与本批时取替换类）及其父类链中，有类名等于新字段类型，或某一层直接声明了该名称的接口，才保留；只经父接口实现的不算，按名称而不是类身份比较；其余从 null 开始，数组改类型同样从 null 开始。直接接口取自 ClassDef 的接口列表；Proxy 类取其 `interfaces` 静态字段，数组类取其 IfTable。ART 代理共享 `java.lang.reflect.Proxy` 的 DexCache，但 ClassDef 索引仍为 `kDexNoIndex16`，不能把该缓存当作代理自身的定义读取。实例字段从 `Object` 改为代理直接声明的接口或 `Proxy` 父类时保留原值，继承字段同样适用；仅经父接口实现时仍清空。值只在提交时确定，引用兼容性在这里读取 DEX：只读映射中的 ClassDef 接口表，按类缓存，读取失败按不兼容清空。
 
 静态字段按固定 [JBR FieldCopier](https://github.com/JetBrains/JetBrainsRuntime/blob/cf1f197170a0f04c6559feb873e362583be021d1/src/hotspot/share/prims/jvmtiEnhancedRedefineClasses.cpp) 规划：同名、同存储、同类型通常复制；类型为本批失去的接口时额外检查。仅 `L` → `L` 的改类型允许兼容复制，数组改类型与 static/实例互换产生默认值。兼容检查要求旧值的实际类参与本批重定义（含随父类型变化而受影响的类），并在其最终类链的类名或各层直接声明的接口名中匹配新字段类型；这里按签名名称匹配，不使用一般的接口传递可赋值关系。未参与重定义的兼容对象也可能被清空，例如静态 `String` → `CharSequence` 为 null。同类型数组仍照常保留。准备阶段从最终字段表和完整批次的最终类型图生成计划；提交阶段只读已确定的字段槽位、受根保护的类身份并复制或清空，不再解析 DEX 或查询类型。
 - **提交复制**：ART 的 `CopyFields`/`ClearFields` 按旧类字段数组逐个在新类中查找同名同类型字段，找不到即 `CHECK`。`CollectAndCreateNewInstances` 之后为每个含退役字段的旧类准备一份去掉退役项的数组副本；Update 开始时把旧类的字段数组槽位换成副本，ART 的 visitor 调用到达时换回原数组（11–17 均在复制之后、visitor 之前），Update 结束时再确认已换回。提交后把旧类中退役的静态引用置空，避免永久保留的旧类继续持有对象。
@@ -491,6 +493,8 @@ flowchart TD
 退役字段的反射占位类在 `artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/`。
 
 ## 风险
+
+接口符号功能在首次使用时延迟增加 MethodHandle 细化 Hook，对接口声明目标核对最终 IfTable；下述历史基准早于这项激活，尚未量化其新增 MethodHandle 成本。
 
 - **Mainline 更新**：ART APEX 会随 Play 系统更新替换，平台版本与 ART 源码版本可能不同。候选声明覆盖 11–17 源码，由运行时探测在每次事务中核对；新的 ART 源码版本须补充核对，确有差异时新增版本目录。
 - **ART 服务语义漂移**：探测只能核对有 ART 服务或 JVMTI 作对照的声明（Class、ArtField、ArtMethod、DexCache、槽位、map、obsolete 标志、MethodHandle 偏移）；visitor 虚表顺序与来源类型、Handle 与守卫签名依赖源码声明与精确符号名。扩展版本时核对源码与设备行为，差异只放 `platform/abi/arm64/androidNN/`，不复制后端。
