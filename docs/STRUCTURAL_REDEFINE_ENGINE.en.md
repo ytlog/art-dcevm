@@ -44,6 +44,7 @@ The interface backend is the sole exception to the principle of taking over deci
 | `CollectNewFieldAndMethodMappings` | A missing method with the same name and signature causes a CHECK, including when copied default/miranda methods disappear during subclass relinking | Write the precomputed mappings; use the original mapping for transactions without a plan |
 | `UpdateClassStructurally` | Migrate fields and lock words, mark methods obsolete, replace references, deoptimize and invalidate caches | Establish the visitor's transaction scope and call the original in full. During copying, substitute old field arrays without retired entries, and temporarily point the new class at the old superclass when the superclass changes |
 | `Runtime::VisitReflectiveTargets` | Apply original member mappings and shadowing rules | Restore old field arrays; clear retired members' DexCache entries, record retired JNI IDs, and rewrite reflection `Field` and VarHandle references for retired fields. Delegate all other work to the original visitor |
+| `JniIdManager::VisitReflectiveTargets` | Repair JNI ID caches using declaring-class array indexes, which may not exist for copied conflicts | During structural commit, hide ClassExt only for an invalid array owner; the original manager updates the ID map and other caches. Restore before the next visitor call or return |
 | JNI table, `Method_invoke`, `Constructor_newInstance0`, MethodHandle entries and JNI ID encoding | Cached targets are obsolete methods of the old declaring class; calls may fail receiver checks or use old vtable indexes to dispatch to another method | Throw before dispatch only for retired targets; forward all other calls unchanged |
 
 ## Transaction flow
@@ -499,6 +500,10 @@ flowchart TD
 ```
 
 Reflection placeholder classes for retired fields live in `artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/`.
+
+### JNI ID array ownership
+
+ART still owns the lock and ID-map updates in `JniIdManager::VisitReflectiveTargets`. Fixed Android 11–17 encoding excludes obsolete methods from declaring-class ID arrays, and Android 14–17 also explicitly exclude default-conflict copies, but redefine repair lacks the corresponding ownership check. A copy stored in an implementation class has no slot in its declaring interface array. The member-mapping layer wraps the named visitor entry and checks array ownership using the verified Class/ArtMethod declarations. Only after the original visitor returns a different method does it temporarily hide `Class.extData` on a side without an array slot, allowing ART to skip invalid array repair. It restores the reference before the next visitor call and before the manager returns. The scope is restricted to structural commit with all threads suspended and moving GC disabled; it neither allocates, suspends nor changes method flags. The original manager retains the ID vector, index mode, locking and repair of unmasked valid caches. Host regression covers both ownership sides, a shared owner and scope restoration; full device suites cover repeated conflict-method JNI ID transitions and restoration. Sources: [ART 11 JNI ID manager](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/jni/jni_id_manager.cc), [ART 17 JNI ID manager](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/jni/jni_id_manager.cc).
 
 ## Risks
 

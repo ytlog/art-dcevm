@@ -1,5 +1,6 @@
 #include "platform/common/runtime_thread.h"
 #include "platform/common/member_mapping.h"
+#include "platform/common/jni_id_array_scope.h"
 #include "platform/common/art_method_identity.h"
 #include "platform/common/art_hook.h"
 
@@ -62,6 +63,7 @@ void* (*mirror_class)(ClassRedefinitionPrefix*) = nullptr;
 void* original_mapping = nullptr;
 void* original_update = nullptr;
 void* original_visit = nullptr;
+void* original_jni_visit = nullptr;
 
 // Member mapping of one redefinition, planned while ART may still fail and
 // applied at commit without reading DEX data or calling lookups.
@@ -119,6 +121,7 @@ bool Initializer(const std::string& name) { return name == "<init>" || name == "
 
 // Mapping operations over one source-declared class layout.
 struct PlanOps {
+  uint32_t* (*unowned_method_ext)(abi::ArtMethod*) noexcept;
   bool (*plan)(const runtime_thread::VerifiedThread&, const RedefinitionDataIter& data, MappingPlan* plan, std::string* why);
   uint64_t* (*field_slot)(void* klass, size_t slot);
   uint32_t* (*superclass)(void* klass);
@@ -492,8 +495,17 @@ template <typename Class, typename Method> struct Planner : class_layout::View<C
       if (value && !AcceptsStatic(thread, data, field, value)) *slot = 0;
     }
   }
+  static uint32_t* UnownedMethodExt(abi::ArtMethod* value) noexcept {
+    if (!value) return nullptr;
+    auto* method = reinterpret_cast<Method*>(value);
+    // Update's suspend-all and disabled moving GC keep Class references stable.
+    auto* owner = Pointer<Class>(method->declaring_class);
+    if (!owner) return nullptr;
+    auto* methods = Members<Method>(owner->methods);
+    return methods && methods->Contains(method) ? nullptr : &owner->ext_data;
+  }
   static constexpr PlanOps Make(int) {
-    return {Plan, Planner::FieldSlot, Planner::Superclass, Planner::CopyRetyped, Planner::ClearNarrowed};
+    return {UnownedMethodExt, Plan, Planner::FieldSlot, Planner::Superclass, Planner::CopyRetyped, Planner::ClearNarrowed};
   }
 };
 
@@ -627,6 +639,14 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
   retired_in_update.clear();
 }
 
+void VisitJni(void* manager, ReflectiveValueVisitor* visitor) noexcept {
+  using Function = void (*)(void*, ReflectiveValueVisitor*);
+  const int selected = in_update ? class_layout::Selected() : -1;
+  if (selected < 0) { reinterpret_cast<Function>(original_jni_visit)(manager, visitor); return; }
+  JniIdArrayVisitor scoped(visitor, kPlanners[selected].unowned_method_ext);
+  reinterpret_cast<Function>(original_jni_visit)(manager, &scoped);
+}
+
 void Visit(void* runtime, ReflectiveValueVisitor* visitor) noexcept {
   using Function = void (*)(void*, ReflectiveValueVisitor*);
   if (!in_update) { reinterpret_cast<Function>(original_visit)(runtime, visitor); return; }
@@ -654,7 +674,8 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
   const Required required[] = {
       {kCollectNewFieldAndMethodMappings, HookAddress(CollectMappings), &original_mapping},
       {kUpdateClassStructurally, HookAddress(Update), &original_update},
-      {kVisitReflectiveTargets, HookAddress(Visit), &original_visit}};
+      {kVisitReflectiveTargets, HookAddress(Visit), &original_visit},
+      {kVisitJniReflectiveTargets, HookAddress(VisitJni), &original_jni_visit}};
   std::vector<Hook> resolved;
   for (const auto& entry : required) {
     void* address = symbols::Find(entry.symbol);

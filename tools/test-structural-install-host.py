@@ -57,6 +57,7 @@ jvmtiError FindActiveBatchFrame(jvmtiEnv*, JNIEnv*, Batch&);
 int api_override = 0, initialize_calls = 0;
 bool missing_initializer = false;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
+bool failed_jni_visit_hook = false;
 int probe_registration_calls = 0;
 int bridge_attempts = 0, bridge_calls = 0, invocation_calls = 0, thread_end_enables = 0;
 std::string thrown;
@@ -278,6 +279,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (key == symbols::runtime_thread::kReadBarrierMark.name) return reinterpret_cast<void*>(Mark);
   if (key == symbols::runtime_thread::kUseReadBarrier.name) return nullptr;
   if (mode == 3 && key == symbols::structural::kCollectNewFieldAndMethodMappings.name) return nullptr;
+  if (mode == 42 && key == symbols::structural::kVisitJniReflectiveTargets.name) return nullptr;
   if (mode >= 6 && key == symbols::imt_sealing::kLinearAllocAllocKind.name) return nullptr;
   if (mode == 19 && key == symbols::narrowed_references::kVisitReference.name) return nullptr;
   if ((mode == 6 || mode == 10 || mode == 11 || mode == 12 || mode == 13 || mode == 14 || mode >= 16) &&
@@ -335,6 +337,9 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
     if (mode == 20 && !failed_reference_hook) { failed_reference_hook = true; return nullptr; }
   }
   if (mode == 1 && hook_calls == 2) return nullptr;
+  if (mode == 43 && !failed_jni_visit_hook && target == &addresses[symbols::structural::kVisitJniReflectiveTargets.name]) {
+    failed_jni_visit_hook = true; return nullptr;
+  }
   if (!failed_retransform_hook &&
       ((mode == 24 && target == reinterpret_cast<void*>(DirectOriginal)) ||
        (mode == 25 && target == reinterpret_cast<void*>(RetransformOriginal)))) {
@@ -586,6 +591,23 @@ int main(int argc, char** argv) {
       return 0;
     }
     const auto result = structural_redefine::Install(&vm, &env, {});
+    if (mode == 42 || mode == 43) {
+      if (mode == 42) {
+        Require(result == JVMTI_ERROR_NONE && set_calls == 0 && active.size() == 6 &&
+                class_layout::State().find(symbols::structural::kVisitJniReflectiveTargets.name) != std::string::npos &&
+                structural_redefine::Capabilities().find("\"methodDeletion\":false") != std::string::npos,
+                "Missing JNI ID visitor advertised mapping/retirement or lost its diagnosis");
+      } else {
+        Require(result == JVMTI_ERROR_INTERNAL && set_calls == 0 && active.empty(),
+                "JNI ID visitor installation failure retained hooks or changed the JNI table");
+        Require(structural_redefine::Install(&vm, &env, {}) == JVMTI_ERROR_NONE && set_calls == 1 &&
+                structural_redefine::Capabilities().find("\"methodDeletion\":true") != std::string::npos,
+                "JNI ID visitor rollback prevented a complete retry");
+      }
+      std::cout << "CAPABILITIES " << structural_redefine::Capabilities() << '\n';
+      std::cout << "Installer case " << mode << " PASS\n";
+      return 0;
+    }
     if (mode == 1) {
       Require(result == JVMTI_ERROR_INTERNAL && set_calls == 0 && active.empty(),
               "Failed inline install changed JNI table or retained hooks");
@@ -943,7 +965,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        cases = [(case, None, False) for case in range(42)]
+        cases = [(case, None, False) for case in range(44)]
         cases += [(case, api, False) for api in (30, 31, 32) for case in range(23, 29)]
         cases += [(23, api, True) for api in (30, 31, 32, 33)]
         for case, api, missing in cases:

@@ -44,6 +44,7 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 | `CollectNewFieldAndMethodMappings` | 缺同名同签名方法会 CHECK，包括重链接子类的 copied default/miranda 消失时 | 写入预先算好的映射；没有计划的事务调用原映射 |
 | `UpdateClassStructurally` | 字段/锁字迁移、obsolete、引用替换、去优化、缓存失效 | 只设置 visitor 的事务作用域并完整调用原函数；复制阶段换用不含退役项的旧类字段数组，父类变化时让新类暂指原父类 |
 | `Runtime::VisitReflectiveTargets` | 原成员映射与 shadowing 处理 | 换回旧类字段数组；清除退役成员的 DexCache 项，记录退役 JNI ID，改写退役字段的反射 `Field` 与 VarHandle；其余交给原 visitor |
+| `JniIdManager::VisitReflectiveTargets` | 按声明类方法数组下标修补 JNI ID 缓存，复制冲突项可能没有对应槽位 | 在结构提交作用域内仅隐藏无效数组归属一侧的 ClassExt；原管理器更新 ID 映射并修补其余缓存，下一次 visitor 或返回前恢复 |
 | JNI 函数表、`Method_invoke`、`Constructor_newInstance0`、MethodHandle 入口、JNI ID 编码 | 缓存的目标是旧声明类的 obsolete 方法，可能报接收者类型错误或按旧 vtable 索引分派到别的方法 | 仅对退役目标在分派前抛异常，其他调用原样转发 |
 
 ## 事务流程
@@ -496,6 +497,10 @@ flowchart TD
 ```
 
 退役字段的反射占位类在 `artdcevm/src/main/java/com/github/ytlog/artdcevm/internal/`。
+
+### JNI ID 数组归属
+
+`JniIdManager::VisitReflectiveTargets` 仍由 ART 持有锁并更新 ID 映射。固定 Android 11–17 的编码路径跳过 obsolete 方法的声明类 ID 数组，Android 14–17 还显式排除 default-conflict 副本，但重定义的修补路径没有同样的数组归属检查：副本存储在实现类中，直接求声明接口数组下标会越界。成员映射层通过命名入口包装该次 visitor，使用已核对的 Class/ArtMethod 声明判断实际数组归属；仅在原 visitor 返回不同方法后，暂时隐藏无对应数组槽位一侧的 `Class.extData`，使 ART 跳过无效的数组修补。下一次 visitor 调用及管理器返回前恢复原引用。作用域限于结构提交的 suspend-all、移动 GC 已禁用阶段，不分配、不挂起、不改方法标志；ID 向量、索引模式、锁和合法缓存的修补继续由原管理器负责。宿主回归覆盖双侧归属、共享 owner 与作用域恢复；设备完整套件覆盖冲突方法 JNI ID 的多轮转换和恢复。源码依据见 [ART 11 JNI ID manager](https://android.googlesource.com/platform/art/+/refs/tags/android-11.0.0_r1/runtime/jni/jni_id_manager.cc) 与 [ART 17 JNI ID manager](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/jni/jni_id_manager.cc)。
 
 ## 风险
 

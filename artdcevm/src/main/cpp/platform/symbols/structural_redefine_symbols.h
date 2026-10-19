@@ -33,6 +33,7 @@ inline constexpr NamedSymbol kCollectAndCreateNewInstances{Library::kJvmti, "_ZN
 inline constexpr NamedSymbol kUpdateClassStructurally{Library::kJvmti, "_ZN12openjdkjvmti9Redefiner17ClassRedefinition23UpdateClassStructurallyERKNS_20RedefinitionDataIterE"};
 
 // Runtime services for layout probes and retired-member checks.
+inline constexpr NamedSymbol kVisitJniReflectiveTargets{Library::kArt, "_ZN3art3jni12JniIdManager22VisitReflectiveTargetsEPNS_22ReflectiveValueVisitorE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kVisitReflectiveTargets{Library::kArt, "_ZN3art7Runtime22VisitReflectiveTargetsEPNS_22ReflectiveValueVisitorE"};
 inline constexpr NamedSymbol kFindDeclaredStaticField{Library::kArt, "_ZN3art6mirror5Class23FindDeclaredStaticFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
 inline constexpr NamedSymbol kFindDeclaredInstanceField{Library::kArt, "_ZN3art6mirror5Class25FindDeclaredInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
