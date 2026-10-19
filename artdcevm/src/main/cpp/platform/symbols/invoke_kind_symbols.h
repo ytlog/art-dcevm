@@ -32,4 +32,5 @@ inline constexpr NamedSymbol kHandleDispatch5{Library::kArt, "_ZN3art12_GLOBAL__
 // Android 11--12 retain the refinement entry with caller-transformer support.
 inline constexpr NamedSymbol kHandleRefineLegacy{Library::kArt, "_ZN3art12_GLOBAL__N_118RefineTargetMethodEPNS_6ThreadERNS_11ShadowFrameERKNS_6mirror12MethodHandle4KindENS_6HandleINS5_10MethodTypeEEESC_jPNS_9ArtMethodE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kClassDescriptorEquals{Library::kArt, "_ZN3art6mirror5Class16DescriptorEqualsEPKc", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kMethodTypeExact{Library::kArt, "_ZN3art6mirror10MethodType12IsExactMatchENS_6ObjPtrIS1_EE", SymbolTable::kAnyNamed};
 }  // namespace artdcevm::symbols::invoke_kind

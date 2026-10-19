@@ -1,6 +1,7 @@
 #include "platform/common/hierarchy_snapshot.h"
 #include "evolution/modifiers.h"
 #include "platform/common/schema_snapshot.h"
+#include "platform/common/invoke_kind.h"
 #include <algorithm>
 #include <string_view>
 
@@ -437,6 +438,15 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
   std::string unreadable;
   if (!evolution::ReadClassDeclarations(SubmittedDex(definition), &incoming, &unreadable))
     return JVMTI_ERROR_NONE;
+  for (const auto& parent : snapshot->live.interfaces) {
+    if (std::find(incoming.interfaces.begin(), incoming.interfaces.end(), parent) != incoming.interfaces.end()) continue;
+    if (!invoke_kind::PrepareBoundReceiverClass(jni)) {
+      if (jni->ExceptionCheck()) jni->ExceptionClear();
+      *error = "bound MethodHandle receiver class unavailable in Native snapshot";
+      return JVMTI_ERROR_NOT_AVAILABLE;
+    }
+    break;
+  }
   snapshot->changes_invoke_kind = (snapshot->live.access ^ incoming.access) & evolution::kAccInterface;
   for (const auto& old : snapshot->live.methods)
     for (const auto& next : incoming.methods) {

@@ -230,7 +230,8 @@ bool RejectHandle(void* self, Handle handle) {
 }
 bool HandleCall(void* original, void* self, void* frame, Handle method, Handle type,
                 const void* operands, uint64_t* result) {
-  if (RejectHandle(self, method)) { if (result) *result = 0; return false; }
+  if (RejectHandle(self, method) || invoke_kind::RejectBoundInterfaceReceiver(self, method, type,
+      frame, static_cast<const abi::InstructionOperands*>(operands))) { if (result) *result = 0; return false; }
   using Function = bool (*)(void*, void*, Handle, Handle, const void*, uint64_t*);
   return reinterpret_cast<Function>(original)(self, frame, method, type, operands, result);
 }
@@ -243,7 +244,7 @@ bool MethodHandleInvokeExact(void* self, void* frame, Handle method, Handle type
   return HandleCall(process->original_mh_exact, self, frame, method, type, operands, result);
 }
 void MethodHandleFrame(void* self, Handle method, Handle frame) noexcept {
-  if (RejectHandle(self, method)) return;
+  if (RejectHandle(self, method) || invoke_kind::RejectBoundInterfaceReceiverWithFrame(self, method, frame)) return;
   using Function = void (*)(void*, Handle, Handle);
   reinterpret_cast<Function>(process->original_mh_frame)(self, method, frame);
 }

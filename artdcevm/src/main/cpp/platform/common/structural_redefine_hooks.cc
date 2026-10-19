@@ -175,8 +175,8 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     }
   }
 
+  std::map<structural_policy::MemberKey, uint32_t> symbols;
   if (decision.error == JVMTI_ERROR_NONE && (snapshot.live.access & evolution::kAccInterface)) {
-    std::map<structural_policy::MemberKey, uint32_t> symbols;
     if (decision.interfaces_removed)
       for (const auto& key : snapshot.hierarchy.inherited_interface) symbols.emplace(key, 0);
     // A newly inherited parent can collide with an already declared direct
@@ -215,16 +215,18 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
         symbols.emplace(key, 0);
       }
     }
-    if (decision.error == JVMTI_ERROR_NONE && !symbols.empty()) {
-      std::vector<std::pair<structural_policy::MemberKey, uint32_t>> changes(symbols.begin(), symbols.end());
-      std::string why;
-      if (!abilities.interface_symbols || !invoke_kind::EnableInterfaceSymbols()) why = "symbolic interface resolution services unavailable";
-      else why = KindCallers(*thread, self, snapshot, incoming, *batch, changes, true);
-      if (!why.empty()) {
-        decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
-        decision.reason = std::move(why);
-      } else context->invalidate_interface_symbols = true;
-    }
+  }
+  // A class can lose an interface while retaining all of its declarations.
+  // Cached interface/class handles still need the same final-IfTable checks.
+  if (decision.error == JVMTI_ERROR_NONE && (decision.interfaces_removed || !symbols.empty())) {
+    std::vector<std::pair<structural_policy::MemberKey, uint32_t>> changes(symbols.begin(), symbols.end());
+    std::string why;
+    if (!abilities.interface_symbols || !invoke_kind::EnableInterfaceSymbols()) why = "symbolic interface resolution services unavailable";
+    else if (!changes.empty()) why = KindCallers(*thread, self, snapshot, incoming, *batch, changes, true);
+    if (!why.empty()) {
+      decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
+      decision.reason = std::move(why);
+    } else context->invalidate_interface_symbols = true;
   }
   if (decision.error == JVMTI_ERROR_NONE && !decision.kind_changes.empty()) {
     if (std::string callers = KindCallers(*thread, self, snapshot, incoming, *batch, decision.kind_changes);

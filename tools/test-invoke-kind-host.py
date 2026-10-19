@@ -31,12 +31,15 @@ int mode, exceptions = 0, original_calls = 0;
 int hook_attempts = 0;
 bool hook_failure = false;
 void* installed_replacement = nullptr;
-abi::arm64::ArtField kind_field{}, target_field{}, type_field{}, params_field{}, refs_field{};
+abi::arm64::ArtField kind_field{}, target_field{}, type_field{}, params_field{}, refs_field{}, delegate_field{}, receiver_field{};
 abi::arm64::ArtField* FindField(void*, std::string_view name, std::string_view) {
   kind_field.offset = 8; target_field.offset = 16; type_field.offset = 12; params_field.offset = refs_field.offset = 8;
-  return name == "handleKind" ? &kind_field : name == "artFieldOrMethod" ? &target_field :
+  delegate_field.offset=24;receiver_field.offset=28;
+  return name=="delegate"?&delegate_field:name=="receiver"?&receiver_field:name == "handleKind" ? &kind_field : name == "artFieldOrMethod" ? &target_field :
       name == "type" ? &type_field : name == "ptypes" ? &params_field : name == "references" ? &refs_field : nullptr;
 }
+bool equivalent_types=false;
+bool ExactType(void* type, uintptr_t other) { return equivalent_types||reinterpret_cast<uintptr_t>(type)==other; }
 bool DescriptorEquals(void* klass, const char* descriptor) {
   return klass == reinterpret_cast<void*>(0x10000900) && std::strcmp(descriptor,"Ldalvik/system/EmulatedStackFrame;") == 0;
 }
@@ -49,6 +52,17 @@ void* linker = reinterpret_cast<void*>(0x1000);
 void* self = reinterpret_cast<void*>(0x2000);
 void* referrer = reinterpret_cast<void*>(0x3000);
 void Require(bool ok, const char* reason);
+int bound_finds=0,bound_globals=0,bound_locals_deleted=0;
+bool bound_find_fail=false,bound_global_fail=false,bound_reenter=false;
+jclass JNICALL FindBound(JNIEnv* jni,const char* name){
+ Require(std::strcmp(name,"java/lang/invoke/Transformers$BindTo")==0,"wrong bound bootstrap name");++bound_finds;
+ if(bound_reenter)Require(!invoke_kind::PrepareBoundReceiverClass(jni),"reentrant bound class preparation accepted partial state");
+ return bound_find_fail?nullptr:reinterpret_cast<jclass>(0x10000e80);
+}
+jobject JNICALL GlobalBound(JNIEnv*,jobject value){if(bound_global_fail)return nullptr;++bound_globals;return value;}
+void JNICALL DeleteBoundLocal(JNIEnv*,jobject){++bound_locals_deleted;}
+void JNICALL DeleteBoundGlobal(JNIEnv*,jobject){--bound_globals;}
+
 bool missing_method = false;
 abi::arm64::ArtMethodPrefix own_caller{};
 struct FakeScope { void* link; int32_t capacity; uint32_t size; uint32_t root; };
@@ -121,7 +135,8 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (mode == 0) return nullptr;
   if (mode >= 17) {
     if (name == std::string(symbols::structural::kFindInstanceField.name)) return HookAddress(FindField);
-    if (name == std::string(kClassDescriptorEquals.name)) return HookAddress(DescriptorEquals);
+    if (name == std::string(kClassDescriptorEquals.name)) return mode==20?nullptr:HookAddress(DescriptorEquals);
+    if (name == std::string(kMethodTypeExact.name)) return mode==21?nullptr:HookAddress(ExactType);
     if (mode != 19 && name == std::string(kHandleDispatch0.name)) return HookAddress(Dispatch);
     if (mode == 19 && name == std::string(kHandleRefineLegacy.name)) return HookAddress(Refine);
   }
@@ -185,6 +200,11 @@ int main(int argc, char** argv) {
         constexpr auto legacy = abi::arm64::FrameReferenceFor<abi::arm64::android13::Class>();
         constexpr auto modern = abi::arm64::FrameReferenceFor<abi::arm64::android16::Class>();
         invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8,12,mode==20 ? modern : legacy);
+        if(mode==21){
+          Require(!invoke_kind::InterfaceSymbols()&&!invoke_kind::EnableInterfaceSymbols()&&hook_attempts==0,
+                  "missing named MethodType equality enabled an incomplete receiver guard");
+          std::cout << "Invocation guard case " << mode << " PASS\n";return 0;
+        }
         Require(invoke_kind::InterfaceSymbols(), "complete symbolic services unavailable");
         if (mode == 18) {
           hook_failure = true;
@@ -247,6 +267,46 @@ int main(int argc, char** argv) {
           auto* refs=reinterpret_cast<abi::arm64::ObjectArray*>(0x10000a00);refs->length=1;refs->elements[0]=0x10000100;
           *frame_receiver=0x10000800;
           Require(!call() && exceptions==5, "legacy caller-transformer receiver was not unwrapped");
+        }
+        auto* bound=reinterpret_cast<uint32_t*>(0x10000e00);
+        bound[0]=0x10000e80;bound[2]=5;bound[3]=callsite_root;bound[6]=mh_root;bound[7]=0x10000100;
+        JNINativeInterface_ bound_jt{};bound_jt.FindClass=FindBound;bound_jt.NewGlobalRef=GlobalBound;
+        bound_jt.DeleteLocalRef=DeleteBoundLocal;bound_jt.DeleteGlobalRef=DeleteBoundGlobal;JNIEnv bound_jni{&bound_jt};
+        bound_find_fail=true;Require(!invoke_kind::PrepareBoundReceiverClass(&bound_jni)&&!invoke_kind::BoundReceiverClass(),"missing bound class was published");bound_find_fail=false;
+        bound_global_fail=true;Require(!invoke_kind::PrepareBoundReceiverClass(&bound_jni)&&!invoke_kind::BoundReceiverClass()&&bound_globals==0,"failed bound root was published");bound_global_fail=false;
+        bound_reenter=true;Require(invoke_kind::PrepareBoundReceiverClass(&bound_jni)&&bound_globals==1,"bound preparation retry failed");bound_reenter=false;
+        int prior_finds=bound_finds;
+        Require(invoke_kind::PrepareBoundReceiverClass(&bound_jni)&&bound_finds==prior_finds&&bound_globals==1,"bound bootstrap root was prepared twice");
+        invoke_kind::ObserveBoundReceiverClass(reinterpret_cast<void*>(0x10000e80));
+        uint32_t bound_root=0x10000e00;
+        params->length=0;mh[2]=4;method.access_flags.store(0);declaring[0]=0x0200;
+        handle_params->elements[0]=0x10000b00;
+        int before_bound=exceptions;
+        auto bound_call=[&](uint32_t* type){return invoke_kind::RejectBoundInterfaceReceiver(self,{&bound_root},{type},frame,&operands);};
+        table->length=2;
+        Require(!bound_call(&callsite_root),"compatible bound receiver was intercepted");
+        table->length=0;expected_type="Ljava/lang/IncompatibleClassChangeError;";
+        Require(bound_call(&callsite_root)&&exceptions==++before_bound,"bound interface receiver did not throw ICCE");
+        Require(!bound_call(&handle_type_root)&&exceptions==before_bound,"bound guard preceded outer type conversion");
+        equivalent_types=true;
+        Require(bound_call(&handle_type_root)&&exceptions==++before_bound,"named type equality was replaced with pointer identity");equivalent_types=false;
+        bound[7]=0;Require(!bound_call(&callsite_root),"null bound receiver lost NPE ordering");bound[7]=0x10000100;
+        method.access_flags.store(abi::arm64::kAccObsoleteMethod);
+        Require(!bound_call(&callsite_root),"bound guard changed retired-target precedence");method.access_flags.store(0);
+        mh[2]=3;Require(!bound_call(&callsite_root),"bound static argument was treated as a receiver");mh[2]=4;
+        bound[0]=0x10000000;Require(!bound_call(&callsite_root),"unrelated transformer was intercepted");bound[0]=0x10000e80;
+        auto* emulated=reinterpret_cast<uint32_t*>(0x10000800);emulated[0]=0x10000000;emulated[3]=callsite_root;
+        uint32_t emulated_root=0x10000800;
+        Require(invoke_kind::RejectBoundInterfaceReceiverWithFrame(self,{&bound_root},{&emulated_root})&&exceptions==++before_bound,
+                "adapted bound frame bypassed receiver validation");
+        emulated[3]=handle_type_root;
+        Require(!invoke_kind::RejectBoundInterfaceReceiverWithFrame(self,{&bound_root},{&emulated_root}),"wrong bound frame type lost original validation");
+        emulated[3]=callsite_root;
+        if(mode==19){
+          auto* legacy_type=reinterpret_cast<uint32_t*>(0x10000f00);legacy_type[0]=0x10000000;legacy_type[2]=0x10000f40;
+          auto* legacy_params=reinterpret_cast<abi::arm64::ObjectArray*>(0x10000f40);legacy_params->length=1;legacy_params->elements[0]=0x10000900;
+          uint32_t legacy_root=0x10000f00;*frame_receiver=emulated_root;
+          Require(bound_call(&legacy_root)&&exceptions==++before_bound,"legacy bound caller frame was not unwrapped");
         }
         munmap(page,4096);
         std::cout << "Invocation guard case " << mode << " PASS\n"; return 0;
@@ -504,7 +564,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(21):
+        for case in range(22):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')

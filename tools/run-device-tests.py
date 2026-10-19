@@ -1483,7 +1483,42 @@ for _name, _, _code in INVERSE_PARENT_SCENARIOS:
                                      **({} if "-active-" in _name else dict(gclateLocal=11,gclateParent=9 if _changed else "java.lang.ClassCastException")))
     if _code == 110: REQUIRED_CHECKS[_name].update(armed=0,failureHits=1)
 
+RECEIVER_LOSS_SCENARIOS = []
+for _round in range(2):
+    for _phase, _code in (("abort",110),("apply",0),("restore-abort",110),("restore",0)):
+        _name = f"receiver-loss-{_phase}-{_round}"
+        _changed = _phase in ("apply","restore-abort")
+        _variant = "receiver-loss-original" if _phase.startswith("restore") else "receiver-loss-drop"
+        RECEIVER_LOSS_SCENARIOS.append((_name, [_variant]*3, _code))
+        _checks = {}
+        for _prefix in ("", "gc"):
+            for _i in range(2):
+                _v = 7 if _i == 0 else 11
+                _iface = "java.lang.IncompatibleClassChangeError" if _changed else _v
+                _cast = "java.lang.ClassCastException" if _changed else _v
+                _klass = "java.lang.AbstractMethodError" if _changed and _i == 0 else _v
+                _values = dict(interface=not _changed, direct=_iface, interfaceExact=_iface,
+                    interfaceArgs=_cast, interfaceBound=_iface, interfaceAdapter=_cast,
+                    boundWrongReturn="java.lang.invoke.WrongMethodTypeException", boundWrongArgument="java.lang.invoke.WrongMethodTypeException",
+                    boundNull="java.lang.NullPointerException", boundBody="java.lang.IncompatibleClassChangeError" if _changed else "java.lang.IllegalStateException",
+                    classBoundArgs=_klass, classExact=_klass, classArgs=_klass, classBound=_klass,
+                    interfaceReflection="java.lang.IllegalArgumentException" if _changed else _v,
+                    classReflection="java.lang.IllegalArgumentException" if _changed and _i == 0 else _v,
+                    freshClassHandle="java.lang.NoSuchMethodException" if _changed and _i == 0 else _v,
+                    identity=True, self=True, kept=19 if _i == 0 else 23)
+                if _round > 0 or _phase != "abort":
+                    _values.update(lateInterface=not _changed, lateClassHandle=_klass)
+                _checks.update({_prefix+str(_i)+"."+key:value for key,value in _values.items()})
+            _checks[_prefix+"peer"] = 13 if _changed else 3
+        _checks.update(ownJni=11,gcOwnJni=11)
+        if _code == 110: _checks.update(armed=0,failureHits=1)
+        if _round == 0 and _phase == "apply": _checks.update(lateUnloadedBefore=False,lateUnloadedAfter=False)
+        REQUIRED_CHECKS[_name] = _checks
+SCENARIOS += tuple(RECEIVER_LOSS_SCENARIOS)
+
 def scenario_sequence(scenario_group, api=None, self_selection=None):
+    if scenario_group in ("receiver-loss", "receiver-loss-bound"):
+        return tuple(RECEIVER_LOSS_SCENARIOS)
     if scenario_group == "inverse-parents":
         return tuple(INVERSE_PARENT_SCENARIOS)
     if scenario_group == "batch-combinations":
@@ -1606,6 +1641,12 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
         raise RunFailure("The device report does not contain the complete scenario sequence")
     for scenario, (name, variants, code) in zip(scenarios, expected_scenarios):
         code, required = release_expectation(name, code, REQUIRED_CHECKS[name], device["api"], self_selection)
+        if scenario_group == "receiver-loss-bound":
+            required = dict(required)
+            changed = "-apply-" in name or "-restore-abort-" in name
+            for prefix in ("", "gc"):
+                for kind in range(2):
+                    required[prefix+str(kind)+".interfaceBoundArgs"] = "java.lang.IncompatibleClassChangeError" if changed else (7 if kind == 0 else 11)
         if not isinstance(scenario, dict) or scenario.get("name") != name:
             raise RunFailure("The device report has an unexpected scenario order")
         if scenario.get("variants") != variants:
@@ -1768,7 +1809,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

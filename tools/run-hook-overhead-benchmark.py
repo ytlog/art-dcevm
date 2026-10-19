@@ -183,6 +183,8 @@ def main(argv=None):
                     run["completed"] = report.get("completed") is True
                     if state == "selected" and report.get("setup", {}).get("interfaceSelectionActive") is not True:
                         run["completed"] = False
+                    if report.get("schemaVersion", 1) >= 2 and report.get("setup", {}).get("methodHandleChecks") is not True:
+                        run["completed"] = False
                     if run["completed"] and run["instrumentationOk"]: reports.append({**report, "round": round_index})
                     else: run["error"] = report.get("fatalError")
                     probe = report.get("instrumentationProbe", {})

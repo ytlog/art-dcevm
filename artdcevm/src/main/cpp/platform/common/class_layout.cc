@@ -284,7 +284,11 @@ bool VerifyTarget(const std::optional<VerifiedThread>& thread, ClassRedefinition
   context->probed = true;
   context->layouts &= accepted;
   const int layout = Selected(context);
-  if (layout >= 0) kProbes[layout].observe(*thread, klass, class_type);
+  if (layout >= 0) {
+    kProbes[layout].observe(*thread, klass, class_type);
+    if (jclass bound = invoke_kind::BoundReceiverClass())
+      invoke_kind::ObserveBoundReceiverClass(DecodeClass(art.mirror_class, self, bound));
+  }
   Report(layout >= 0 ? "verified: android" + std::to_string(kProbes[layout].android) + " class layout"
                      : "rejected: " + why);
   return layout >= 0;

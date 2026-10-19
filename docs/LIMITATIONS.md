@@ -166,3 +166,5 @@
 | 新类（新 lambda、匿名类） | 由 HotswapAgent 等工具定义 | 由热重载工具追加到加载器，见[提供新类](#提供新类) |
 
 接口收窄字段清理、静态复制及保留的 JNI／MethodHandle 调用路径各有独立规则与验证范围，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口)。DEX 的字段标识与 class_data 按规范顺序编码；冻结 D8 对只交换字段声明顺序的两个 ClassFile 生成逐字节相同的 DEX。结构事务无法观察这一输入差别，因此不宣称提供 JBR 的纯声明重排语义。
+
+普通类实际移除接口时，已缓存的接口直接／精确绑定句柄抛 ICCE；未绑定的 `invokeWithArguments`／`asType` 在接收者转换时抛 CCE。缓存类句柄失去 default 时抛 AME，自身声明保留。API 33/36 的普通与 CheckJNI 回归另验错误 MethodType、null、方法体异常、两轮失败恢复、批次反序、晚加载与 GC。**仍未对齐**：已绑定接口句柄再经 `invokeWithArguments` 调用仍抛 IllegalStateException，JBR 为 ICCE；`receiver-loss-bound` 是单独的失败探针。接口 JNI ID 的非法接收者与完整 ID／调用形式组合尚未完成设备对齐，不能由有效类 ID 或普通接口调用外推。

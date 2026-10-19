@@ -228,3 +228,7 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 `compare-jbr-layout-contracts.py --java-home <fixed-jbr> [--sdk <android-sdk>]` 在独立解释器／batch 进程固定新父类字段的偏移借用、构造器未执行、兼容字段保留与 GC，以及只读的 Unsafe／FieldUpdater／冷反射偏移行为。它还检查 ClassFile 字段顺序确实不同、冻结 D8 的 DEX 完全相同。batch 运行不作为已编译热点的证据；原始 offset 探针只读扩大后对象内的 primitive 槽，不进行引用 offset 写入。
 
 `interface-symbols` 还逐状态检查子接口 `findStatic` 的继承实例／自身 private／自身 static 选择，错误返回／参数描述符、返回／参数加载器别名和 null 名称。static 活参数证明与原 virtual 证明独立；宿主回归分别调用 Android 11–14 与 15–17 的 PointerSize 声明。
+
+`receiver-loss` 使用与 `compare-jbr-receiver-loss.py --java-home <fixed-jbr> --probe-jni-boundaries` 共享的普通接收者 fixture，覆盖失去接口后的直接／精确／参数转换／精确绑定句柄、缓存类句柄与反射、错误类型／null／方法体异常、保留字段与对象身份、后加载子类、三目标批次反序、两轮规划失败／提交／恢复及 GC。它纳入完整套件。`receiver-loss-bound` 另要求已绑定接口句柄的 `invokeWithArguments` 与 JBR 一致：当前 API 33/36 预期会被验证器判为失败（每次 4 个场景、16 项不匹配，ICCE 对 IllegalStateException），不得计作通过。JBR JNI 非法接收者探针运行于独立进程，CheckJNI 终止只记诊断；正常 Java 对照的每个热调用阶段均要求实际编译证据。
+
+HookOverheadBenchmark schema 2 新增实际接口 `invokeExact` 和精确绑定调用，独立核对每项返回值校验和；设备驱动拒绝缺少 `methodHandleChecks` 的报告。比较应包含 `engine-client,added,removed,art-added,engine-body,selected`，每状态／模式至少三次新进程。`jit` 表示启用 JIT 并预热，不能单凭模式名声称每个 lambda 都已编译。

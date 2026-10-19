@@ -23,6 +23,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.invoke.MethodType;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
@@ -53,7 +56,8 @@ import java.util.concurrent.TimeUnit;
  *       {@code engine-body} (engine-client, a method body change).</li>
  * </ul>
  * {@code mode=interp} stops JIT compilation before anything is measured;
- * {@code mode=jit} warms each workload until it runs compiled. Early receivers
+ * {@code mode=jit} warms workloads with JIT enabled; it does not certify each
+ * workload lambda compiled. Early receivers
  * are linked before the state is selected and late ones after it.
  * ART 13 only: append {@code -observe}, {@code -restore}, or {@code -jvmti}
  * to {@code art-added} or {@code added} for the instrumentation experiment.
@@ -142,7 +146,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
             throw new IllegalArgumentException("Unsupported state " + state);
         if (!mode.equals("jit") && !mode.equals("interp"))
             throw new IllegalArgumentException("Unsupported mode " + mode);
-        report.put("schemaVersion", 1).put("state", state).put("mode", mode)
+        report.put("schemaVersion", 2).put("state", state).put("mode", mode)
                 .put("device", new JSONObject().put("model", Build.MODEL)
                         .put("api", Build.VERSION.SDK_INT).put("release", Build.VERSION.RELEASE));
         // Selects CheckJNI before any agent; this only loads the engine library.
@@ -292,6 +296,26 @@ public final class HookOverheadBenchmark extends Instrumentation {
         measure(workloads, "interfaceMega", compiled, n -> HookBenchTypes.interfaceMega(earlyShapes, n));
         measure(workloads, "lateInterfaceMono", compiled, n -> HookBenchTypes.lateInterfaceMono(lateShape, n));
         measure(workloads, "lateInterfaceMega", compiled, n -> HookBenchTypes.lateInterfaceMega(lateShapes, n));
+        MethodHandle interfaceHandle = MethodHandles.publicLookup().findVirtual(HookBenchTypes.Shape.class,
+                "area", MethodType.methodType(int.class, int.class));
+        MethodHandle boundHandle = interfaceHandle.bindTo(shape);
+        int handleExpected = shape.area(3);
+        measure(workloads, "methodHandleExact", compiled, n -> {
+            long total = 0;
+            for (int i = 0; i < n; ++i) total += (int) interfaceHandle.invokeExact(shape, 3);
+            return total;
+        });
+        measure(workloads, "methodHandleBound", compiled, n -> {
+            long total = 0;
+            for (int i = 0; i < n; ++i) total += (int) boundHandle.invokeExact(3);
+            return total;
+        });
+        for (String metric : new String[]{"methodHandleExact", "methodHandleBound"}) {
+            JSONObject measured = workloads.getJSONObject(metric);
+            long expected = (long) handleExpected * measured.getInt("callsPerBatch") * SAMPLES;
+            if (measured.getLong("checksum") != expected) throw new AssertionError("Invalid MethodHandle benchmark checksum");
+        }
+        setup.put("methodHandleChecks", true);
         measure(workloads, "reflectInvoke", compiled, n -> {
             long total = 0;
             for (int i = 0; i < n; i++) total += (Integer) reflected.invoke(target, reflectedArgs);

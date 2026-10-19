@@ -21,6 +21,8 @@ import com.github.ytlog.artdcevm.fixture.MemberDescriptorFixture;
 import com.github.ytlog.artdcevm.fixture.MemberDescriptorState;
 import com.github.ytlog.artdcevm.fixture.InterfaceSymbolFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceSymbolState;
+import com.github.ytlog.artdcevm.fixture.ReceiverLossFixture;
+import com.github.ytlog.artdcevm.fixture.ReceiverLossState;
 import com.github.ytlog.artdcevm.fixture.InverseParentState;
 import com.github.ytlog.artdcevm.fixture.KindFixture;
 import com.github.ytlog.artdcevm.fixture.InvokeKindFixture;
@@ -186,6 +188,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             String isolated = arguments.getString("scenario");
             if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
             else if ("inverse-parents".equals(isolated)) runInverseParentScenarios();
+            else if ("receiver-loss".equals(isolated) || "receiver-loss-bound".equals(isolated)) runReceiverLossScenarios();
             else if ("interface-symbols".equals(isolated)) runInterfaceSymbolScenarios();
             else if ("member-descriptors".equals(isolated)) runMemberDescriptorScenarios();
             else if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
@@ -403,6 +406,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly) runMemberDescriptorScenarios();
         if (!ordinaryOnly) runInterfaceSymbolScenarios();
         if (!ordinaryOnly) runInverseParentScenarios();
+        if (!ordinaryOnly) runReceiverLossScenarios();
     }
 
     // A Proxy implementation of a redefined interface stays: kept methods still
@@ -3859,6 +3863,38 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 Runtime.getRuntime().gc();
                 state.verify(scenario::check,"gc",changed);
                 for(int k=0;k<4;k++) scenario.check("gcJni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+            });
+        }
+    }
+
+    private void runReceiverLossScenarios() throws Exception {
+        ReceiverLossState state = new ReceiverLossState();
+        boolean probeBoundAdapters = arguments != null && "receiver-loss-bound".equals(arguments.getString("scenario"));
+        StandardJvmtiClient.cacheInterfaceDispatch(0, ReceiverLossFixture.Own.class.getDeclaredMethod("value"));
+        for (int round = 0; round < 2; ++round) for (int phase = 0; phase < 4; ++phase) {
+            boolean fail = phase % 2 == 0, restoring = phase >= 2;
+            boolean changed = phase == 1 || phase == 2;
+            boolean lateAvailable = round > 0 || phase > 0;
+            final boolean firstApply = round == 0 && phase == 1;
+            Class<?>[] targets = round == 0
+                    ? new Class<?>[]{ReceiverLossFixture.DefaultOnly.class, ReceiverLossFixture.Own.class, ReceiverLossFixture.Peer.class}
+                    : new Class<?>[]{ReceiverLossFixture.Peer.class, ReceiverLossFixture.Own.class, ReceiverLossFixture.DefaultOnly.class};
+            String variant = "receiver-loss-" + (restoring ? "original" : "drop");
+            String name = "receiver-loss-" + new String[]{"abort", "apply", "restore-abort", "restore"}[phase] + "-" + round;
+            runScenario(name, fail ? 110 : 0, scenario -> {
+                if (firstApply) scenario.check("lateUnloadedBefore", false, StandardJvmtiClient.isLoaded(
+                        "Lcom/github/ytlog/artdcevm/fixture/ReceiverLossLateFixture$DefaultLate;"));
+                if (fail) scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(targets, variant, variant, variant);
+                if (fail) scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                if (firstApply) scenario.check("lateUnloadedAfter", false, StandardJvmtiClient.isLoaded(
+                        "Lcom/github/ytlog/artdcevm/fixture/ReceiverLossLateFixture$DefaultLate;"));
+                if (lateAvailable) state.loadLate();
+                state.verify(scenario::check, "", changed, probeBoundAdapters);
+                scenario.check("ownJni", 11, StandardJvmtiClient.callInterfaceDispatchInt(state.ownReceiver, 0));
+                System.gc(); System.runFinalization(); System.gc();
+                state.verify(scenario::check, "gc", changed, probeBoundAdapters);
+                scenario.check("gcOwnJni", 11, StandardJvmtiClient.callInterfaceDispatchInt(state.ownReceiver, 0));
             });
         }
     }

@@ -321,6 +321,35 @@ class ApkVerificationTests(unittest.TestCase):
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(report, scenario_group="ordinary")
 
+    def test_receiver_loss_keeps_bound_conversion_gap_separate(self):
+        for api in (33, 36):
+            with self.subTest(api=api):
+                report = complete_report(api=api)
+                names = {item[0] for item in runner.scenario_sequence("receiver-loss")}
+                report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+                runner.validate_report(report, scenario_group="receiver-loss")
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report, scenario_group="receiver-loss-bound")
+                for scenario in report["scenarios"]:
+                    changed = "-apply-" in scenario["name"] or "-restore-abort-" in scenario["name"]
+                    for prefix in ("", "gc"):
+                        for kind in range(2):
+                            value = "java.lang.IncompatibleClassChangeError" if changed else (7 if kind == 0 else 11)
+                            scenario["checks"].append(dict(name=prefix+str(kind)+".interfaceBoundArgs",
+                                expected=value, actual=value, passed=True))
+                runner.validate_report(report, scenario_group="receiver-loss-bound")
+                # A report claiming success cannot bless libcore's wrong exception.
+                apply = next(item for item in report["scenarios"] if item["name"] == "receiver-loss-apply-0")
+                error = next(check for check in apply["checks"] if check["name"] == "0.interfaceBoundArgs")
+                error.update(expected="java.lang.IllegalStateException", actual="java.lang.IllegalStateException")
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report, scenario_group="receiver-loss-bound")
+                error.update(expected="java.lang.IncompatibleClassChangeError", actual="java.lang.IncompatibleClassChangeError")
+                wrong = next(check for check in apply["checks"] if check["name"] == "0.boundWrongReturn")
+                wrong.update(expected="java.lang.IncompatibleClassChangeError", actual="java.lang.IncompatibleClassChangeError")
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report, scenario_group="receiver-loss")
+
     def test_invoke_kind_groups_require_both_directions(self):
         for group, reverse in (("invoke-kind", "invoke-kind-instance"),
                                ("invoke-interface-kind", "interface-kind-instance-legacy"),

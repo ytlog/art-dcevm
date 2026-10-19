@@ -30,11 +30,12 @@ public class LossProbe {
  static int hotClass(int count)throws Throwable{int sum=0;for(int i=0;i<count;i++)try{sum+=(int)classHandle.invokeExact(object);}catch(AbstractMethodError e){sum-=2;}return sum;}
  static void change(Path p)throws Exception{inst.redefineClasses(new ClassDefinition(Target.class,Files.readAllBytes(p)));}
  public static void main(String[] args)throws Throwable{
-  System.load(args[0]);object=new Target();typed=object;
+  System.load(args[0]);object=new Target();typed=object;final int identity=System.identityHashCode(object);
   MethodHandle ih=MethodHandles.publicLookup().findVirtual(I.class,"value",MethodType.methodType(int.class));
   MethodHandle ch=MethodHandles.publicLookup().findVirtual(Target.class,"value",MethodType.methodType(int.class));
   classHandle=ch;MethodHandle boundI=ih.bindTo(typed),boundC=ch.bindTo(object),adapted=ih.asType(MethodType.methodType(int.class,Object.class));
   Method im=I.class.getMethod("value"),cm=Target.class.getMethod("value");
+  MethodHandle nullBound=ih.bindTo(null),bodyBound=MethodHandles.publicLookup().findVirtual(I.class,"bodyError",MethodType.methodType(int.class)).bindTo(typed);
   cache(I.class,Target.class);int id=Integer.parseInt(args[3]),kind=Integer.parseInt(args[4]);
   if(id>=0)out("beforeJni",()->call(object,id,kind));
   else {out("beforeHotI",()->hotInterface(120000));out("beforeHotC",()->hotClass(120000));}
@@ -42,11 +43,14 @@ public class LossProbe {
    change(Paths.get(args[phase==0?1:2]));System.gc();String p="r"+round+"p"+phase;
    System.out.println("STATE "+p);out(p+"isInterface",()->I.class.isInstance(object));
    if(id>=0){out(p+"jni",()->call(object,id,kind));continue;}
+   out(p+"kept",()->object.kept);out(p+"self",()->object.self==object);out(p+"identity",()->identity==System.identityHashCode(object));
    out(p+"direct",()->typed.value());out(p+"interfaceExact",()->(int)ih.invokeExact(typed));
    out(p+"interfaceArgs",()->ih.invokeWithArguments(object));out(p+"interfaceBound",()->(int)boundI.invokeExact());
    out(p+"interfaceAdapter",()->(int)adapted.invokeExact((Object)object));
+   out(p+"interfaceBoundArgs",()->boundI.invokeWithArguments());out(p+"boundWrongReturn",()->(long)boundI.invokeExact());
+   out(p+"boundWrongArgument",()->(int)boundI.invokeExact(1));out(p+"boundNull",()->(int)nullBound.invokeExact());out(p+"boundBody",()->(int)bodyBound.invokeExact());
    out(p+"classExact",()->(int)ch.invokeExact(object));out(p+"classArgs",()->ch.invokeWithArguments(object));
-   out(p+"classBound",()->(int)boundC.invokeExact());out(p+"interfaceReflection",()->im.invoke(object));
+   out(p+"classBound",()->(int)boundC.invokeExact());out(p+"classBoundArgs",()->boundC.invokeWithArguments());out(p+"interfaceReflection",()->im.invoke(object));
    out(p+"classReflection",()->cm.invoke(object));out(p+"freshClassHandle",()->MethodHandles.publicLookup().findVirtual(Target.class,"value",MethodType.methodType(int.class)).invokeWithArguments(object));
    out(p+"hotInterface",()->hotInterface(40000));out(p+"hotClass",()->hotClass(40000));
   }
@@ -72,18 +76,21 @@ def expected_java(own):
         for phase in range(2):
             p = f'r{round_}p{phase}'
             values = {key:value for key in ('direct','interfaceExact','interfaceArgs',
-                'interfaceBound','interfaceAdapter','classExact','classArgs','classBound',
+                'interfaceBound','interfaceAdapter','interfaceBoundArgs','classExact','classArgs','classBound','classBoundArgs',
                 'interfaceReflection','classReflection','freshClassHandle')}
-            values['isInterface'] = 'true'
+            values.update(isInterface='true', kept='23' if own else '19', self='true', identity='true',
+                boundWrongReturn='java.lang.invoke.WrongMethodTypeException', boundWrongArgument='java.lang.invoke.WrongMethodTypeException',
+                boundNull='java.lang.NullPointerException', boundBody='java.lang.IllegalStateException')
             values['hotInterface'] = values['hotClass'] = str(int(value)*40000)
             if phase == 0:
                 values.update(isInterface='false', direct='java.lang.IncompatibleClassChangeError',
                     interfaceExact='java.lang.IncompatibleClassChangeError',
-                    interfaceBound='java.lang.IncompatibleClassChangeError',
+                    interfaceBound='java.lang.IncompatibleClassChangeError', interfaceBoundArgs='java.lang.IncompatibleClassChangeError',
+                    boundBody='java.lang.IncompatibleClassChangeError',
                     interfaceArgs='java.lang.ClassCastException', interfaceAdapter='java.lang.ClassCastException',
                     interfaceReflection='java.lang.IllegalArgumentException', hotInterface='-40000')
                 if not own:
-                    for key in ('classExact','classArgs','classBound'):
+                    for key in ('classExact','classArgs','classBound','classBoundArgs'):
                         values[key] = 'java.lang.AbstractMethodError'
                     values.update(classReflection='java.lang.IllegalArgumentException',
                         freshClassHandle='java.lang.NoSuchMethodException', hotClass='-80000')
@@ -104,7 +111,7 @@ def main():
     java = args.java_home.resolve()
     evidence = new_evidence_directory(ROOT/'build/evidence/jbr-receiver-loss')
     manifest = {'sourceOracleRevision':REVISION, 'toolSha256':sha(Path(__file__)),
-                'harnessSha256':hashlib.sha256(JAVA.encode()).hexdigest(),
+                'harnessTemplateSha256':hashlib.sha256(JAVA.encode()).hexdigest(),
                 'nativeSha256':hashlib.sha256(NATIVE.encode()).hexdigest(), 'runs':[]}
 
     def run(name, command, directory, required=True):
@@ -129,13 +136,20 @@ def main():
     for own in (False,True):
         work = evidence/('own' if own else 'default');work.mkdir()
         old = work/'old';patch = work/'patch';old.mkdir();patch.mkdir()
-        body = 'public int value(){return 11;}' if own else ''
-        (old/'I.java').write_text('public interface I {default int value(){return 7;}}')
-        (old/'Target.java').write_text('public class Target implements I {'+body+'}')
-        (old/'LossProbe.java').write_text(JAVA)
-        (patch/'Target.java').write_text('public class Target {'+body+'}')
+        fixture = Path('app/src/debug/java/com/github/ytlog/artdcevm/fixture/ReceiverLossFixture.java')
+        replacement = Path('fixtures/receiver-loss-drop/com/github/ytlog/artdcevm/fixture/ReceiverLossFixture.java')
+        name = 'Own' if own else 'DefaultOnly'
+        target = 'com.github.ytlog.artdcevm.fixture.ReceiverLossFixture.'+name
+        contract = 'com.github.ytlog.artdcevm.fixture.ReceiverLossFixture.Contract'
+        source = re.sub(r'\bTarget\b', target, re.sub(r'\bI\b', contract, JAVA))
+        (old/'ReceiverLossFixture.java').write_text((ROOT/fixture).read_text())
+        (patch/'ReceiverLossFixture.java').write_text((ROOT/replacement).read_text())
+        (old/'LossProbe.java').write_text(source)
+        manifest.setdefault('fixtureSha256', {}).update({fixture.as_posix():sha(ROOT/fixture),
+                                                       replacement.as_posix():sha(ROOT/replacement)})
+        relative = Path('com/github/ytlog/artdcevm/fixture/ReceiverLossFixture$'+name+'.class')
         run('compile-old', [java/'bin/javac','--release','11','-d',old,*sorted(old.glob('*.java'))],work)
-        run('compile-patch', [java/'bin/javac','--release','11','-d',patch,patch/'Target.java'],work)
+        run('compile-patch', [java/'bin/javac','--release','11','-d',patch,patch/'ReceiverLossFixture.java'],work)
         (work/'native.c').write_text(NATIVE);library=work/('libloss.'+extension)
         run('compile-native', [shutil.which('cc') or 'cc','-shared','-fPIC','-I'+str(java/'include'),
             '-I'+str(java/'include'/('darwin' if platform.system()=='Darwin' else 'linux')),
@@ -147,7 +161,7 @@ def main():
             checked=['-Xcheck:jni'] if check else []
             base=[java/'bin/java',*checked,'-XX:+AllowEnhancedClassRedefinition',
                   '-XX:-CreateCoredumpOnCrash','-javaagent:'+str(agent),'-cp',old]
-            tail=['LossProbe',library,patch/'Target.class',old/'Target.class']
+            tail=['LossProbe',library,patch/relative,old/relative]
             for mode,flags in [('interpreter',['-Xint']),('jit',['-Xbatch','-XX:+PrintCompilation',
                     '-XX:CompileCommand=compileonly,LossProbe::hot*'])]:
                 label=f'java-{mode}-check{int(check)}'
