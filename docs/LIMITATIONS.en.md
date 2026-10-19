@@ -36,7 +36,7 @@ This capability is available on Android 11–17 (API 30–37) arm64 devices. API
 | Deleting or changing method signatures without member mapping | `METHOD_DELETED` (67) |
 | Field modifier changes other than synthetic; field changes without member mapping | `SCHEMA_CHANGED` (64) |
 | Interface method modifier changes other than descriptive flags, abstract/default switches and invoke-kind changes; without selection services, switching to default where it would share such an identity | `METHOD_MODIFIERS_CHANGED` (71) |
-| Removing a parent interface without member mapping or dispatch sealing; adding one without member mapping; a static/private method hiding a new parent's method, or, without selection services, a new parent default sharing such an identity | `HIERARCHY_CHANGED` (66) |
+| Removing a parent interface without member mapping or dispatch sealing; adding one without member mapping; without symbolic services, a static/private method hiding a new parent's method, or, without selection services, a new parent default sharing such an identity | `HIERARCHY_CHANGED` (66) |
 | A class/interface conversion with loaded subtypes, or without the required exact-instance precheck | 62 or 70; see the [kind conversion matrix](CLASS_KIND_EVOLUTION.md) |
 | A boot interface, active pointer JNI IDs, or a pointer-id marker on the target or any subtype | `UNMODIFIABLE_CLASS` (79) |
 | Runtime version, required named services or declaration probes are unavailable | `NOT_AVAILABLE` (98) |
@@ -169,3 +169,5 @@ The target semantics come from fixed JBR DCEVM sources and matching runtime comp
 | New classes (new lambdas, anonymous classes) | Defined by tools such as HotswapAgent | Appended to the class loader by the reload tool; see [providing new classes](#providing-new-classes) |
 
 Reference-field cleanup after narrowing, static copying and retained JNI/MethodHandle call paths have separate rules and evidence scopes; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces). DEX also loses original ClassFile field declaration order, so equivalent instance-update behavior for declaration-only reorderings remains unproven.
+
+Existing private/static interface declarations may acquire same-signature default/abstract parents when symbolic services are available. Own calls retain their declaration; parent calls dispatch independently, and static hiding uses the existing fresh MethodHandle lookup guard. Batches with active target frames still reject these parent changes with 71: ART 13 structural deoptimization can read an invalid vtable slot, and ART 16 obsolete private self calls lose access. This remains an unresolved parity gap. The pinned JBR also aliases cached reflection/handle slots after abstract-parent additions and throws ICCE from obsolete private self frames; those reference observations are recorded separately from safe ART expectations.

@@ -476,6 +476,13 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
   for (const auto& descriptor : incoming.interfaces)
     if (std::find(before.begin(), before.end(), descriptor) == before.end())
       added.push_back(descriptor);
+  // Parent changes can invalidate obsolete direct self calls even when the
+  // declaration's own flags do not change. Capture those frames before ART
+  // enters its structural transaction, as for invocation-kind evolution.
+  if ((snapshot->live.access & evolution::kAccInterface) && before != incoming.interfaces)
+    for (const auto& method : incoming.methods)
+      if (method.access & (evolution::kAccStatic | evolution::kAccPrivate))
+        snapshot->changes_invoke_kind = true;
   const bool new_superclass = incoming.superclass != snapshot->live.superclass;
   if (added.empty() && !new_superclass) return JVMTI_ERROR_NONE;
   jvmtiError result = JVMTI_ERROR_NONE;

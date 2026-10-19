@@ -211,9 +211,10 @@ Decision CheckInterfaceAddition(const MemberKey& key, uint32_t modifiers,
 }
 // An added parent interface brings its virtual methods, and those of its
 // superinterfaces the target did not inherit, to every implementation: like
-// added members, a direct method of the target must not hide one, a default
-// must not shadow a subtype method. Missing abstract implementations fail at the call.
-Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarchy& hierarchy, bool selection) {
+// added members. Direct declarations do not implement the parent method;
+// symbolic lookup must keep the child declaration and parent dispatch distinct.
+// A default must not shadow a subtype method without selection support.
+Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarchy& hierarchy, bool selection, bool symbols) {
   std::set<MemberKey> direct;
   for (const auto& m : incoming.methods) {
     const uint32_t now = MethodModifiers(m.access);
@@ -222,7 +223,7 @@ Decision CheckInterfaceParents(const ClassSchema& incoming, const LoadedHierarch
   for (const auto& [declaring, methods] : hierarchy.parent_methods) {
     for (const auto& method : methods) {
       const std::string name = declaring + "." + method.key.first + method.key.second;
-      if (direct.count(method.key))
+      if (direct.count(method.key) && !symbols)
         return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                       "a static or private method hides an added parent interface method: " + name);
       if (!method.is_abstract) {
@@ -335,7 +336,7 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   decision.requires_member_mapping = kind_changed || superclass_changed || interfaces.interfaces_removed;
   if (incoming_interface && parents_changed) {
     // CheckInterfaces already rejected removed or unresolvable parents.
-    Decision parents = CheckInterfaceParents(incoming, hierarchy, abilities.interface_selection);
+    Decision parents = CheckInterfaceParents(incoming, hierarchy, abilities.interface_selection, abilities.interface_symbols);
     if (parents.error != JVMTI_ERROR_NONE) return parents;
     decision.requires_member_mapping = true;
   }

@@ -161,7 +161,7 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
 删除的 default/abstract 声明按普通退役映射到自身；重链接后的实现类不再携带的 copied default/miranda 走现有“消失的 copied 方法映射到声明类的 canonical 成员”路径，canonical 即已退役的旧声明，因此 DexCache 清除、重新解析抛 `NoSuchMethodError`，JNI、反射与 MethodHandle 由现有守卫拒绝。default 改为 abstract 与新增 abstract 相同（见下文第 4 条）；abstract 改为 default 复用新增 default 的 `subtype_shadows` 检查。字段沿用普通类的字段退役与静态字段复制；接口在准入时已初始化，新增静态字段取默认值。
 
-新增父接口时，Native 阶段经公开 JVMTI 读取新父接口及其目标原先未继承（`IsAssignableFrom` 判定）的父接口所声明的虚方法。策略据此拒绝被目标 static/private 方法遮蔽的方法，以及选择服务不可用时遮蔽实现类链方法的 default；新父接口的 abstract 方法与新增 abstract 相同，实现类缺少实现时调用抛 `AbstractMethodError`。新增的接口若由同批重建（它本身或其父接口是目标），新类必须链接其替换类，否则 copied default 与分派槽位会停留在提交前的旧版本。目标的 `Requirements::linked_interfaces` 记下新增接口，整批分配图把最终接口和父类作为依赖；ART 链接期间的类型查找与 `CheckVerification` 期间的 `FindClass` 都把旧类换成替换类。组之间互相引用可按类粒度交错分配，只有最终类图真正成环时才拒绝 61。接口始终使用结构路径，`Abilities::interface_members` 仅在引擎拥有成员映射时启用。
+新增父接口时，Native 阶段经公开 JVMTI 读取新父接口及其目标原先未继承（`IsAssignableFrom` 判定）的父接口所声明的虚方法。符号服务缺失时，策略据此拒绝被目标 static/private 方法遮蔽的方法；服务可用时保留自身声明与父接口独立分派，static 情况启用同一 fresh 查找保护。存在批次活动帧时仍拒绝这类父接口变化，原 ART 的旧帧重链接尚未对齐。策略同时拒绝选择服务不可用时遮蔽实现类链方法的 default；新父接口的 abstract 方法与新增 abstract 相同，实现类缺少实现时调用抛 `AbstractMethodError`。新增的接口若由同批重建（它本身或其父接口是目标），新类必须链接其替换类，否则 copied default 与分派槽位会停留在提交前的旧版本。目标的 `Requirements::linked_interfaces` 记下新增接口，整批分配图把最终接口和父类作为依赖；ART 链接期间的类型查找与 `CheckVerification` 期间的 `FindClass` 都把旧类换成替换类。组之间互相引用可按类粒度交错分配，只有最终类图真正成环时才拒绝 61。接口始终使用结构路径，`Abilities::interface_members` 仅在引擎拥有成员映射时启用。
 
 这复用接口现有的重建组：接口、已加载子接口、实现类及其子类按新接口重新 `LinkClass`，未提交 DEX 的实现类使用原 DEX 与私有 DexCache，同样获得 copied default。新方法没有旧对应项，不进入旧方法映射。类链上的 public 实现优先于 default；更具体的子接口覆盖父接口，原 miranda 可变为 default 拷贝。实例迁移、引用改写、去优化与缓存失效仍全部由 ART 完成。
 

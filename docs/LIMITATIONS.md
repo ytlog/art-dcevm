@@ -36,12 +36,12 @@
 | 成员映射不可用时删除或改签名方法 | `METHOD_DELETED`（67） |
 | synthetic 之外的字段修饰符变化；成员映射不可用时的字段变化 | `SCHEMA_CHANGED`（64） |
 | 接口方法描述标志、abstract 与 default 互换及调用方式变化之外的修饰符变化；选择服务不可用时改为 default 后出现上述同签名 | `METHOD_MODIFIERS_CHANGED`（71） |
-| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；新父接口的方法被 static／private 方法遮蔽，或选择服务不可用且其 default 出现上述同签名 | `HIERARCHY_CHANGED`（66） |
+| 成员映射或分派封闭不可用时移除父接口；成员映射不可用时新增父接口；符号服务不可用时新父接口的方法被 static／private 方法遮蔽，或选择服务不可用且其 default 出现上述同签名 | `HIERARCHY_CHANGED`（66） |
 | class/interface 跨界时存在已加载子类型；需要实例前置检查却能力不可用或存在直接实例 | 分别为 62、70；允许的种类转换见[转换矩阵](CLASS_KIND_EVOLUTION.md) |
 | boot 接口、当前使用指针型 JNI ID，或目标／任一子类型带 pointer-id 标记 | `UNMODIFIABLE_CLASS`（79） |
 | 运行时版本、必需命名服务或声明探测不可用 | `NOT_AVAILABLE`（98） |
 
-删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 相同，未实现它的类调用时抛 `AbstractMethodError`；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法与新增 abstract 相同；其 default 由实现类获得 copied default。
+删除的 default/abstract 方法与普通类的退役方法相同：经接口或实现类的字节码调用、缓存的反射、JNI 与 MethodHandle 抛 `NoSuchMethodError`，实现类自身声明的同名方法保留；改签名即旧签名退役、新签名新增。default 改为 abstract 与新增 abstract 相同，未实现它的类调用时抛 `AbstractMethodError`；abstract 改为 default 后，未声明实现的实现类获得 copied default。接口在重定义前已初始化，新增的静态字段取默认值；与普通类相同，新增或修改的 `<clinit>` 不会在已初始化的接口上执行；常量表达式通常已被调用方内联。新增父接口时，新父接口及其目标原先未继承的父接口中的 abstract 方法与新增 abstract 相同；其 default 由实现类获得 copied default。已有 private/static 声明可以新增同签名 default/abstract 父接口：自身调用保留，父接口独立分派，static 遮蔽沿用 fresh MethodHandle 查找保护。存在批次类型活动帧时，这类父接口变化仍拒绝 71：ART 13 的去优化栈遍历可能访问无效 vtable，ART 16 的旧 private 自身调用丢失访问权。该活动帧范围尚未对齐。固定 JBR 还存在新增 abstract 父接口后的缓存反射／MethodHandle 槽别名，以及成功事务中 private 自身旧帧抛 ICCE 的行为；这些结果独立记录，不作为 ART 应复制的安全行为。
 
 移除父接口后，若方法已不属于最终层级，旧的子接口符号字节码调用抛 `NoSuchMethodError`。新增 private/static 声明遮蔽父接口方法时，旧子接口调用分别抛 `IllegalAccessError`／`IncompatibleClassChangeError`，包括 null 接收者；仍实现父接口的接收者保留父接口调用及缓存的父声明反射、JNI、MethodHandle 引用。对象丢失父接口时，缓存反射抛 `IllegalArgumentException`，子接口句柄抛 ICCE，缓存类虚句柄抛 AME，父接口类型的句柄在接收者转换时抛 `ClassCastException`。static 遮蔽后，新建 `findVirtual(子接口, ...)` 对匹配的完整签名抛 `IllegalAccessException`，返回类型不匹配仍抛 `NoSuchMethodException`。父接口查找、自身 static 方法的 `findStatic`／反射及旧缓存句柄保持原行为。首次接口批次在 Native 阶段验证公开 JVMTI 局部变量访问；缺少命名 JNI 查找入口、访问能力或实测证明时，只拒绝需要 static 遮蔽查找保护的转换（71），不扩大到移除父接口或 private 遮蔽。运行中已验证的查找参数不可读时显式抛 `InternalError`，不错误返回父方法。仅继承实例方法时 `findStatic` 的异常差异，以及普通实例查找的参数／返回类型加载器别名差异，仍未对齐。
 

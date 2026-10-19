@@ -21,6 +21,7 @@ import com.github.ytlog.artdcevm.fixture.MemberDescriptorFixture;
 import com.github.ytlog.artdcevm.fixture.MemberDescriptorState;
 import com.github.ytlog.artdcevm.fixture.InterfaceSymbolFixture;
 import com.github.ytlog.artdcevm.fixture.InterfaceSymbolState;
+import com.github.ytlog.artdcevm.fixture.InverseParentState;
 import com.github.ytlog.artdcevm.fixture.KindFixture;
 import com.github.ytlog.artdcevm.fixture.InvokeKindFixture;
 import com.github.ytlog.artdcevm.fixture.AbstractCaller;
@@ -184,6 +185,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly && arguments != null && arguments.containsKey("scenario")) {
             String isolated = arguments.getString("scenario");
             if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
+            else if ("inverse-parents".equals(isolated)) runInverseParentScenarios();
             else if ("interface-symbols".equals(isolated)) runInterfaceSymbolScenarios();
             else if ("member-descriptors".equals(isolated)) runMemberDescriptorScenarios();
             else if ("interface-default-body".equals(isolated)) runCopiedDefaultScenario();
@@ -400,6 +402,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly) runClassKindScenarios();
         if (!ordinaryOnly) runMemberDescriptorScenarios();
         if (!ordinaryOnly) runInterfaceSymbolScenarios();
+        if (!ordinaryOnly) runInverseParentScenarios();
     }
 
     // A Proxy implementation of a redefined interface stays: kept methods still
@@ -3825,6 +3828,39 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     private static void scenarioCheckCaller(int value) {
         if (value != 2) throw new AssertionError("KindFixture.Caller precondition: " + value);
+    }
+
+    private void runInverseParentScenarios() throws Exception {
+        InverseParentState state = new InverseParentState();
+        for (int i=0;i<4;i++) StandardJvmtiClient.cacheInterfaceDispatch(i,state.own[i]);
+        for (int i=0;i<DISPATCH_CALLS;i++) for(int k=0;k<4;k++)
+            if(com.github.ytlog.artdcevm.fixture.InverseParentFixture.local(state.receivers[k],k)!=11)
+                throw new AssertionError("inverse parent warmup");
+        for (int round=0;round<2;round++) for (int phase=0;phase<4;phase++) {
+            boolean restoring=phase>=2,fail=phase%2==0,changed=phase==1||phase==2;
+            String name="inverse-parent-"+new String[]{"abort","apply","restore-abort","restore"}[phase]+"-"+round;
+            String variant="inverse-parent-"+(restoring?"original":"added");
+            Class<?>[] targets=state.targets(round!=0);
+            String[] variants=new String[targets.length]; java.util.Arrays.fill(variants,variant);
+            final int rejectedIndex=round==0?0:3;
+            if(!fail) runScenario("inverse-parent-active-"+(restoring?"restore-":"apply-")+round,71,scenario->{
+                scenario.expectRejectionBy(state.children[rejectedIndex]);
+                InverseParentState.Active active=state.startActive();
+                try {scenario.redefine(targets,variants);} finally {active.close();}
+                active.verify(scenario::check);
+                state.verify(scenario::check,"",!changed);
+            });
+            runScenario(name,fail?110:0,scenario->{
+                if(fail) scenario.check("armed",0,InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(targets,variants);
+                if(fail) scenario.check("failureHits",1,InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                state.verify(scenario::check,"",changed);
+                for(int k=0;k<4;k++) scenario.check("jni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+                Runtime.getRuntime().gc();
+                state.verify(scenario::check,"gc",changed);
+                for(int k=0;k<4;k++) scenario.check("gcJni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+            });
+        }
     }
 
     private void runInterfaceSymbolScenarios() throws Exception {

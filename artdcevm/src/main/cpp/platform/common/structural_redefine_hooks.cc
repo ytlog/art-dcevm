@@ -179,10 +179,25 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
     std::map<structural_policy::MemberKey, uint32_t> symbols;
     if (decision.interfaces_removed)
       for (const auto& key : snapshot.hierarchy.inherited_interface) symbols.emplace(key, 0);
+    // A newly inherited parent can collide with an already declared direct
+    // method just as a newly declared direct method can hide an old parent.
+    // Use the same lookup and symbolic-resolution services in both directions.
+    std::set<structural_policy::MemberKey> inherited = snapshot.hierarchy.inherited_interface;
+    for (const auto& [owner, methods] : snapshot.hierarchy.parent_methods)
+      for (const auto& method : methods) inherited.insert(method.key);
     for (const auto& next : incoming.methods) {
       const structural_policy::MemberKey key{next.name, next.descriptor};
       if (!(next.access & (evolution::kAccStatic | evolution::kAccPrivate)) ||
-          !snapshot.hierarchy.inherited_interface.count(key)) continue;
+          !inherited.count(key)) continue;
+      if (snapshot.live.interfaces != incoming.interfaces && batch->active_frame) {
+        // ART 13's structural deoptimization can read an invalid vtable slot
+        // for these copied obsolete frames; ART 16 also loses private self
+        // access. Neither the unchanged direct declaration nor a virtual
+        // selector hook supplies the missing frame-relinking contract.
+        decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
+        decision.reason = "active interface parent collision requires obsolete direct-frame relinking";
+        break;
+      }
       if (next.IsStatic() && !method_handle_lookup::Enable()) {
         decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
         decision.reason = "fresh interface MethodHandle lookup services unavailable";

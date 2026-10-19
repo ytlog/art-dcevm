@@ -35,8 +35,10 @@ std::string load_target;
 jobject load_loader = nullptr;
 jobjectArray load_names = nullptr;
 jsize load_index = 0;
-jclass dispatch_classes[2]{};
-jmethodID dispatch_methods[2]{};
+constexpr int kDispatchSlots = 8;
+jclass dispatch_classes[kDispatchSlots]{};
+jmethodID dispatch_methods[kDispatchSlots]{};
+bool dispatch_static[kDispatchSlots]{};
 
 void JNICALL ClassFileLoadHook(jvmtiEnv* env, JNIEnv* jni, jclass, jobject, const char* name, jobject,
                                jint, const unsigned char*, jint* new_length,
@@ -289,7 +291,7 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassFileLoads(
 extern "C" JNIEXPORT void JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheInterfaceDispatch(
     JNIEnv* jni, jclass, jint slot, jobject reflected) {
-  if (slot < 0 || slot >= 2 || !client_env) return;
+  if (slot < 0 || slot >= kDispatchSlots || !client_env) return;
   jmethodID method = jni->FromReflectedMethod(reflected);
   jclass owner = nullptr;
   if (!method || client_env->GetMethodDeclaringClass(method, &owner) != JVMTI_ERROR_NONE) return;
@@ -297,18 +299,22 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_cacheInterfaceDispatc
   jni->DeleteLocalRef(owner);
   if (!root) return;
   if (dispatch_classes[slot]) jni->DeleteGlobalRef(dispatch_classes[slot]);
+  jint modifiers = 0;
+  client_env->GetMethodModifiers(method, &modifiers);
   dispatch_classes[slot] = root; dispatch_methods[slot] = method;
+  dispatch_static[slot] = (modifiers & 8) != 0;
 }
 extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_callInterfaceDispatchInt(
     JNIEnv* jni, jclass, jobject receiver, jint slot) {
-  if (slot < 0 || slot >= 2 || !dispatch_methods[slot]) return -1;
-  return jni->CallIntMethod(receiver, dispatch_methods[slot]);
+  if (slot < 0 || slot >= kDispatchSlots || !dispatch_methods[slot]) return -1;
+  return dispatch_static[slot] ? jni->CallStaticIntMethod(dispatch_classes[slot], dispatch_methods[slot])
+                               : jni->CallIntMethod(receiver, dispatch_methods[slot]);
 }
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_callInterfaceDispatchString(
     JNIEnv* jni, jclass, jobject receiver, jint slot) {
-  if (slot < 0 || slot >= 2 || !dispatch_methods[slot]) return nullptr;
+  if (slot < 0 || slot >= kDispatchSlots || !dispatch_methods[slot]) return nullptr;
   return static_cast<jstring>(jni->CallObjectMethod(receiver, dispatch_methods[slot]));
 }
 

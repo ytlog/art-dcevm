@@ -613,7 +613,20 @@ int main(int argc, char** argv) {
         constexpr auto kHierarchy = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED;
         auto hiding = parented; hiding.methods.push_back({"provided", "()I", acc::kAccPrivate | acc::kAccStatic});
         Require(policy::Evaluate(contract, hiding, facts, members).error == kHierarchy,
-                "a direct method hiding an added parent method must be rejected");
+                "a direct method hiding an added parent needs symbolic resolution");
+        auto symbolic = members; symbolic.interface_symbols = true;
+        for (auto own : {acc::kAccPrivate, acc::kAccPublic | acc::kAccStatic})
+          for (bool abstract_parent : {false, true}) {
+            auto before = contract; before.methods.push_back({"provided", "()I", own});
+            auto after = before; after.interfaces.push_back("Lfixture/Parent;");
+            auto parents = facts;
+            parents.parent_methods["Lfixture/Parent;"] = {{{"provided", "()I"}, abstract_parent}};
+            const auto inverse = policy::Evaluate(before, after, parents, symbolic);
+            Require(inverse.error == JVMTI_ERROR_NONE && inverse.methods_structural && inverse.requires_member_mapping,
+                    "existing private/static declaration may acquire a default/abstract parent");
+            Require(policy::Evaluate(before, after, parents, members).error == kHierarchy,
+                    "inverse parent collision requires the symbolic service");
+          }
         auto shadowing = facts; shadowing.parent_methods["Lfixture/Parent;"].push_back({{"hidden", "()I"}, false});
         const auto shadow = policy::Evaluate(contract, parented, shadowing, members);
         Require(shadow.error == kHierarchy && shadow.reason.find("Lfixture/Base;") != std::string::npos,
