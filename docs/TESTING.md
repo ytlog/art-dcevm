@@ -224,3 +224,5 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 `compare-jbr-inverse-parents.py --java-home <fixed-jbr>` 与设备组 `inverse-parents` 覆盖已有 private/static 声明新增 default/abstract 父接口的四种组合。同批更新父接口、四个子接口及普通类，交换批次顺序，检查两轮恢复、规划失败、缓存成员、JNI、Proxy、共享父路径、后加载类型与 GC。固定 JBR 对缓存槽别名及旧 private 帧的结果另有精确预期；设备活动帧拒绝场景仅证明失败原子性，不计为活动帧功能已对齐。
 
 `interface-symbols` 还在每轮失败、更新和恢复前后独立验证普通类及接口实例方法的返回／参数加载器别名，要求精确 `IllegalAccessException`，错误返回描述符要求 `NoSuchMethodException`；固定 JBR 工具共享行为夹具，设备报告验证器另行固定预期。
+
+`compare-jbr-layout-contracts.py --java-home <fixed-jbr> [--sdk <android-sdk>]` 在独立解释器／batch 进程固定新父类字段的偏移借用、构造器未执行、兼容字段保留与 GC，以及只读的 Unsafe／FieldUpdater／冷反射偏移行为。它还检查 ClassFile 字段顺序确实不同、冻结 D8 的 DEX 完全相同。batch 运行不作为已编译热点的证据；原始 offset 探针只读扩大后对象内的 primitive 槽，不进行引用 offset 写入。

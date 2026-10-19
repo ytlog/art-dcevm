@@ -90,6 +90,7 @@ The following conflicts reject the transaction:
 ## Superclass changes
 
 - Only widening is supported: the new superclass must extend the original superclass. Existing instances keep the values of their own fields and fields in the original superclass chain. Fields from the new superclass start at zero; its constructor is not run on existing instances. The new superclass is loaded before redefinition, without initialization.
+- The fixed JBR instance-copy planner has a confirmed conflict with this zero-value contract: if no field matches in the old target by name/signature, it may still use the newly inserted holder's historical field offset to copy unrelated bytes from the old object. This does not run the new superclass constructor. The project retains its zero-value contract and does not claim parity for this case.
 - Virtual methods dispatch through the new hierarchy. Overrides in the new superclass take effect immediately for existing instances. `super` calls in old method frames already executing continue to use the old hierarchy.
 - Starting with ART 13, verification of the new class resolves its name to the old class. The engine redirects that lookup to the new class during verification. If a version's verifier uses another resolution path, redefinition is rejected with 62 and the old definition remains unchanged.
 
@@ -126,7 +127,7 @@ The following conflicts reject the transaction:
 ## ART's own restrictions
 
 - Ordinary class structural redefinition retains ART's checks: arrays, primitive types, proxy classes, `java.lang.String`, mirror classes, and `java.lang.Thread` itself and its supertypes cannot be redefined. Application subclasses of `Thread` can be: a started thread keeps its object identity, name, ID, interruption and join, and an executing `run()` frame continues the old body. A class cannot be redefined while its initializer is executing on the current thread. Classes with pointer-form JNI IDs cannot undergo structural changes.
-- Raw field offsets cached by `sun.misc.Unsafe`, `Atomic*FieldUpdater` and similar APIs bypass ART's entry points. Any structural redefinition that changes the instance layout, including adding fields, invalidates those offsets.
+- Raw field offsets cached by `sun.misc.Unsafe`, `Atomic*FieldUpdater` and similar APIs bypass ART's entry points. Structural redefinition that changes instance layout may invalidate those offsets. An isolated fixed-JBR probe also observes stale raw offsets, old FieldUpdaters and cold cached Field offsets; this does not prove parity for every layout. No general offset-alignment path is established.
 
 ## Process-wide effects
 
@@ -168,7 +169,7 @@ The target semantics come from fixed JBR DCEVM sources and matching runtime comp
 | Boot classes, `Thread` and its supertypes, arrays, proxy classes themselves | Partly redefinable | Rejected under ART's rules |
 | New classes (new lambdas, anonymous classes) | Defined by tools such as HotswapAgent | Appended to the class loader by the reload tool; see [providing new classes](#providing-new-classes) |
 
-Reference-field cleanup after narrowing, static copying and retained JNI/MethodHandle call paths have separate rules and evidence scopes; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces). DEX also loses original ClassFile field declaration order, so equivalent instance-update behavior for declaration-only reorderings remains unproven.
+Reference-field cleanup after narrowing, static copying and retained JNI/MethodHandle call paths have separate rules and evidence scopes; see the [engine design](STRUCTURAL_REDEFINE_ENGINE.en.md#removing-interfaces). DEX field identifiers and class_data use their required sorted order; the frozen D8 pipeline emits byte-identical DEX for two ClassFiles differing only in field declaration order. The structural transaction cannot observe that input difference, so JBR declaration-only reordering semantics are not claimed.
 
 Existing private/static interface declarations may acquire same-signature default/abstract parents when symbolic services are available. Own calls retain their declaration; parent calls dispatch independently, and static hiding uses the existing fresh MethodHandle lookup guard. Batches with active target frames still reject these parent changes with 71: ART 13 structural deoptimization can read an invalid vtable slot, and ART 16 obsolete private self calls lose access. This remains an unresolved parity gap. The pinned JBR also aliases cached reflection/handle slots after abstract-parent additions and throws ICCE from obsolete private self frames; those reference observations are recorded separately from safe ART expectations.
 
