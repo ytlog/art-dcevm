@@ -26,9 +26,9 @@ ART DCEVM 是 Android 运行时类重定义增强库，用于在应用运行期�
 
 示例应用位于 [app](app)，独立用户 Agent 示例位于 [standard_jvmti_client.cc](app/src/debug/cpp/testing/standard_jvmti_client.cc)。
 
-### 1. 构建与接入
+### 1. 接入
 
-通过 Maven 依赖接入，**无需单独声明 ShadowHook**：
+通过 Maven 依赖接入：
 
 ```groovy
 // settings.gradle
@@ -47,26 +47,7 @@ dependencies {
 }
 ```
 
-发布元数据自动声明 ShadowHook 运行时依赖，Gradle 会一并下载和打包。
-
-也可以从源码构建。需要 JDK 17 或以上、Android SDK 37、NDK 27.2.12479018 和 CMake 4.3.4，并在本机 `local.properties` 中配置 `sdk.dir`：
-
-```sh
-git clone https://github.com/ytlog/art-dcevm.git
-cd art-dcevm
-
-# 构建示例 APK 和可接入的 AAR
-./gradlew :app:assembleDebug :artdcevm:assembleRelease
-```
-
-产物分别为 `app/build/outputs/apk/debug/app-debug.apk` 和 `artdcevm/build/outputs/aar/artdcevm-release.aar`。在同一 Gradle 工程中可直接依赖源码模块：
-
-```groovy
-// 应用模块 build.gradle；settings.gradle 需已包含 :artdcevm
-dependencies {
-    implementation project(':artdcevm')
-}
-```
+源码构建与库的开发扩展见[开发扩展指南](docs/DEVELOPMENT.md)。
 
 库的 `minSdk` 为 30，打包 arm64-v8a 的 native 库。应用需从启动时就启用 `debuggable`；不能在进程启动后再开启调试状态。
 

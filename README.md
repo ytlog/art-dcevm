@@ -26,9 +26,9 @@ On Android 11–17 / API 30–37, interface targets support default/static/priva
 
 The sample app is in [app](app), and a standalone user agent example is in [standard_jvmti_client.cc](app/src/debug/cpp/testing/standard_jvmti_client.cc).
 
-### 1. Build and integrate
+### 1. Integrate
 
-Integrate through the Maven dependency. **ShadowHook does not need to be declared separately:**
+Integrate through the Maven dependency:
 
 ```groovy
 // settings.gradle
@@ -47,26 +47,7 @@ dependencies {
 }
 ```
 
-The published metadata declares ShadowHook as a runtime dependency, so Gradle downloads and packages it automatically.
-
-You can also build from source. This requires JDK 17 or later, Android SDK 37, NDK 27.2.12479018 and CMake 4.3.4, with `sdk.dir` set in your local `local.properties`:
-
-```sh
-git clone https://github.com/ytlog/art-dcevm.git
-cd art-dcevm
-
-# Build the sample APK and the AAR for integration
-./gradlew :app:assembleDebug :artdcevm:assembleRelease
-```
-
-The outputs are `app/build/outputs/apk/debug/app-debug.apk` and `artdcevm/build/outputs/aar/artdcevm-release.aar`. Within the same Gradle project you can depend on the source module directly:
-
-```groovy
-// app module build.gradle; settings.gradle must include :artdcevm
-dependencies {
-    implementation project(':artdcevm')
-}
-```
+For source builds and library development, see the [development and extension guide](docs/DEVELOPMENT.en.md).
 
 The library's `minSdk` is 30 and it ships arm64-v8a native libraries. The app must enable `debuggable` from startup; debugging cannot be turned on after the process has started.
 

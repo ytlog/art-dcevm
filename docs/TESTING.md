@@ -22,7 +22,7 @@ done
 
 `python3 tools/test-runtime-thread-host.py` 编译生产线程服务与事务上下文，以命名服务替身覆盖七版 Thread、JNI/tid/标记位拒绝、缺失 Mark、Native 探测后标记位变化、嵌套上下文恢复及 CC/CMC 调用边界；另覆盖 `VerifiedThread` 的编译期约束、`LayoutFor`、相同 JNI 前缀的正反断言，以及映射不可用原因不被线程探测覆盖；该主机测试不模拟收集器算法。
 
-`python3 tools/test-structural-install-host.py` 编译公共生产模块，以公开 JNI/JVMTI 表与 ShadowHook 替身验证安装顺序、幂等性、inline hook 失败时不尝试 JNI 覆盖、JNI 表失败后保留基础能力，以及映射名称缺失后线程服务仍准备且诊断保留。测试不执行 ART 对象、收集器或真实 Hook，不能代替设备 ABI 验证。
+`python3 tools/test-structural-install-host.py` 编译公共生产模块，以公开 JNI/JVMTI 表与 Hook 服务替身验证安装顺序、幂等性、inline hook 失败时不尝试 JNI 覆盖、JNI 表失败后保留基础能力，以及映射名称缺失后线程服务仍准备且诊断保留。测试不执行 ART 对象、收集器或真实 Hook，不能代替设备 ABI 验证。
 
 `--scenario-group retransform` 独立运行 11 个增强场景，`tool` 和完整组也包含它们，准入 arm64 API 30–37（含 12L）。独立 agent 经公开 JVMTI 表调用 RetransformClasses，只在 ClassFileLoadHook 中提供 DEX。核对字段／方法新增、删除与恢复、旧实例兼容值、旧缓存引用持续退役、GC、同内容输出、无替换输出、混合批次的不变类、两目标整批提交、回调内嵌套 retransform、准确的回调／替换次数及失败后的下一事务。无效第二个 DEX 必须回退并返回 60；有效双目标批次在映射计划故障点精确命中一次、返回 110，两个定义及 GC 后行为都须保持，再完成后续退役事务。成功结构变化必须返回 0、无 lastRejection 并观察到真实新成员；原生拒绝或安装能力字段不能代替通过。
 
@@ -165,7 +165,7 @@ python3 tools/check-structural-symbols.py --report build/evidence/documentation-
 
 工具检查实现对目录的引用、名称所在 ELF 表、目录和实现哈希；不反汇编，不推算地址或字段偏移。准入拼写是候选项；目录总数不代表单台设备必须同时具备全部名称。
 
-ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook 按目录声明的表范围查找；`.gnu_debugdata` 也是命名符号表，不涉及反汇编或地址推算。
+ART 私有能力只通过命名 ELF 符号访问，运行时由 Hook 库按目录声明的表范围查找；`.gnu_debugdata` 也是命名符号表，不涉及反汇编或地址推算。
 
 - [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h)：每套运行库都具备的 24 个当前使用的名称（19 个限定 `.dynsym`，标准 JVMTI 包装器、JNI 访问器、两个 MethodHandle 入口与旧帧身份入口允许任一命名表）。
 - [constructor_history_symbols.h](../artdcevm/src/main/cpp/platform/symbols/constructor_history_symbols.h)：构造器单个／数组发现入口的两种拼写、调用方与访问检查、标准 JNI 弱引用身份比较。命名比较通过相同／不同对象探针后使用，缺失时回到公开 JNI 表，弱引用仍由 ART 维护。
