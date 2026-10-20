@@ -1,8 +1,9 @@
 #pragma once
 #include "platform/symbols/art_symbol_compat.h"
 namespace artdcevm::symbols::bound_method_handle {
-// runtime/instrumentation.h: observe the public event's AddListener under
-// ART's existing suspend-all; no listener or runtime lock is implemented here.
+inline constexpr NamedSymbol kInspected{Library::kJvmti, "_ZN12openjdkjvmti29JvmtiMethodInspectionCallback22IsMethodBeingInspectedEPN3art9ArtMethodE", SymbolTable::kAnyNamed};
+// runtime/instrumentation.h: observe AddListener under ART's suspend-all.
+// Legacy native PC subscription reuses that same installation transaction.
 inline constexpr NamedSymbol kAddListener{Library::kArt, "_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEj", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kAddTraceListener{Library::kArt, "_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEjb", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kSwitch{Library::kArt, "ExecuteSwitchImplAsm", SymbolTable::kAnyNamed};

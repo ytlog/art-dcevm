@@ -8,6 +8,14 @@
 #include "platform/symbols/bound_method_handle_symbols.h"
 
 namespace artdcevm::bound_method_handle {
+extern "C" {
+__attribute__((visibility("hidden"))) std::atomic<void*> artdcevm_bound_entry_method{nullptr};
+#if defined(__ANDROID__) && defined(__aarch64__)
+void artdcevmBoundSwitchEntry(abi::arm64::SwitchContextPrefix*, const void*, const uint16_t*);
+#endif
+}
+static_assert(offsetof(abi::arm64::SwitchContextPrefix, frame) == 16);
+static_assert(offsetof(abi::arm64::ShadowFramePrefix, method) == 8);
 namespace {
 std::atomic<bool> ready{false}, preparing{false}, enabled{false};
 std::atomic<jmethodID> transform{nullptr};
@@ -15,10 +23,10 @@ jfieldID delegate_field = nullptr, receiver_field = nullptr, kind_field = nullpt
 jfieldID type_field = nullptr, parameters_field = nullptr;
 jclass handles_class = nullptr, method_class = nullptr, incompatible_class = nullptr, internal_class = nullptr;
 jmethodID reflect_as = nullptr;
-thread_local bool probing = false, observed = false, checking = false, native_entry = false;
+thread_local bool probing = false, observed = false, checking = false, native_entry = false, inspection_observed = false;
 thread_local void* entering_method = nullptr;
 thread_local bool forwarding_bound = false;
-std::atomic<void*> entry_method{nullptr};
+auto& entry_method = artdcevm_bound_entry_method;
 std::atomic<bool> fast{false}, direct_entry{false};
 uint32_t (*frame_pc)(void*, bool) = nullptr;
 bool (*receiver_check)(void*, void*) = nullptr;
@@ -39,6 +47,18 @@ void* pc_targets[5]{};
 void* instrumentation_object = nullptr;
 size_t dex_pc_offset = ~size_t{0};
 bool entry_hooks = false;
+std::atomic<bool> inspect_entry{false}, policy_entry{false};
+bool (*original_inspected)(void*, void*) = nullptr;
+void* inspection_hook = nullptr;
+bool registered = false;
+abi::arm64::DexPcListener listener;
+bool Inspected(void* callback, void* method) {
+  if (inspect_entry.load(std::memory_order_acquire) && method == entry_method.load(std::memory_order_acquire)) {
+    inspection_observed = true;
+    return true;
+  }
+  return original_inspected(callback, method);
+}
 uint8_t EventByte(void* object, size_t offset) {
   return *(static_cast<const uint8_t*>(object) + offset);
 }
@@ -63,6 +83,10 @@ void AddListener(void* object, void* value, uint32_t events) {
   const auto before = Before(object);
   original_add(object, value, events);
   CaptureInstrumentation(object, events, before);
+  if (events == 8 && inspection_hook && preparing.load(std::memory_order_acquire) && !registered) {
+    original_add(object, &listener, 8);
+    registered = true;
+  }
 }
 void AddTraceListener(void* object, void* value, uint32_t events, bool trace) {
   const auto before = Before(object);
@@ -70,7 +94,10 @@ void AddTraceListener(void* object, void* value, uint32_t events, bool trace) {
   CaptureInstrumentation(object, events, before);
 }
 bool Target(void* frame) {
-  return static_cast<const abi::arm64::ShadowFramePrefix*>(frame)->method == entry_method.load(std::memory_order_acquire);
+  // Identity alone publishes no metadata. Only matching frames enter the
+  // acquire-protected preparation/activation paths; unrelated entries need no
+  // acquire barrier (the arm64 shim uses the same relaxed predicate).
+  return static_cast<const abi::arm64::ShadowFramePrefix*>(frame)->method == entry_method.load(std::memory_order_relaxed);
 }
 // Keep emulated TLS entirely out of the steady interpreter hook. Some Android
 // toolchains otherwise hoist its resolver into unrelated interpreted calls.
@@ -85,9 +112,9 @@ __attribute__((noinline)) void ProbeSwitch(abi::arm64::SwitchContextPrefix* cont
   if (Target(context->frame) && this_object(context->frame, 2)) native_entry = true;
   original_switch(context, implementation, dex_pc);
 }
-void Enter(abi::arm64::SwitchContextPrefix* context, const void* implementation, const uint16_t* dex_pc) {
+__attribute__((noinline)) void EnterBound(abi::arm64::SwitchContextPrefix* context, const void* implementation, const uint16_t* dex_pc) {
   if (preparing.load(std::memory_order_acquire)) return ProbeSwitch(context, implementation, dex_pc);
-  if (Target(context->frame) && direct_entry.load(std::memory_order_acquire) && fast.load(std::memory_order_acquire) && enabled.load(std::memory_order_acquire) &&
+  if (direct_entry.load(std::memory_order_acquire) && fast.load(std::memory_order_acquire) && enabled.load(std::memory_order_acquire) &&
       frame_pc && frame_pc(context->frame, false) == 0 && EventByte(instrumentation_object, dex_pc_offset) == 0 &&
       receiver_check(context->self, this_object(context->frame, 2))) {
     // Reuse ART's event-exception path. At entry there are no acquired monitors;
@@ -99,6 +126,12 @@ void Enter(abi::arm64::SwitchContextPrefix* context, const void* implementation,
     }
   }
   original_switch(context, implementation, dex_pc);
+}
+// Host fallback for the fixed arm64 leaf wrapper. Keep target-only receiver
+// and exception handling out of the unrelated-frame entry.
+[[maybe_unused]] void Enter(abi::arm64::SwitchContextPrefix* context, const void* implementation, const uint16_t* dex_pc) {
+  if (!Target(context->frame)) return original_switch(context, implementation, dex_pc);
+  EnterBound(context, implementation, dex_pc);
 }
 template <size_t index>
 __attribute__((noinline)) bool ProbePc(void* self, const void* accessor, const void* frame, uint32_t pc,
@@ -114,7 +147,7 @@ __attribute__((noinline)) bool ProbePc(void* self, const void* accessor, const v
 template <size_t index>
 __attribute__((noinline)) bool CheckPc(void* self, const void* accessor, const void* frame, uint32_t pc,
                                      const void* instrumentation, void* result) {
-  // Keep older ART's breakpoint/instrumentation state. Suppress only our own
+  // Preserve ART's instrumentation delivery. Suppress only our own
   // Native callback work, then inspect fresh roots after all agents return to
   // Runnable. No receiver verdict or managed pointer crosses a safepoint.
   struct Forwarding {
@@ -154,18 +187,27 @@ void PrepareEntry() {
   if (!pc_hooks[4] && !(pc_hooks[0] && pc_hooks[1] && pc_hooks[2] && pc_hooks[3])) return;
   entry_hooks = true;
   // The newer active-handler interpreter can avoid global notifications.
-  // Older ART retains its notification state to avoid additional exit stubs.
-  if (!pc_hooks[4]) return;
+  // Older ART can retain native PC delivery while its inspection policy lets
+  // ART retire the private breakpoint and its global exit stubs.
+  if (!pc_hooks[4] && !inspection_hook) if (void* entry = symbols::Find(kInspected))
+    inspection_hook = shadowhook_hook_sym_addr(entry, HookAddress(Inspected), HookSlot(&original_inspected));
   if (!listener_hook) {
     if (void* entry = symbols::Find(kAddListener))
       listener_hook = shadowhook_hook_sym_addr(entry, HookAddress(AddListener), HookSlot(&original_add));
     else if (void* entry = symbols::Find(kAddTraceListener))
       listener_hook = shadowhook_hook_sym_addr(entry, HookAddress(AddTraceListener), HookSlot(&original_add_trace));
   }
+  if (!pc_hooks[4]) return;
   if (!move_exception) move_exception = reinterpret_cast<decltype(move_exception)>(symbols::Find(kMoveException));
   if (!listener_hook || !move_exception) return;
   if (!switch_hook) if (void* entry = symbols::Find(kSwitch))
-    switch_hook = shadowhook_hook_sym_addr(entry, HookAddress(Enter), HookSlot(&original_switch));
+    switch_hook = shadowhook_hook_sym_addr(entry, HookAddress(
+#if defined(__ANDROID__) && defined(__aarch64__)
+      artdcevmBoundSwitchEntry
+#else
+      Enter
+#endif
+    ), HookSlot(&original_switch));
 
 }
 struct Locals {
@@ -246,6 +288,10 @@ void Check(jvmtiEnv* env, JNIEnv* jni, jthread thread) {
   jni->ThrowNew(incompatible_class, "MethodHandle receiver lost the declaring interface");
 }
 }  // namespace
+extern "C" __attribute__((visibility("hidden"))) void artdcevmBoundInterpreterEntry(
+    abi::arm64::SwitchContextPrefix* context, const void* implementation, const uint16_t* dex_pc) {
+  EnterBound(context, implementation, dex_pc);
+}
 
 void JNICALL Breakpoint(jvmtiEnv* env, JNIEnv* jni, jthread thread,
                         jmethodID method, jlocation location) {
@@ -262,7 +308,7 @@ void JNICALL Breakpoint(jvmtiEnv* env, JNIEnv* jni, jthread thread,
   }
 }
 EntryMode Mode() {
-  return !fast.load(std::memory_order_acquire) ? EntryMode::kPublicJvmti
+  return policy_entry.load(std::memory_order_acquire) ? EntryMode::kNativePolicy : !fast.load(std::memory_order_acquire) ? EntryMode::kPublicJvmti
       : direct_entry.load(std::memory_order_acquire) ? EntryMode::kNativeFrame : EntryMode::kNativeEvent;
 }
 void Enable() { enabled.store(true, std::memory_order_release); }
@@ -329,6 +375,35 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   jint modifiers = 0;
   const bool ordinary_entry = passed && env->GetMethodModifiers(entry, &modifiers) == JVMTI_ERROR_NONE && !(modifiers & evolution::kAccSynchronized);
   const bool helper_ready = passed && entry_hooks && native_entry;
+  if (helper_ready && ordinary_entry && inspection_hook && registered) {
+    // The existing inspection policy keeps this bootstrap method interpreted.
+    // Let ClearBreakpoint reclaim ART's global deoptimization/exit stubs.
+    // Only a callback on this ClearBreakpoint caller proves the pinning
+    // decision. Concurrent JIT inspection on another thread is not evidence.
+    inspection_observed = false;
+    inspect_entry.store(true, std::memory_order_release);
+    if (env->ClearBreakpoint(entry, 0) == JVMTI_ERROR_NONE) {
+      bool accelerated = false;
+      if (inspection_observed &&
+          env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_BREAKPOINT, nullptr) == JVMTI_ERROR_NONE) {
+        native_entry = false;
+        probing = true;
+        jni->CallStaticVoidMethod(probe, run);
+        probing = false;
+        passed = !jni->ExceptionCheck();
+        accelerated = passed && native_entry;
+      }
+      policy_entry.store(accelerated, std::memory_order_release);
+      if (passed && !accelerated) {
+        passed = env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_BREAKPOINT, nullptr) == JVMTI_ERROR_NONE;
+        if (passed) {
+          const auto restored = env->SetBreakpoint(entry, 0);
+          passed = restored == JVMTI_ERROR_NONE || restored == JVMTI_ERROR_DUPLICATE;
+        }
+      }
+    }
+    if (!policy_entry.load(std::memory_order_acquire)) inspect_entry.store(false, std::memory_order_release);
+  }
   if (helper_ready && ordinary_entry && switch_hook && instrumentation_object && entry_method.load(std::memory_order_acquire) &&
       env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_BREAKPOINT, nullptr) == JVMTI_ERROR_NONE) {
     native_entry = false;
@@ -348,6 +423,8 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   else {
     fast.store(false, std::memory_order_release);
     direct_entry.store(false, std::memory_order_release);
+    policy_entry.store(false, std::memory_order_release);
+    inspect_entry.store(false, std::memory_order_release);
     env->ClearBreakpoint(entry, 0);
     env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_BREAKPOINT, nullptr);
   }

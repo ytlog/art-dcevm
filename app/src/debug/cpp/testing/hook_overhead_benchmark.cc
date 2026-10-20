@@ -2,6 +2,9 @@
 // so it measures whichever table is current: ART's own (CheckJNI or plain) or
 // the engine's retirement-guard override in front of it.
 #include <jni.h>
+#include <cstring>
+#include <dlfcn.h>
+#include <unwind.h>
 
 namespace {
 jclass base_class = nullptr;
@@ -30,4 +33,25 @@ Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_jniLoop(
     default: return -1;
   }
   return sum;
+}
+
+// Exercise actual DWARF unwinding through interpreted callers and the native
+// switch wrapper. Emit counts only; never retain or report native addresses.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_interpreterUnwind(JNIEnv*, jclass) {
+  struct Trace { unsigned frames = 0, engine = 0, after_engine = 0; } trace;
+  _Unwind_Backtrace([](_Unwind_Context* context, void* data) {
+    auto& result = *static_cast<Trace*>(data);
+    ++result.frames;
+    Dl_info info{};
+    const auto pc = _Unwind_GetIP(context);
+    if (pc && dladdr(reinterpret_cast<void*>(pc), &info) && info.dli_fname &&
+        std::strstr(info.dli_fname, "libartdcevm.so")) {
+      ++result.engine;
+      result.after_engine = 0;
+    } else if (result.engine) ++result.after_engine;
+    return _URC_NO_REASON;
+  }, &trace);
+  return (static_cast<jlong>(trace.frames) << 32) |
+         (static_cast<jlong>(trace.engine) << 16) | trace.after_engine;
 }

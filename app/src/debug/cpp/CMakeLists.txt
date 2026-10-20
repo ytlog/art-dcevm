@@ -9,6 +9,7 @@ target_include_directories(artdcevm_client_test PRIVATE ../../../../third_party/
 # JNI loops for HookOverheadBenchmark; no JVMTI or engine dependency.
 add_library(artdcevm_bench SHARED testing/hook_overhead_benchmark.cc)
 target_compile_features(artdcevm_bench PRIVATE cxx_std_17)
+target_link_libraries(artdcevm_bench PRIVATE dl)
 # ART 13 diagnostics load separately, only in explicitly selected probe states.
 add_library(artdcevm_jit_probe SHARED testing/jit_instrumentation_probe.cc)
 target_compile_features(artdcevm_jit_probe PRIVATE cxx_std_17)

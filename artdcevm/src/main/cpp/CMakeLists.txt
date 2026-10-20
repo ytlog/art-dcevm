@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project(artdcevm LANGUAGES CXX)
+project(artdcevm LANGUAGES CXX ASM)
 if(NOT ANDROID_ABI STREQUAL "arm64-v8a")
   message(FATAL_ERROR "Supported ABI: arm64-v8a")
 endif()
@@ -23,6 +23,7 @@ add_library(artdcevm SHARED
   platform/common/method_handle_lookup.cc
   platform/common/invoke_kind.cc
   platform/common/bound_method_handle.cc
+  platform/abi/arm64/common/bound_entry.S
   platform/common/jni_interface_dispatch.cc
   platform/common/narrowed_references.cc
   platform/common/imt_sealing.cc

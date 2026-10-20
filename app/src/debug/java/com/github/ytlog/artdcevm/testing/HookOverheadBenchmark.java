@@ -82,6 +82,8 @@ public final class HookOverheadBenchmark extends Instrumentation {
     static native int boundHandleEntryMode();
     static native boolean jniPrepare(Class<?> base);
     static native long jniLoop(Object target, int kind, int count);
+    static native long interpreterUnwind();
+    private static long unwindFromInterpretedCaller() { return interpreterUnwind(); }
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
@@ -317,6 +319,15 @@ public final class HookOverheadBenchmark extends Instrumentation {
             long expected = (long) handleExpected * measured.getInt("callsPerBatch") * SAMPLES;
             if (measured.getLong("checksum") != expected) throw new AssertionError("Invalid MethodHandle benchmark checksum");
         }
+        long unwind = unwindFromInterpretedCaller();
+        int unwindFrames = (int) (unwind >>> 32);
+        int unwindEngineFrames = (int) ((unwind >>> 16) & 0xffff);
+        int unwindAfterEngine = (int) (unwind & 0xffff);
+        setup.put("unwindFrames", unwindFrames).put("unwindEngineFrames", unwindEngineFrames)
+                .put("unwindAfterEngine", unwindAfterEngine);
+        if (mode.equals("interp") && boundHandleEntryMode() == 2
+                && (unwindEngineFrames == 0 || unwindAfterEngine < 2))
+            throw new AssertionError("Interpreter wrapper truncated native unwinding");
         setup.put("methodHandleChecks", true);
         measure(workloads, "reflectInvoke", compiled, n -> {
             long total = 0;
