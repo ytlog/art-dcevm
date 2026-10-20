@@ -21,7 +21,7 @@ void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, abi::arm64::Handle target);
 void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods,
                         size_t gc_marking = ~size_t{0}, size_t method_index = ~size_t{0}, size_t iftable = ~size_t{0},
-                        abi::arm64::FrameReference frame_reference = nullptr);
+                        abi::arm64::FrameReference frame_reference = nullptr, size_t exception = ~size_t{0}, abi::arm64::FramePc frame_pc = nullptr);
 // Class and interface selectors are independent. The no-argument form is the
 // compatibility capability requiring both; admission uses the target's kind.
 // Each transaction still needs the Class/Thread/HandleScope probes.
@@ -37,6 +37,10 @@ bool ClassKinds();
 // their cached canonical ArtMethod. Reflection/JNI/MethodHandle identities stay mapped.
 bool InterfaceResolution(void* cache, uint32_t index);
 bool InterfaceSymbols();
+// Runnable DexPc listener only: receiver is ART's existing Handle root.
+// Preserves pending instrumentation exceptions and throws through ART's normal
+// interpreter event/unwind path, without JNI transitions or a stack walk.
+bool CheckBoundReceiver(void* self, void* bound);
 // Install the post-adaptation MethodHandle guard before accepting the transaction.
 bool EnableInterfaceSymbols();
 const char* ClassKindUnavailable();

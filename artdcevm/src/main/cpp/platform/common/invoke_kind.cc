@@ -53,6 +53,8 @@ size_t gc_marking_offset = ~size_t{0};
 size_t method_index_offset = ~size_t{0};
 size_t class_iftable = ~size_t{0};
 abi::arm64::FrameReference frame_reference = nullptr;
+size_t exception_offset = ~size_t{0};
+abi::arm64::FramePc observed_frame_pc = nullptr;
 abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
 bool (*descriptor_equals)(void*, const char*) = nullptr;
 bool legacy_handle_refine = false;
@@ -64,7 +66,7 @@ using HandleDispatch = bool (*)(void*, void*, Handle, const abi::arm64::Instruct
 using HandleRefine = void* (*)(void*, void*, const int&, Handle, Handle, uint32_t, void*);
 HandleDispatch original_handle_dispatch = nullptr;
 HandleRefine original_handle_refine = nullptr;
-std::atomic<int64_t> handle_kind_offset{-1}, handle_target_offset{-1}, handle_type_offset{-1}, ptypes_offset{-1}, frame_refs_offset{-1};
+std::atomic<int64_t> handle_kind_offset{-1}, handle_target_offset{-1}, handle_type_offset{-1}, ptypes_offset{-1}, frame_refs_offset{-1}, bound_delegate_offset{-1}, bound_receiver_offset{-1};
 
 
 template <bool read_barrier>
@@ -444,7 +446,7 @@ void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
   scope_layout = layout;
   scope_verified.store(true, std::memory_order_release);
 }
-void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods, size_t gc_marking, size_t method_index, size_t iftable, abi::arm64::FrameReference reference) {
+void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods, size_t gc_marking, size_t method_index, size_t iftable, abi::arm64::FrameReference reference, size_t exception, abi::arm64::FramePc frame_pc) {
   std::lock_guard<std::mutex> lock(scope_mutex);
   if (class_verified.load(std::memory_order_relaxed)) return;
   class_access = access_flags;
@@ -455,6 +457,9 @@ void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, 
   method_index_offset = method_index;
   class_iftable = iftable;
   frame_reference = reference;
+  exception_offset = exception;
+  observed_frame_pc = frame_pc;
+  bound_method_handle::Configure(frame_pc, CheckBoundReceiver);
   class_verified.store(true, std::memory_order_release);
 }
 bool SelectionServices() {
@@ -491,8 +496,49 @@ const char* ClassKindUnavailable() {
   return nullptr;
 }
 bool InterfaceSymbols() {
-  return ClassKinds() && frame_reference && class_iftable != ~size_t{0} && find_instance_field &&
+  return ClassKinds() && exception_offset != ~size_t{0} && observed_frame_pc && frame_reference && class_iftable != ~size_t{0} && find_instance_field &&
       handle_dispatch_target && (!legacy_handle_refine || descriptor_equals);
+}
+static int InspectBoundReceiver(void* bound) {
+  if (!bound) return 0;
+  bool complete = true;
+  const auto read = [&complete](void* object, const char* name, const char* signature, std::atomic<int64_t>& cached) -> void* {
+    const auto offset = HandleField(object, name, signature, cached);
+    if (offset < 0) complete = false;
+    return offset < 0 ? nullptr : reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(object, offset)));
+  };
+  void* delegate = read(bound, "delegate", "Ljava/lang/invoke/MethodHandle;", bound_delegate_offset);
+  void* receiver = read(bound, "receiver", "Ljava/lang/Object;", bound_receiver_offset);
+  if (!complete) return 0;
+  if (!delegate || !receiver) return 1;
+  const auto kind = HandleField(delegate, "handleKind", "I", handle_kind_offset);
+  if (kind < 0) return 0;
+  const auto value = runtime_roots::Field<int>(delegate, kind);
+  if (value != 0 && value != 4) return 1;
+  void* type = HandleReceiverType(read(delegate, "type", "Ljava/lang/invoke/MethodType;", handle_type_offset));
+  if (!complete || !type) return 0;
+  if (!(runtime_roots::Field<uint32_t>(type, class_access) & evolution::kAccInterface)) return 1;
+  void* klass = reinterpret_cast<void*>(Reference<true>(static_cast<abi::arm64::Object*>(receiver)->klass));
+  const auto* interfaces = reinterpret_cast<const abi::arm64::ObjectArray*>(
+      Reference<true>(runtime_roots::Field<uint32_t>(klass, class_iftable)));
+  for (int32_t i = 0; interfaces && i + 1 < interfaces->length; i += 2)
+    if (Reference<true>(interfaces->elements[i]) == reinterpret_cast<uintptr_t>(type)) return 1;
+  const auto target_offset = HandleField(delegate, "artFieldOrMethod", "J", handle_target_offset);
+  const auto* target = target_offset < 0 ? nullptr : reinterpret_cast<abi::arm64::ArtMethodPrefix*>(
+      runtime_roots::Field<uintptr_t>(delegate, target_offset));
+  if (target_offset < 0) return 0;
+  if (!target || (target->access_flags.load(std::memory_order_relaxed) & abi::arm64::kAccObsoleteMethod)) return 1;
+  void* declaring = reinterpret_cast<void*>(Reference<true>(target->declaring_class));
+  if (!(runtime_roots::Field<uint32_t>(declaring, class_access) & evolution::kAccInterface)) return 1;
+  return 2;
+}
+bool CheckBoundReceiver(void* self, void* bound) {
+  if (runtime_roots::Field<void*>(self, exception_offset)) return false;
+  const int result = InspectBoundReceiver(bound);
+  if (result == 1) return false;
+  throw_exception(self, result == 2 ? "Ljava/lang/IncompatibleClassChangeError;" : "Ljava/lang/InternalError;",
+                  result == 2 ? "MethodHandle receiver lost the declaring interface" : "Bound MethodHandle receiver inspection failed");
+  return true;
 }
 bool EnableInterfaceSymbols() {
   if (!InterfaceSymbols() || !Enable()) return false;

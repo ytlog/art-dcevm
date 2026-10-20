@@ -94,6 +94,13 @@ template <typename T> struct LengthPrefixedArray {
   }
 };
 
+// interpreter/{shadow_frame,interpreter_switch_impl}.h: identical native
+// prefixes in Android 11--17, independent of the trailing frame/context fields.
+struct ShadowFramePrefix { void* link; void* method; };
+struct SwitchContextPrefix { void* self; const void* accessor; void* frame; };
+static_assert(offsetof(ShadowFramePrefix, method) == 8);
+static_assert(offsetof(SwitchContextPrefix, frame) == 16);
+
 // handle.h: Handle<T> points at a StackReference<T> (an unpoisoned reference).
 struct Handle {
   const uint32_t* reference;

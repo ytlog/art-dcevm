@@ -1,0 +1,16 @@
+#pragma once
+#include "platform/symbols/art_symbol_compat.h"
+namespace artdcevm::symbols::bound_method_handle {
+// runtime/instrumentation.h: observe the public event's AddListener under
+// ART's existing suspend-all; no listener or runtime lock is implemented here.
+inline constexpr NamedSymbol kAddListener{Library::kArt, "_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEj", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kAddTraceListener{Library::kArt, "_ZN3art15instrumentation15Instrumentation11AddListenerEPNS0_23InstrumentationListenerEjb", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kSwitch{Library::kArt, "ExecuteSwitchImplAsm", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kThisObject{Library::kArt, "_ZNK3art11ShadowFrame13GetThisObjectEt", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kMoveException{Library::kArt, "_ZN3art11interpreter22MoveToExceptionHandlerEPNS_6ThreadERNS_11ShadowFrameEbb", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kDexPc00{Library::kArt, "_ZN3art11interpreter18InstructionHandlerILb0ELb0ELNS_11Instruction6FormatE26EE16DoDexPcMoveEventEPNS_6ThreadERKNS_20CodeItemDataAccessorERKNS_11ShadowFrameEjPKNS_15instrumentation15InstrumentationEPNS_6JValueE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kDexPc01{Library::kArt, "_ZN3art11interpreter18InstructionHandlerILb0ELb1ELNS_11Instruction6FormatE26EE16DoDexPcMoveEventEPNS_6ThreadERKNS_20CodeItemDataAccessorERKNS_11ShadowFrameEjPKNS_15instrumentation15InstrumentationEPNS_6JValueE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kDexPc10{Library::kArt, "_ZN3art11interpreter18InstructionHandlerILb1ELb0ELNS_11Instruction6FormatE26EE16DoDexPcMoveEventEPNS_6ThreadERKNS_20CodeItemDataAccessorERKNS_11ShadowFrameEjPKNS_15instrumentation15InstrumentationEPNS_6JValueE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kDexPc11{Library::kArt, "_ZN3art11interpreter18InstructionHandlerILb1ELb1ELNS_11Instruction6FormatE26EE16DoDexPcMoveEventEPNS_6ThreadERKNS_20CodeItemDataAccessorERKNS_11ShadowFrameEjPKNS_15instrumentation15InstrumentationEPNS_6JValueE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kDexPcModern{Library::kArt, "_ZN3art11interpreter28ActiveInstrumentationHandler16DoDexPcMoveEventEPNS_6ThreadERKNS_20CodeItemDataAccessorERKNS_11ShadowFrameEjPKNS_15instrumentation15InstrumentationEPNS_6JValueE", SymbolTable::kAnyNamed};
+}

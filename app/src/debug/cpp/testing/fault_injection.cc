@@ -1,4 +1,5 @@
 #include <vector>
+#include "platform/common/bound_method_handle.h"
 #include "platform/common/narrowed_references.h"
 #include "platform/common/fault_injection.h"
 #include "platform/symbols/art_symbol_compat.h"
@@ -191,4 +192,9 @@ Java_com_github_ytlog_artdcevm_testing_JniReceiverLossInstrumentation_promoteIds
   if (self) jni->DeleteLocalRef(self);
   env->DisposeEnvironment();
   return result;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_boundHandleEntryMode(JNIEnv*, jclass) {
+  return static_cast<jint>(artdcevm::bound_method_handle::Mode());
 }

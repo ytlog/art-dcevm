@@ -14,6 +14,22 @@ class InstructionOperands {
   virtual uint32_t GetOperand(size_t index) const = 0;
   const size_t num_operands;
 };
+using FramePc = uint32_t (*)(void*, bool);
+template <typename Frame> uint32_t AccessFramePc(void* address, bool finish) {
+  auto* frame = static_cast<Frame*>(address);
+  uint32_t pc = frame->dex_pc;
+  if constexpr (std::is_same_v<Frame, android13::ShadowFrame>) {
+    if (frame->dex_pc_ptr) pc = static_cast<uint32_t>(frame->dex_pc_ptr - frame->dex_instructions);
+    if (finish) frame->dex_pc_ptr = nullptr;
+  }
+  if (finish) frame->dex_pc = ~uint32_t{0};
+  return pc;
+}
+template <typename Class> constexpr FramePc FramePcFor() {
+  if constexpr (std::is_same_v<Class, android16::Class> || std::is_same_v<Class, android17::Class>)
+    return AccessFramePc<android16::ShadowFrame>;
+  return AccessFramePc<android13::ShadowFrame>;
+}
 using FrameReference = uint32_t (*)(const void*, uint32_t);
 template <typename Frame> uint32_t ReadFrameReference(const void* address, uint32_t index) {
   const auto* frame = static_cast<const Frame*>(address);

@@ -50,12 +50,12 @@ void* linker = reinterpret_cast<void*>(0x1000);
 void* self = reinterpret_cast<void*>(0x2000);
 void* referrer = reinterpret_cast<void*>(0x3000);
 void Require(bool ok, const char* reason);
-namespace artdcevm::bound_method_handle { void Enable() {} }
+namespace artdcevm::bound_method_handle { void Enable() {} void Configure(uint32_t (*)(void*,bool),bool (*)(void*,void*)) {} }
 
 bool missing_method = false;
 abi::arm64::ArtMethodPrefix own_caller{};
 struct FakeScope { void* link; int32_t capacity; uint32_t size; uint32_t root; };
-struct FakeThread { uint32_t tid = 7; uint32_t marking = 0; void* scope = nullptr; } fake_thread;
+struct FakeThread { uint32_t tid = 7; uint32_t marking = 0; void* exception = nullptr; void* scope = nullptr; } fake_thread;
 namespace artdcevm::abi::arm64 { struct RootInfo {}; }
 const abi::arm64::RootInfo root_info{};
 bool moving = false, other_loader = false, other_class = false;
@@ -169,6 +169,14 @@ int main(int argc, char** argv) {
         Require(method.access_flags.load() == flag, "changed a native, abstract or intrinsic method");
       }
     }
+    abi::arm64::android13::ShadowFrame legacy_pc{};uint16_t code[4]{};
+    legacy_pc.dex_instructions=code;legacy_pc.dex_pc_ptr=code+2;legacy_pc.dex_pc=9;
+    auto legacy_access=abi::arm64::FramePcFor<abi::arm64::android13::Class>();
+    Require(legacy_access(&legacy_pc,false)==2,"legacy frame ignored its live DEX pointer");
+    Require(legacy_access(&legacy_pc,true)==2&&!legacy_pc.dex_pc_ptr&&legacy_pc.dex_pc==~uint32_t{0},"legacy unwind did not mirror ART SetDexPC");
+    abi::arm64::android16::ShadowFrame modern_pc{};modern_pc.dex_pc=7;
+    auto modern_access=abi::arm64::FramePcFor<abi::arm64::android16::Class>();
+    Require(modern_access(&modern_pc,true)==7&&modern_pc.dex_pc==~uint32_t{0},"modern frame unwind PC incorrect");
     std::vector<Hook> hooks;
     bool supported = mode == 1 || mode == 2 || mode == 3 || mode >= 6;
     Require(invoke_kind::Prepare(&hooks) == supported, "wrong optional-service decision");
@@ -187,7 +195,7 @@ int main(int argc, char** argv) {
                 "MethodHandle guard installed before verified declarations");
         constexpr auto legacy = abi::arm64::FrameReferenceFor<abi::arm64::android13::Class>();
         constexpr auto modern = abi::arm64::FrameReferenceFor<abi::arm64::android16::Class>();
-        invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8,12,mode==20 ? modern : legacy);
+        invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8,12,mode==20 ? modern : legacy,offsetof(FakeThread,exception),mode==20 ? abi::arm64::FramePcFor<abi::arm64::android16::Class>() : abi::arm64::FramePcFor<abi::arm64::android13::Class>());
         Require(invoke_kind::InterfaceSymbols(), "complete symbolic services unavailable");
         if (mode == 18) {
           hook_failure = true;
@@ -251,6 +259,27 @@ int main(int argc, char** argv) {
           *frame_receiver=0x10000800;
           Require(!call() && exceptions==5, "legacy caller-transformer receiver was not unwrapped");
         }
+        // Exercise the production Runnable listener guard, including the
+        // original symbolic receiver type when the target belongs to a parent.
+        auto* bound=reinterpret_cast<uint32_t*>(0x10000e00);bound[0]=0x10000000;bound[6]=0x10000500;bound[7]=0x10000100;
+        self=&fake_thread;fake_thread.exception=nullptr;mh[2]=4;kind=4;method.access_flags.store(0);declaring[0]=0x0200;
+        table->length=2;table->elements[0]=0x10000b00;
+        int baseline=exceptions;
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"compatible bound receiver rejected");
+        table->elements[0]=0x10000200;
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==++baseline,"lost child interface hidden by retained parent target");
+        fake_thread.exception=reinterpret_cast<void*>(1);
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"pending instrumentation exception replaced");
+        fake_thread.exception=nullptr;method.access_flags.store(abi::arm64::kAccObsoleteMethod);
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"obsolete target intercepted");
+        method.access_flags.store(0);bound[7]=0;
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"null binding intercepted before ART NPE");
+        bound[7]=0x10000100;mh[2]=3;
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"non-receiver binding intercepted");
+        mh[2]=4;*reinterpret_cast<uint32_t*>(0x10000b00)=0;
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"class receiver intercepted");
+        *reinterpret_cast<uint32_t*>(0x10000b00)=0x0200;declaring[0]=0;
+        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"class target intercepted");
         munmap(page,4096);
         std::cout << "Invocation guard case " << mode << " PASS\n"; return 0;
       }
