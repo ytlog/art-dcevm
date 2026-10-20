@@ -19,6 +19,7 @@ add_library(artdcevm SHARED
   platform/common/runtime_thread.cc
   platform/common/transaction_context.cc
   platform/common/member_retirement.cc
+  platform/common/constructor_history.cc
   platform/common/member_mapping.cc
   platform/common/method_handle_lookup.cc
   platform/common/invoke_kind.cc

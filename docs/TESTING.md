@@ -168,6 +168,7 @@ python3 tools/check-structural-symbols.py --report build/evidence/documentation-
 ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook 按目录声明的表范围查找；`.gnu_debugdata` 也是命名符号表，不涉及反汇编或地址推算。
 
 - [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h)：每套运行库都具备的 22 个当前使用的名称（19 个限定 `.dynsym`，标准 JVMTI 包装器与两个 MethodHandle 入口允许任一命名表）。
+- [constructor_history_symbols.h](../artdcevm/src/main/cpp/platform/symbols/constructor_history_symbols.h)：构造器单个／数组发现入口的两种拼写、调用方与访问检查、标准 JNI 弱引用身份比较。命名比较通过相同／不同对象探针后使用，缺失时回到公开 JNI 表，弱引用仍由 ART 维护。
 - [member_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/member_retirement_symbols.h)：退役访问守卫使用的可变拼写：`Method_invoke` 与 `Constructor_newInstance0` 的无后缀和固定 `.__uniq` 后缀两种拼写、`EncodeFieldId` 新旧两组签名，以及可选的 `MethodHandleInvokeExactWithFrame`（13 起）。
 - [verification_redirect_symbols.h](../artdcevm/src/main/cpp/platform/symbols/verification_redirect_symbols.h)：验证重定向使用的 `FindClass` 新旧两种签名。
 
@@ -254,3 +255,5 @@ python3 tools/run-jni-receiver-tests.py --serial DEVICE_SELECTOR --device-id and
 `ReceiverLossAdapters` 将 43 组预链接适配器图同时交给 ART 和固定 JBR；`method_handle_adapter_expectations.py` 为两个报告验证器固定独立结果与回调轨迹。覆盖组合后绑定、忽略／替换接收者、guard 分支、内外层处理器、过滤器抛错、collect／fold、置换、spread／collect、invoker、显式转换及 varargs。`test-captured-method-handle-host.py` 另验 34 项根化续执行、upcall 失败、元数据重试、入口身份与已有异常；入口测试还验证帧返回服务／覆盖缺失、续执行准备及提前返回失败、其他 agent 的强制返回。准备探针必须通过混合引用／基本类型参数复制、引用返回值与恰好一次执行检查。
 
 `boundHandlePreparationProofs` 记录启动时的身份、普通入口、初次原生入口、公开续执行、重复原生入口与原生续执行证明（位 0–5），以及检查策略／帧入口激活（位 6／7）；原生策略／帧入口性能报告分别要求 127／191。首次事务直接移除接口时，也在已证明的 Runnable 探针中运行既有 Class／Thread 校验后再选择原生续执行，不能依赖更早的普通重定义。
+
+`tools/compare-jbr-constructor-history.py --java-home <fixed-jbr>` 在独立解释器／默认 JBR 进程中，用共享构造器探针核对固定预期。设备 `constructor-history` 组覆盖公有／声明共享根的双向独立预热、单个／数组查询副本、错误参数预热、abstract／接口／注解转换、恢复、GC 和失败事务；`test-constructor-history-host.py` 验生产守卫、原始／引用转换、标签释放、弱引用清除／分配失败及线程退出清理。报告验证器的负例要求精确 cause 与完整观察集合。构造活动帧和初始化前／序列化发现仍是独立待补范围。

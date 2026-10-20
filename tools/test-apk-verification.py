@@ -153,6 +153,29 @@ class ApkVerificationTests(unittest.TestCase):
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(report, scenario_group='interface-selection')
 
+    def test_constructor_history_requires_shared_roots_and_exception_precedence(self):
+        report = complete_report(36)
+        report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('constructor-history-')]
+        runner.validate_report(report, scenario_group='constructor-history')
+        for name, key in (('constructor-history-abstract-0-apply', 'Warm.sibling'),
+                          ('constructor-history-interface-0-apply', 'Cold.declaredArray'),
+                          ('constructor-history-annotation-1-restore', 'Cold.first'),
+                          ('constructor-history-abstract-1-restore-abort', 'Type.type'),
+                          ('constructor-history-interface-0-restore', 'Warm.handle'),
+                          ('constructor-history-annotation-abort', 'Cold.declaredWarm'),
+                          ('constructor-history-abstract-0-apply', 'Arity.declaredType')):
+            broken = copy.deepcopy(report)
+            scenario = next(s for s in broken['scenarios'] if s['name'] == name)
+            scenario['checks'] = [c for c in scenario['checks'] if c['name'] != key]
+            with self.subTest(scenario=name, missing=key), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group='constructor-history')
+        broken = copy.deepcopy(report)
+        scenario = next(s for s in broken['scenarios'] if s['name'] == 'constructor-history-abstract-0-apply')
+        check = next(c for c in scenario['checks'] if c['name'] == 'Warm.type')
+        check['expected'] = check['actual'] = 'java.lang.reflect.InvocationTargetException:java.lang.InstantiationException'
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(broken, scenario_group='constructor-history')
+
     def test_class_kinds_require_precise_calls_types_and_retained_members(self):
         report = complete_report(36)
         report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('class-kind-')]

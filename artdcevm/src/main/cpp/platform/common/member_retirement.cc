@@ -14,6 +14,7 @@
 #include "platform/symbols/member_retirement_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/constructor_history.h"
 #include "evolution/class_schema.h"
 
 namespace artdcevm::member_retirement {
@@ -327,9 +328,15 @@ jobject MethodInvoke(JNIEnv* env, jobject method, jobject receiver, jobjectArray
                                       : process->original_method_invoke(env, method, receiver, args);
 }
 // A retired constructor would run its old code on an object of the new class.
-jobject ConstructorNewInstance(JNIEnv* env, jobject constructor, jobjectArray args) noexcept {
+jobject ConstructorNewInstanceLegacy(JNIEnv* env, jobject constructor, jobjectArray args) {
   return RejectReflected(env, constructor) ? nullptr
                                            : process->original_constructor_new_instance(env, constructor, args);
+}
+jobject ConstructorNewInstance(JNIEnv* env, jobject constructor, jobjectArray args) noexcept {
+  return constructor_history::Available()
+      ? constructor_history::Invoke(env, constructor, args, process->original_constructor_new_instance,
+                                    ConstructorNewInstanceLegacy)
+      : ConstructorNewInstanceLegacy(env, constructor, args);
 }
 
 // JNI field access with a retired or placeholder field ID.

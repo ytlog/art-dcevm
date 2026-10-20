@@ -1,4 +1,5 @@
 #include "platform/common/structural_redefine_internal.h"
+#include "platform/common/constructor_history.h"
 
 #include <algorithm>
 #include <array>
@@ -154,6 +155,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   std::vector<Hook> retirement_hooks;
   bool mapping_ready = PrepareLayoutServices(jni, &failure);
   if (mapping_ready) mapping_ready = member_retirement::Prepare({process->layout_services.find_instance_field}, &retirement_hooks, &failure);
+  if (mapping_ready) mapping_ready = constructor_history::Prepare(vm, jni, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = member_mapping::Prepare(process->layout_services, &retirement_hooks, &failure);
   if (mapping_ready) mapping_ready = verification_redirect::Prepare(&retirement_hooks, &failure);
   if (mapping_ready) invoke_kind_prepared = invoke_kind::Prepare(&retirement_hooks);

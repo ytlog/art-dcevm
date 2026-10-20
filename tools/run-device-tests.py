@@ -404,6 +404,19 @@ for _round in range(2):
 CLASS_KIND_SCENARIOS.extend((f"class-kind-enum-reject-{kind}", [f"class-kind-enum-{kind}"], 66) for kind in ("c", "i", "a"))
 CLASS_KIND_SCENARIOS.extend((f"class-kind-{kind}-enum", [f"class-kind-{kind}-e"], 66) for kind in ("c", "i", "a"))
 SCENARIOS += tuple(CLASS_KIND_SCENARIOS)
+CONSTRUCTOR_HISTORY_EXPECTATIONS = json.loads((ROOT / "app/src/debug/assets/constructor-history-expectations.json").read_text())
+CONSTRUCTOR_HISTORY_SCENARIOS = []
+for _kind in ("abstract", "interface", "annotation"):
+    CONSTRUCTOR_HISTORY_SCENARIOS.append((f"constructor-history-{_kind}-reset", ["constructor-history-original"] * 4, 0))
+    CONSTRUCTOR_HISTORY_SCENARIOS.append((f"constructor-history-{_kind}-abort", [f"constructor-history-{_kind}"] * 4, 110))
+    for _round in range(2):
+        for _phase in ("apply", "restore-abort", "restore"):
+            _variant = _kind if _phase == "apply" else "original"
+            CONSTRUCTOR_HISTORY_SCENARIOS.append((f"constructor-history-{_kind}-{_round}-{_phase}",
+                [f"constructor-history-{_variant}"] * 4, 110 if _phase == "restore-abort" else 0))
+# Instrumentation runs the focused group immediately before the class-kind group.
+_class_kind_start = next(i for i, row in enumerate(SCENARIOS) if row[0] == "class-kind-abort")
+SCENARIOS = SCENARIOS[:_class_kind_start] + tuple(CONSTRUCTOR_HISTORY_SCENARIOS) + SCENARIOS[_class_kind_start:]
 
 MEMBER_DESCRIPTOR_SCENARIOS = []
 for _round in range(2):
@@ -1313,6 +1326,25 @@ for _kind in ("private", "package", "protected"):
     REQUIRED_CHECKS["interface-abstract-unimplemented-" + _kind].update(
         {check: _error for check in ("interfaceHandle", "interfaceJni", "interfaceBytecode", "interfaceAfterGc")})
 
+for _name, _variants, _code in CONSTRUCTOR_HISTORY_SCENARIOS:
+    _checks = {"armed": 0} if _code == 110 else {}
+    _kind = _name.split("-")[2]
+    if _name.endswith("-reset"):
+        REQUIRED_CHECKS[_name] = _checks
+        continue
+    if _name.endswith("-abort") and not _name.endswith("-restore-abort"):
+        for _mode in CONSTRUCTOR_HISTORY_EXPECTATIONS:
+            _checks[_mode + ".concrete"] = True
+            _checks[_mode + ".warm"] = "SKIPPED" if _mode == "Cold" else "OK" if _mode == "Warm" else "java.lang.IllegalArgumentException"
+            _checks[_mode + ".declaredWarm"] = "SKIPPED" if _mode == "Warm" else "OK" if _mode == "Cold" else "java.lang.IllegalArgumentException"
+    else:
+        _phase = ("back-" if _name.endswith("-restore") else "") + ("abstract" if _kind == "abstract" else "removed")
+        for _mode, _phases in CONSTRUCTOR_HISTORY_EXPECTATIONS.items():
+            _values = _phases[_phase]
+            _checks[_mode + ".observationCount"] = len(_values)
+            _checks.update({_mode + "." + key: value for key, value in _values.items()})
+    REQUIRED_CHECKS[_name] = _checks
+
 REQUIRED_CHECKS["class-kind-abort"] = {"armed": 0, "classKept": False, "enumKept": True,
     "constantKept": True, "oldNullCall": "java.lang.NullPointerException"}
 REQUIRED_CHECKS["class-kind-hook-reject"] = {"hookInstalled": 0, "hookCleared": 0,
@@ -1343,7 +1375,7 @@ for _old, _destinations in (("c", ("i", "a")), ("i", ("c", "a")), ("a", ("c", "i
             REQUIRED_CHECKS[_name + "-restore"] = {"interface": _old != "c", "annotation": _old == "a",
                 "oldNullCall": "java.lang.NullPointerException", "cachedNullHandle": "java.lang.NullPointerException"}
             if _old == "c":
-                REQUIRED_CHECKS[_name + "-restore"].update(cachedConstructor="java.lang.reflect.InvocationTargetException:java.lang.NoSuchMethodError",
+                REQUIRED_CHECKS[_name + "-restore"].update(cachedConstructor="java.lang.InstantiationException",
                     cachedConstructorHandle="java.lang.NoSuchMethodError", cachedConstructorJni="java.lang.NoSuchMethodError")
 for _round in range(2):
     for _kind in ("annotation", "interface"):
@@ -1541,6 +1573,8 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         return tuple(INTERFACE_SYMBOL_SCENARIOS)
     if scenario_group == "member-descriptors":
         return tuple(MEMBER_DESCRIPTOR_SCENARIOS)
+    if scenario_group == "constructor-history":
+        return tuple(CONSTRUCTOR_HISTORY_SCENARIOS)
     if scenario_group == "class-kinds":
         return tuple(CLASS_KIND_SCENARIOS)
     if scenario_group == "interface-selection":
@@ -1584,7 +1618,7 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         names = [item[0] for item in SCENARIOS]
         return tuple(item for item in SCENARIOS[:names.index("interface-method-bodies")]
                      + SCENARIOS[names.index("interface-hidden"):]
-                     if not item[0].startswith(("static-narrow-", "class-kind-", "interface-descriptor-", "interface-symbol-", "interface-hide-parent-", "inverse-parent-")))
+                     if not item[0].startswith(("static-narrow-", "class-kind-", "constructor-history-", "interface-descriptor-", "interface-symbol-", "interface-hide-parent-", "inverse-parent-")))
     raise RunFailure("Unsupported scenario group")
 
 
@@ -1813,7 +1847,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

@@ -213,6 +213,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("retransform".equals(isolated)) runRetransformScenarios();
             else if ("interface-shadow".equals(isolated)) runInterfaceShadowScenarios();
             else if ("interface-selection".equals(isolated)) runInterfaceSelectionMatrix();
+            else if ("constructor-history".equals(isolated)) runConstructorHistoryScenarios();
             else if ("class-kinds".equals(isolated)) runClassKindScenarios();
             else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
@@ -402,6 +403,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         runThreadSubclassScenario();
         runInterfaceRemovalScenarios();
         if (!ordinaryOnly) runStaticNarrowingScenarios();
+        if (!ordinaryOnly) runConstructorHistoryScenarios();
         if (!ordinaryOnly) runClassKindScenarios();
         if (!ordinaryOnly) runMemberDescriptorScenarios();
         if (!ordinaryOnly) runInterfaceSymbolScenarios();
@@ -412,6 +414,77 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     // A Proxy implementation of a redefined interface stays: kept methods still
     // reach the handler, now as methods of the new interface; a new abstract
     // method throws AbstractMethodError and a new default runs its body.
+    private void runConstructorHistoryScenarios() throws Exception {
+        String[] modes = {"Cold", "Warm", "Arity", "Type"};
+        Class<?>[] types = new Class<?>[modes.length];
+        for (int i = 0; i < modes.length; ++i) types[i] = Class.forName(
+                "com.github.ytlog.artdcevm.fixture.ConstructorHistoryFixture$" + modes[i]);
+        JSONObject expected = new JSONObject(new String(readAsset("constructor-history-expectations.json"),
+                java.nio.charset.StandardCharsets.UTF_8));
+        for (String kind : new String[]{"abstract", "interface", "annotation"}) {
+            String[] reset = new String[modes.length];
+            java.util.Arrays.fill(reset, "constructor-history-original");
+            System.gc(); System.gc();
+            runScenario("constructor-history-" + kind + "-reset", 0, scenario -> scenario.redefine(types, reset));
+            com.github.ytlog.artdcevm.fixture.ConstructorHistoryProbe[] probes =
+                    new com.github.ytlog.artdcevm.fixture.ConstructorHistoryProbe[modes.length];
+            for (int i = 0; i < modes.length; ++i) probes[i] =
+                    new com.github.ytlog.artdcevm.fixture.ConstructorHistoryProbe(types[i], modes[i]);
+            String[] variants = new String[modes.length], originals = new String[modes.length];
+            java.util.Arrays.fill(variants, "constructor-history-" + kind);
+            java.util.Arrays.fill(originals, "constructor-history-original");
+            System.gc(); System.gc();
+            runScenario("constructor-history-" + kind + "-abort", 110, scenario -> {
+                scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(types, variants);
+                for (int i = 0; i < modes.length; ++i) {
+                    scenario.check(modes[i] + ".concrete", true,
+                            !java.lang.reflect.Modifier.isAbstract(types[i].getModifiers()));
+                    scenario.check(modes[i] + ".warm", modes[i].equals("Cold") ? "SKIPPED" :
+                            modes[i].equals("Warm") ? "OK" : "java.lang.IllegalArgumentException",
+                            probes[i].warmResult.split(":")[0]);
+                    scenario.check(modes[i] + ".declaredWarm", modes[i].equals("Warm") ? "SKIPPED" :
+                            modes[i].equals("Cold") ? "OK" : "java.lang.IllegalArgumentException",
+                            probes[i].declaredWarmResult.split(":")[0]);
+                }
+            });
+            for (int round = 0; round < 2; ++round) {
+                String prefix = "constructor-history-" + kind + "-" + round;
+                System.gc(); System.gc();
+                runScenario(prefix + "-apply", 0, scenario -> {
+                    scenario.redefine(types, variants);
+                    checkConstructorHistory(scenario, probes, modes, expected, kind, true);
+                });
+                runScenario(prefix + "-restore-abort", 110, scenario -> {
+                    scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(types, originals);
+                    System.gc();
+                    checkConstructorHistory(scenario, probes, modes, expected, kind, true);
+                });
+                runScenario(prefix + "-restore", 0, scenario -> {
+                    scenario.redefine(types, originals);
+                    System.gc();
+                    checkConstructorHistory(scenario, probes, modes, expected, kind, false);
+                });
+            }
+        }
+    }
+    private void checkConstructorHistory(Scenario scenario,
+            com.github.ytlog.artdcevm.fixture.ConstructorHistoryProbe[] probes, String[] modes,
+            JSONObject expected, String kind, boolean changed) throws Exception {
+        String phase = (changed ? "" : "back-") + (kind.equals("abstract") ? "abstract" : "removed");
+        for (int i = 0; i < modes.length; ++i) {
+            JSONObject values = expected.getJSONObject(modes[i]).getJSONObject(phase);
+            java.util.Map<String, String> actual = probes[i].observations(changed, kind.equals("abstract"));
+            scenario.check(modes[i] + ".observationCount", values.length(), actual.size());
+            java.util.Iterator<String> keys = values.keys();
+            while (keys.hasNext()) {
+                String key = keys.next();
+                scenario.check(modes[i] + "." + key, values.getString(key), actual.get(key));
+            }
+        }
+    }
+
     private void runClassKindScenarios() throws Exception {
         Class<?>[] types = {ClassKindFixture.ClassTarget.class, ClassKindFixture.InterfaceTarget.class,
                 ClassKindFixture.AnnotationTarget.class};
@@ -490,7 +563,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                         scenario.expectError("oldNullCall", NullPointerException.class, () -> classKindCall(slot, null));
                         scenario.expectError("cachedNullHandle", NullPointerException.class, () -> handle.invoke((Object) null));
                         if (slot == 0) {
-                            scenario.expectReflectionError("cachedConstructor", () -> cachedConstructor.newInstance());
+                            scenario.expectError("cachedConstructor", InstantiationException.class, () -> cachedConstructor.newInstance());
                             scenario.expectError("cachedConstructorHandle", NoSuchMethodError.class,
                                     () -> constructorHandle.invoke());
                             scenario.expectError("cachedConstructorJni", NoSuchMethodError.class,

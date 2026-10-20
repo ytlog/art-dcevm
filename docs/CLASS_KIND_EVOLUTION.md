@@ -32,12 +32,19 @@
 
 在原生 ART 已暂停类加载与分配、尚未分配替换实例的 Collect 决策点，使用公开 JVMTI `IterateThroughHeap` 的精确类过滤检查直接实例。独立 JVMTI 环境需取得 can_tag_objects，但回调不读写 tag、不调用 JNI、不分配对象。能力缺失就拒绝需要这项前置检查的转换。原 ART 仍负责替换实例、字段复制、根和反射引用改写、去优化以及缓存失效。
 
-缓存构造器在当前类型不可实例化时先检查分配条件：旧 `new` 抛 InstantiationError，缓存 MethodHandle、JNI NewObject 和 libcore 反射抛 InstantiationException；恢复普通类后，已删除的旧构造器仍抛 NoSuchMethodError，反射按 libcore 规则包装为 InvocationTargetException。固定 JBR 的 Java 反射访问器另有历史相关行为：转换前已调用的 Constructor 在接口状态包装 InstantiationException，恢复后包装 NoSuchMethodError；首次在接口状态调用的 Constructor 会缓存失败访问器，恢复后仍直接抛 InstantiationException。独立的冷／热构造器探针保留这些精确结果。本引擎沿用 libcore 的反射与缓存机制，没有模拟 JDK 反射访问器；这是已验证、尚未对齐的库层差异。
+缓存构造器的分配与调用身份分别处理。旧 `new` 在当前类不可实例化时抛 `InstantiationError`，缓存 MethodHandle 和 JNI `NewObject` 抛 `InstantiationException`；恢复普通类后，已删除的旧构造器仍抛 `NoSuchMethodError`。
+
+Java 反射另保留固定 JBR 的访问器历史。公有查询（`getConstructor` / `getConstructors`）与声明查询（`getDeclaredConstructor` / `getDeclaredConstructors`）使用不同的共享根。同一根的副本即使在首次调用前取得，也会共享之后创建的访问器；参数个数或类型错误同样会初始化可调用访问器。已有可调用访问器在不可实例化状态先检查参数，再包装 `InstantiationException`；仅改 abstract 并恢复后可继续调用，构造器已退役则包装 `NoSuchMethodError`。冷副本首次在不可实例化状态调用时缓存失败访问器，不检查参数；恢复为普通类后仍直接抛 `InstantiationException`。失败事务不重置这些历史，成功事务中的新查询使用新根。
+
+`constructor_history` 使用独立公开 JVMTI 标签保存共享根与副本身份，`ObjectFree` 释放本机记录，不强引用构造器或加载器。单个查询只为已由命名栈遍历器确认的 bootstrap Class 帧请求 JVMTI 方法 ID，避免在指针模式下给应用调用方新增历史 pointer-id 标记。已有 ART 事务仍更新真实成员与类引用。重复调用通过本线程最近一次构造器的 JNI 弱引用比较身份，由 ART 负责移动与清除引用；线程结束时删除弱引用并释放本机共享根。优先使用经过相同／不同对象探针验证的命名标准 JNI `IsSameObject`，服务缺失时使用公开 JNI 表；不替换调用方的 CheckJNI 表。`constructorHistoryCacheProofs` 的位 0/1 分别表示标签元数据与命名弱引用身份探针；这只是诊断，不能作为事务准入判断。
+
+范围仍有限：初始化库之前取得、直接调用内部发现入口或用于序列化的构造器不在共享根证明中；并发构造活动帧、全部非 public 访问组合，以及 JBR 软引用反射缓存回收后的新查询共享关系也尚未闭合。旧构造器在退役并恢复后才首次调用的独立 JBR 探针会抛 `ClassCastException`，当前保留安全的退役拒绝，另记差异，不能计作已对齐。带已有直接实例的 concrete→abstract 仍按原有 70 边界处理。
 
 ## 验证
 
 - 固定 JBR：`python3 tools/compare-jbr-class-kinds.py --java-home <fixed-jbr>`；可显式添加 `--include-unsafe-live-enum`，在独立进程中复核已知 GC 失败。该选项可能生成仅存于忽略证据目录的 VM 崩溃日志。
 - 设备：`tools/run-device-tests.py --scenario-group class-kinds`，覆盖 class/interface/annotation 双向重复转换、旧调用与 null 接收者的精确异常、instanceof/checkcast、缓存反射/MethodHandle/JNI ID、枚举字段和常量、存活实例与子类型拒绝、分配后整批回滚及恢复。
+- 历史访问器：`python3 tools/compare-jbr-constructor-history.py --java-home <fixed-jbr>` 使用与设备相同的 Java 探针和独立固定预期；设备 `--scenario-group constructor-history` 覆盖公有／声明根双向独立的冷／热与错误参数预热、副本与数组、两轮转换恢复、GC 和规划后失败。主机 `test-constructor-history-host.py` 另验生产守卫、原始类型拓宽、标签回收、弱引用清除／分配失败、线程退出清理与安装重试。
 - 主机：结构策略、真实命名调用守卫和固定声明、类文件配方、安装与回滚契约；完整设备套件继续验证原有功能。
 
 设备及 APK 哈希和逐次验证命令只记录在忽略的 `local/verification/` 中。此矩阵不声称支持带已有实例的普通类转接口、新增 Enum 父类或移除 Enum 父类；跨 class/interface 的自身数组同样保留 66。这些是本次明确保留的 ART 差距。

@@ -1,5 +1,6 @@
 #include "platform/common/runtime_thread.h"
 #include "platform/common/member_mapping.h"
+#include "platform/common/constructor_history.h"
 #include "platform/common/jni_id_array_scope.h"
 #include "platform/common/art_method_identity.h"
 #include "platform/common/art_hook.h"
@@ -595,6 +596,7 @@ void RestoreFieldArrays() {
 }
 
 void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noexcept {
+  constructor_history::Invalidate();
   struct Scope {
     bool previous = in_update;
     std::set<const void*> previous_copied = std::move(copied_resolution_changes);

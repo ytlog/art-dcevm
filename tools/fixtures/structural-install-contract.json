@@ -34,7 +34,9 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "invocation guards not installed",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed",
+      "constructorHistoryCacheReason": "using public JNI weak identity",
+      "constructorHistoryCacheProofs": 1
     },
     "cold": {
       "classModifierChange": false,
@@ -70,9 +72,11 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
-    "hooksSha256": "498b7aefc931cf42cb0faea7f83fda866e7603db7556d34af3b38b6a77a308aa",
+    "hooksSha256": "72ee741813ca300a11489be5c37089466e5840c7a489750ff5d0e7b9e54a2a7d",
     "unhooks": []
   },
   "1": {
@@ -110,7 +114,9 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "invocation guards not installed",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed",
+      "constructorHistoryCacheReason": "using public JNI weak identity",
+      "constructorHistoryCacheProofs": 1
     },
     "cold": {
       "classModifierChange": false,
@@ -146,9 +152,11 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
-    "hooksSha256": "c8f048a77a05a55554feca8fbaa9f7dfc001bc37bd421f396b77a3d2633e7da7",
+    "hooksSha256": "6326536c6875fca367fdb61f1f4b281e20c7c6b79fc57ecad16243f508a162de",
     "unhooks": [
       1
     ]
@@ -188,7 +196,9 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
     "cold": {
       "classModifierChange": false,
@@ -224,10 +234,14 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
-    "hooksSha256": "498b7aefc931cf42cb0faea7f83fda866e7603db7556d34af3b38b6a77a308aa",
+    "hooksSha256": "72ee741813ca300a11489be5c37089466e5840c7a489750ff5d0e7b9e54a2a7d",
     "unhooks": [
+      28,
+      27,
       26,
       25,
       24,
@@ -291,7 +305,9 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
     "cold": {
       "classModifierChange": false,
@@ -327,7 +343,9 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
     "hooksSha256": "73f8c4c1ceef62ed0be44bd12542d2db3fbd16c2b829f73d98d48620335ffefa",
     "unhooks": []
@@ -367,7 +385,9 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "invocation guards not installed",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed",
+      "constructorHistoryCacheReason": "using public JNI weak identity",
+      "constructorHistoryCacheProofs": 1
     },
     "cold": {
       "classModifierChange": false,
@@ -403,9 +423,11 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
-    "hooksSha256": "498b7aefc931cf42cb0faea7f83fda866e7603db7556d34af3b38b6a77a308aa",
+    "hooksSha256": "72ee741813ca300a11489be5c37089466e5840c7a489750ff5d0e7b9e54a2a7d",
     "unhooks": []
   },
   "5": {
@@ -443,7 +465,9 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "invocation guards not installed",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "invocation guards not installed"
+      "privateSelfSelectionInterfaceReason": "invocation guards not installed",
+      "constructorHistoryCacheReason": "using public JNI weak identity",
+      "constructorHistoryCacheProofs": 1
     },
     "cold": {
       "classModifierChange": false,
@@ -479,9 +503,11 @@
       "privateSelfSelectionClass": false,
       "privateSelfSelectionClassReason": "method evolution unavailable",
       "privateSelfSelectionInterface": false,
-      "privateSelfSelectionInterfaceReason": "method evolution unavailable"
+      "privateSelfSelectionInterfaceReason": "method evolution unavailable",
+      "constructorHistoryCacheReason": "method evolution unavailable",
+      "constructorHistoryCacheProofs": 0
     },
-    "hooksSha256": "45c47ba0bcac40ecbb7f6cc63aafa62b9687b3b76b09435c8f1d9878468f3a0d",
+    "hooksSha256": "f1ec25e8562bab640989ad85803ef912101010b7b605f5e19dea00e780a372d8",
     "unhooks": []
   }
 }

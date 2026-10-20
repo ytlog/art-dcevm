@@ -351,6 +351,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
         });
         if (!probe.equals("none")) report.getJSONObject("instrumentationProbe")
                 .put("afterWorkloads", JitInstrumentationProbe.state());
+        if (engine) report.put("afterWorkloadCapabilities", DcevmRuntime.capabilities());
     }
 
     /**

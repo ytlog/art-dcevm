@@ -37,6 +37,7 @@ SOURCE = r'''
 #include "platform/symbols/imt_sealing_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
 #include "platform/symbols/runtime_thread_symbols.h"
+#include "platform/symbols/constructor_history_symbols.h"
 #include "platform/symbols/interface_selection_symbols.h"
 // Keep the invocation registry visible to this host-only failure harness.
 // All code under test is the production implementation.
@@ -210,7 +211,8 @@ std::set<void*> active;
 std::map<std::string, int> addresses;
 JNINativeInterface functions{};
 JNIInvokeInterface invocation{};
-jvmtiInterface_1_ tooling{};
+jvmtiInterface_1_ tooling{}, history_tooling{};
+jvmtiEnv history_env{&history_tooling};
 JNIEnv jni{&functions};
 JavaVM vm{&invocation};
 jvmtiEnv env{&tooling};
@@ -278,6 +280,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
     return mode >= 23 ? reinterpret_cast<void*>(DirectOriginal) : nullptr;
   if (key == symbols::structural::kStructurallyRedefineClasses.name) return reinterpret_cast<void*>(Structural);
   if (key == symbols::structural::kJvmtiRedefineClasses.name) return reinterpret_cast<void*>(Redefine);
+  if (key == symbols::constructor_history::kSameObject.name) return nullptr;
   if (key == symbols::runtime_thread::kCurrentThread.name) return reinterpret_cast<void*>(Current);
   if (key == symbols::runtime_thread::kReadBarrierMark.name) return reinterpret_cast<void*>(Mark);
   if (key == symbols::runtime_thread::kUseReadBarrier.name) return nullptr;
@@ -376,7 +379,10 @@ extern "C" int shadowhook_unhook(void* token) {
   sealing_tokens.erase(token);
   return 0;
 }
-jint JNICALL GetEnv(JavaVM*, void** out, jint) { *out = &jni; return JNI_OK; }
+jint JNICALL GetEnv(JavaVM*, void** out, jint version) {
+  *out = version == JVMTI_VERSION_1_2 ? static_cast<void*>(&history_env) : static_cast<void*>(&jni);
+  return JNI_OK;
+}
 jclass JNICALL FindClass(JNIEnv*, const char* name) {
   if (std::string(name) == "com/github/ytlog/artdcevm/internal/ImtLinkProbe") {
     ++probe_loads;
@@ -400,8 +406,8 @@ void JNICALL DeleteLocalRef(JNIEnv*, jobject object) {
   frame_locals.erase(object);
   if (mode >= 21 && object == first_type) ++borrowed_deletions;
 }
-jint JNICALL PushLocalFrame(JNIEnv*, jint) {
-  if (mode == 22 && !failed_frame) {
+jint JNICALL PushLocalFrame(JNIEnv*, jint capacity) {
+  if (mode == 22 && capacity != 32 && !failed_frame) {
     failed_frame = true; pending_exception = true; return JNI_ERR;
   }
   ++local_frames;
@@ -532,6 +538,44 @@ jvmtiError JNICALL AllStacks(jvmtiEnv*, jint, jvmtiStackInfo** value, jint* coun
   frame_locals.insert(stack->info.thread);
   *value = &stack->info; *count = 1; return JVMTI_ERROR_NONE;
 }
+// The constructor cache owns a separate public tag namespace. Its callbacks
+// must not overwrite the engine's attachment lifecycle events.
+jvmtiError JNICALL HistoryFields(jvmtiEnv*, jclass, jint* n, jfieldID** fields) {
+  *n = 4; *fields = static_cast<jfieldID*>(std::malloc(4 * sizeof(jfieldID)));
+  for (int i = 0; i < 4; ++i) (*fields)[i] = reinterpret_cast<jfieldID>(static_cast<uintptr_t>(0x6000 + i));
+  return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL HistoryFieldName(jvmtiEnv*, jclass, jfieldID field, char** name, char** signature, char**) {
+  const char* names[] = {"artMethod", "declaringClass", "accessFlags", "override"};
+  const char* signatures[] = {"J", "Ljava/lang/Class;", "I", "Z"};
+  const size_t index = reinterpret_cast<uintptr_t>(field) - 0x6000;
+  Require(index < 4, "Unknown constructor metadata field");
+  *name = strdup(names[index]); *signature = strdup(signatures[index]);
+  return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL HistoryCapabilities(jvmtiEnv*, const jvmtiCapabilities* caps) {
+  Require(caps->can_tag_objects && caps->can_generate_object_free_events && !caps->can_generate_garbage_collection_events, "Constructor tags have no cleanup capability");
+  return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL HistoryCallbacks(jvmtiEnv* env, const jvmtiEventCallbacks* callbacks, jint) {
+  Require(env == &history_env && callbacks->ObjectFree && !callbacks->ThreadStart && callbacks->ThreadEnd && !callbacks->GarbageCollectionStart && !callbacks->GarbageCollectionFinish,
+          "Constructor history replaced another environment's events");
+  return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL HistoryMonitor(jvmtiEnv*, const char*, jrawMonitorID* value) {
+  *value = reinterpret_cast<jrawMonitorID>(0x6100); return JVMTI_ERROR_NONE;
+}
+jvmtiError JNICALL HistoryEvents(jvmtiEnv*, jvmtiEventMode, jvmtiEvent event, jthread, ...) {
+  return (event == JVMTI_EVENT_OBJECT_FREE || event == JVMTI_EVENT_THREAD_END) ? JVMTI_ERROR_NONE : JVMTI_ERROR_ILLEGAL_ARGUMENT;
+}
+jvmtiError JNICALL HistoryLock(jvmtiEnv*, jrawMonitorID) { return JVMTI_ERROR_NONE; }
+jvmtiError JNICALL HistoryTag(jvmtiEnv*, jobject, jlong* tag) { *tag = 0; return JVMTI_ERROR_NONE; }
+jfieldID JNICALL HistoryStaticField(JNIEnv*, jclass, const char* name, const char* signature) {
+  Require(!pending_exception && std::string(name) == "TYPE" && std::string(signature) == "Ljava/lang/Class;",
+          "Constructor primitive lookup ran after metadata failure");
+  return reinterpret_cast<jfieldID>(0x6200);
+}
+jobject JNICALL HistoryPrimitive(JNIEnv*, jclass, jfieldID) { return reinterpret_cast<jobject>(0x6300); }
 int main(int argc, char** argv) {
   try {
     Require(argc >= 2 && argc <= 4, "Missing installation case");
@@ -539,6 +583,13 @@ int main(int argc, char** argv) {
     mode = std::stoi(argv[1]);
     if (argc >= 3) api_override = std::stoi(argv[2]);
     missing_initializer = argc == 4;
+    history_tooling.GetClassFields = HistoryFields; history_tooling.GetFieldName = HistoryFieldName;
+    history_tooling.Deallocate = Deallocate; history_tooling.AddCapabilities = HistoryCapabilities;
+    history_tooling.SetEventCallbacks = HistoryCallbacks;
+    history_tooling.SetEventNotificationMode = HistoryEvents;
+    history_tooling.CreateRawMonitor = HistoryMonitor; history_tooling.RawMonitorEnter = HistoryLock;
+    history_tooling.RawMonitorExit = HistoryLock; history_tooling.GetTag = HistoryTag;
+    functions.GetStaticFieldID = HistoryStaticField; functions.GetStaticObjectField = HistoryPrimitive;
     invocation.GetEnv = GetEnv;
     functions.FindClass = FindClass; functions.NewGlobalRef = NewGlobalRef;
     functions.DeleteLocalRef = DeleteLocalRef; functions.GetMethodID = GetMethodID;
@@ -737,6 +788,8 @@ int main(int argc, char** argv) {
               "Retry skipped the prepared reference visitor hook");
     } else if (mode == 21 || mode == 22) {
       Require(result == JVMTI_ERROR_NONE && narrowed_references::Available(), "Reference snapshot service unavailable");
+      Require(local_frames == popped_frames, "Constructor preparation leaked its metadata local frame");
+      local_frames = popped_frames = 0;
       transaction::Scope capture;
       std::string why;
       const auto error = narrowed_references::Capture(&env, &jni, 1, &first_type, &why);

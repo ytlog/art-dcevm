@@ -5,6 +5,7 @@
 #include "platform/common/invoke_kind.h"
 #include "platform/common/narrowed_references.h"
 #include "support/json.h"
+#include "platform/common/constructor_history.h"
 
 namespace artdcevm::structural_redefine {
 using namespace detail;
@@ -47,6 +48,8 @@ std::string Capabilities() {
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +
+      ",\"constructorHistoryCacheReason\":" + QuoteJsonMutf8(methods ? constructor_history::CacheReason() : "method evolution unavailable") +
+      ",\"constructorHistoryCacheProofs\":" + std::to_string(methods ? constructor_history::CacheProofs() : 0) +
       ",\"jniRetirementGuards\":" +
           std::to_string(member_retirement::JniRetirementGuardHits()) +
       ",\"subclassLoadRetries\":" + std::to_string(state.subclass_retries.load()) +
