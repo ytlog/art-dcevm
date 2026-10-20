@@ -12,15 +12,12 @@ ART DCEVM enhances class redefinition on Android. It replaces Java method implem
 
 ## Supported and unsupported changes
 
-- Ordinary-class body replacement; addition, retirement and restoration of fields/methods/constructors; field types and method signatures.
-- Supported ordinary member/class modifier changes and native/Java or abstract/concrete transitions.
-- Adding interfaces to ordinary classes and widening a superclass to a proper subclass of the original superclass.
-- Preserving compatible field values in live objects; new fields start at zero or `null`, without rerunning existing objects’ constructors.
-- Atomic multi-class batches: unsupported changes reject the batch and preserve old definitions. Cached references to retired members retain retirement semantics.
+- Replace method bodies and add, retire or restore fields, methods and constructors.
+- Change field types, method signatures and supported modifiers, inheritance relationships and interface definitions.
+- Preserve compatible field values in live objects; new fields start at zero or `null`, without rerunning constructors.
+- Submit multiple classes atomically; a rejected batch preserves the old definitions.
 
-Dropping existing supertypes and changing class/interface/annotation/enum kind are unsupported; class static/instance changes make old calls throw `IncompatibleClassChangeError` and keep old caller classes interpreted. Making a virtual method private makes old external calls without access throw `IllegalAccessError`; where the runtime exports the target kind's named switch-interpreter selector and Class/Thread/HandleScope probes pass, old target frames call the new private body directly, ignoring overrides. `privateSelfSelectionClass` and `privateSelfSelectionInterface` report services separately; `privateSelfSelection` remains their conjunction. API 36 is device-verified; interface-only templates in some API 34/37 modules support interface targets from fixed sources without device validation yet. API 30–33, missing target-kind services or failed probes retain rejection 71. On arm64 Android 11–17, including 12L, `RetransformClasses` routes final ClassFileLoadHook bytes through the enhanced structural transaction (`retransformRouted`); Android 11–12L still lack arm64 device validation. Validation failure falls back to ART, and routing does not call ClassFileLoadHook again. Cached raw field offsets are not protected. See [LIMITATIONS.en.md](docs/LIMITATIONS.en.md) for complete restrictions, rejection codes and semantics.
-
-On Android 11–17 / API 30–37, interface targets support default/static/private body edits, new public abstract/default/static methods and private instance methods, deletion or signature changes of any method, abstract/default switches, static field changes, and added parent interfaces. They can share atomic batches with related implementations, subclasses or unrelated classes. Every transaction checks its conditions; even body-only edits rebuild affected instances while retaining compatible fields. API 33–36 are device-verified; API 30–32 and 37 are enabled from fixed sources and the named services of stored device libraries, pending device validation. See [redefining interfaces](docs/LIMITATIONS.en.md#redefining-interfaces).
+Class/interface/annotation/enum kind changes are unsupported, and inheritance changes and cached member references have restrictions. See [limitations and runtime semantics](docs/LIMITATIONS.en.md) for the detailed rules, and [compatibility](docs/COMPATIBILITY.en.md) for device coverage and pending validation.
 
 ## Quick start
 

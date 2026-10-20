@@ -12,15 +12,12 @@ ART DCEVM 是 Android 运行时类重定义增强库，用于在应用运行期�
 
 ## 支持与不支持的变化
 
-- 普通类的方法体替换，字段/方法/构造器的新增、退役与恢复，字段类型及方法签名变化。
-- 普通类成员与类修饰符，以及方法 native/Java、abstract/具体实现的受支持转换。
-- 普通类新增接口，以及将父类放宽为原父类的真子类。
-- 保留已有对象的兼容字段值；新增字段为零值或 `null`，不重跑已有对象的构造器。
-- 多类同批原子提交；不支持的变化拒绝整批，旧定义保留。退役成员的缓存引用继续遵循退役语义。
+- 替换方法体，新增、退役或恢复字段、方法与构造器。
+- 修改字段类型、方法签名，以及受支持的修饰符、继承关系与接口定义。
+- 保留已有对象的兼容字段值；新增字段为零值或 `null`，不重跑构造器。
+- 多类同批原子提交；拒绝整批时保留旧定义。
 
-不支持失去原有父类型或类/接口/注解/枚举种类切换；普通类方法在 static 与实例之间切换时，旧调用抛 `IncompatibleClassChangeError`，旧调用方保持解释执行；虚方法改为 private 后，无访问权的旧外部调用抛 `IllegalAccessError`；运行时导出对应种类的命名 switch 解释器选择服务且 Class/Thread/HandleScope 探测通过时，目标自身旧活动帧直接调用新 private 方法并忽略覆写；`privateSelfSelectionClass`／`privateSelfSelectionInterface` 分别报告类／接口服务，旧键 `privateSelfSelection` 保持交集。API 36 已经真机验证；仅保留 interface 模板的部分 API 34/37 模块按固定源码支持接口目标，尚未上机。API 30–33、缺少对应服务或探测失败的目标保留 71。arm64 Android 11–17（含 12L）的 `RetransformClasses` 将 ClassFileLoadHook 最终字节送入增强结构事务（`retransformRouted`），11–12L 尚缺 arm64 设备验证；声明校验不通过时回退 ART，路由不重复调用 ClassFileLoadHook。缓存的原始字段偏移不受保护。完整限制、拒绝码与运行语义见 [LIMITATIONS.md](docs/LIMITATIONS.md)。
-
-接口目标在 Android 11–17 / API 30–37 上支持 default/static/private 方法体更新、新增 public abstract/default/static 与 private 实例方法，任一方法的删除或改签名，abstract 与 default 互换，静态字段变化，以及新增父接口；可与相关实现类、子类或无关类原子提交。每次事务仍会检查支持条件；即使只改方法体也会重建受影响实例并保留兼容字段值。API 33–36 已经真机验证；API 30–32 与 37 依固定源码和已存设备运行库的命名服务启用，尚待真机验证。详见[接口重定义](docs/LIMITATIONS.md#接口重定义)。
+不支持类/接口/注解/枚举种类切换，继承关系变化与缓存成员引用也有限制。详细规则见[限制与运行语义](docs/LIMITATIONS.md)，设备覆盖范围和待验证项见[兼容性结论](docs/COMPATIBILITY.md)。
 
 ## 快速开始
 
