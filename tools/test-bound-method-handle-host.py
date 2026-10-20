@@ -8,6 +8,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''#include "platform/common/bound_method_handle.h"
+#include "platform/common/captured_method_handle.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -23,31 +24,36 @@ int kind=4, thrown=0;
 jvmtiEnv* environment; JNIEnv* jni;
 jclass bind=Id<jclass>(1), handle=Id<jclass>(2), type=Id<jclass>(3), handles=Id<jclass>(4), method_type=Id<jclass>(5);
 jmethodID transform=Id<jmethodID>(40);
-struct Frame { void* link=nullptr;void* method=Id<void*>(100);uint32_t pc=0; };
+struct Frame { void* link=nullptr;void* method=Id<void*>(100);uint32_t pc=0; bool returned=false; };
 struct Context { void* self;const void* accessor;void* frame; };
 using PcFn=bool (*)(void*,const void*,const void*,uint32_t,const void*,void*);
 void* add_replacement=nullptr;void (*switch_replacement)(Context*,const void*,const uint16_t*)=nullptr;PcFn pc_replacement=nullptr;
 uint8_t instrumentation[64]{};
-bool under_suspend=false,external_event=false,external_failure=false;
+bool under_suspend=false,external_event=false,external_failure=false,external_return=false;
 void* native_listener=nullptr;
 bool restore_failure=false;
 bool (*inspection_replacement)(void*,void*)=nullptr;
 bool Inspected(void*,void* method){return method==Id<void*>(102);}
 int native_checks=0,local_reads=0,probe_calls=0,moves=0,bodies=0;
-bool RestoreFault(int wanted){if(mode==wanted&&probe_calls==2&&!restore_failure){restore_failure=true;return true;}return false;}
-bool Modern(){return mode==31||mode==34||mode==35||mode==36||mode==37||mode==38||mode==41||mode==42||mode==43;}
+bool RestoreFault(int wanted){if(mode==wanted&&probe_calls==4&&!restore_failure){restore_failure=true;return true;}return false;}
+bool Modern(){return mode==66||mode==63||mode==64||mode==31||mode==34||mode==35||mode==36||mode==37||mode==38||mode==41||mode==42||mode==43;}
 size_t event_offset(){return Modern()?12:20;}
 uint32_t FramePc(void* p,bool finish){auto* frame=static_cast<Frame*>(p);auto pc=frame->pc;if(finish)frame->pc=~uint32_t{0};return pc;}
+namespace artdcevm::captured_method_handle {
+bool Prepare(JNIEnv*,jvmtiEnv*,jmethodID){if(mode==61&&!restore_failure){restore_failure=true;return false;}return true;}
+bool Complete(JNIEnv*,jthread){if(mode==60&&probe_calls==3&&!restore_failure){restore_failure=true;pending=true;return false;}return true;}
+}
 namespace artdcevm::invoke_kind {
-bool CheckBoundReceiver(void* self,void* bound) {
+int CheckBoundReceiver(void* self,void* bound) {
  Need(self==Id<void*>(19)&&bound==Id<void*>(10),"lost the ART frame receiver");
  if(pending)return false;
  ++native_checks;
- if(!compatible){pending=true;thrown=6;return true;}
+ if(!compatible){if(mode==63)return 2;pending=true;thrown=6;return true;}
  return false;
 }
 }
 bool OriginalPc(void*,const void*,const void* frame,uint32_t pc,const void*,void*){
+ if(external_return){const_cast<Frame*>(static_cast<const Frame*>(frame))->returned=true;return true;}
  if(external_failure){pending=true;return false;}
  if(events&&static_cast<const Frame*>(frame)->method==Id<void*>(100))bound_method_handle::Breakpoint(environment,jni,Id<jthread>(18),transform,pc);
  return !pending;
@@ -59,6 +65,7 @@ void OriginalSwitch(Context* context,const void*,const uint16_t*){
   call(context->self,context->accessor,frame,frame->pc,instrumentation,nullptr);
  }
 }
+bool FrameReturn(void* p,bool request){auto* frame=static_cast<Frame*>(p);if(request)frame->returned=true;return frame->returned;}
 void Dispatch(void* method=Id<void*>(100),uint32_t pc=0){
  Frame frame;frame.method=method;frame.pc=pc;Context context{Id<void*>(19),nullptr,&frame};
  auto call=switch_replacement?switch_replacement:OriginalSwitch;call(&context,nullptr,nullptr);
@@ -135,11 +142,11 @@ jmethodID JNICALL FromReflection(JNIEnv*,jobject){return Id<jmethodID>(55);}
 void JNICALL Probe(JNIEnv*,jclass,jmethodID,va_list){
  if(fail==5||fail==25||fail==26)return;
  ++probe_calls;
- if(mode>=30){if(!((mode==50||mode==51||mode==52)&&probe_calls==2))Dispatch();if((mode==37||mode==49)&&probe_calls==2)pending=true;}
+ if(mode>=30){if(!(((mode==50||mode==51||mode==52)&&probe_calls==4)||(mode==59&&probe_calls==3)))Dispatch();if(((mode==37&&probe_calls==3)||(mode==49&&probe_calls==4)))pending=true;}
  else bound_method_handle::Breakpoint(environment,jni,Id<jthread>(18),transform,0);
  if(fail==6)pending=true;
 }
-jvmtiError JNICALL Capabilities(jvmtiEnv*,const jvmtiCapabilities* cap){++caps;Need(cap->can_generate_breakpoint_events&&cap->can_access_local_variables,"missing public capabilities");return fail==1?JVMTI_ERROR_NOT_AVAILABLE:JVMTI_ERROR_NONE;}
+jvmtiError JNICALL Capabilities(jvmtiEnv*,const jvmtiCapabilities* cap){++caps;Need(cap->can_generate_breakpoint_events&&cap->can_access_local_variables&&cap->can_force_early_return,"missing public capabilities");return fail==1?JVMTI_ERROR_NOT_AVAILABLE:JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Fields(jvmtiEnv*,jclass klass,jint* count,jfieldID** result){
  if(fail==3)return JVMTI_ERROR_INTERNAL;
  *count=klass==type?1:2;*result=static_cast<jfieldID*>(malloc(sizeof(jfieldID)**count));
@@ -167,6 +174,7 @@ jvmtiError JNICALL Notify(jvmtiEnv*,jvmtiEventMode action,jvmtiEvent event,jthre
 jvmtiError JNICALL Set(jvmtiEnv*,jmethodID method,jlocation pc){Need(method==transform&&pc==0,"wrong entry breakpoint");if(fail==4||RestoreFault(51))return JVMTI_ERROR_INTERNAL;if(breakpoints)return JVMTI_ERROR_DUPLICATE;++breakpoints;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Clear(jvmtiEnv*,jmethodID method,jlocation pc){Need(method==transform&&pc==0,"cleared another breakpoint");++clears;if(fail==25||mode==47)return JVMTI_ERROR_INTERNAL;if(!breakpoints)return JVMTI_ERROR_NOT_FOUND;--breakpoints;if(inspection_replacement&&mode!=55){if(mode==57)std::thread([]{inspection_replacement(nullptr,Id<void*>(100));}).join();else inspection_replacement(nullptr,Id<void*>(mode==56?102:100));}return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Local(jvmtiEnv*,jthread thread,jint depth,jobject* object){Need(thread==Id<jthread>(18)&&depth==0,"wrong live frame");++local_reads;if(fail==9||fail==19)return JVMTI_ERROR_OPAQUE_FRAME;*object=Id<jobject>(10);return JVMTI_ERROR_NONE;}
+jvmtiError JNICALL ForceReturn(jvmtiEnv*,jthread){if(mode==62&&probe_calls==2&&!restore_failure){restore_failure=true;return JVMTI_ERROR_INTERNAL;}return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Modifiers(jvmtiEnv*,jclass klass,jint* modifiers){if(fail==24)return JVMTI_ERROR_INTERNAL;*modifiers=(klass==Id<jclass>(15)?owner_interface:declaration_interface)?0x200:0;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Obsolete(jvmtiEnv*,jmethodID member,jboolean* result){Need(member==Id<jmethodID>(55),"treated an ArtMethod as a JNI ID");*result=obsolete;return JVMTI_ERROR_NONE;}
 jvmtiError JNICALL Declaring(jvmtiEnv*,jmethodID,jclass* result){if(fail==20)return JVMTI_ERROR_INTERNAL;*result=Id<jclass>(16);return JVMTI_ERROR_NONE;}
@@ -176,15 +184,20 @@ int main(int argc,char** argv){try{
  jt.GetStaticMethodID=Method;jt.GetObjectField=ObjectField;jt.GetIntField=IntField;jt.GetArrayLength=Length;jt.GetObjectArrayElement=Element;jt.IsInstanceOf=Instance;
  jt.CallStaticObjectMethodV=Reflect;jt.FromReflectedMethod=FromReflection;jt.CallStaticVoidMethodV=Probe;JNIEnv j{&jt};jni=&j;
  jvmtiInterface_1 et{};et.AddCapabilities=Capabilities;et.GetClassFields=Fields;et.GetFieldName=FieldName;et.GetClassMethods=Methods;et.GetMethodName=MethodName;et.Deallocate=Free;
- et.GetMethodModifiers=MethodModifiers;et.GetMethodLocation=Location;et.SetEventNotificationMode=Notify;et.SetBreakpoint=Set;et.ClearBreakpoint=Clear;et.GetLocalInstance=Local;et.GetClassModifiers=Modifiers;et.IsMethodObsolete=Obsolete;et.GetMethodDeclaringClass=Declaring;
+ et.GetMethodModifiers=MethodModifiers;et.GetMethodLocation=Location;et.SetEventNotificationMode=Notify;et.SetBreakpoint=Set;et.ClearBreakpoint=Clear;et.GetLocalInstance=Local;et.ForceEarlyReturnVoid=ForceReturn;et.GetClassModifiers=Modifiers;et.IsMethodObsolete=Obsolete;et.GetMethodDeclaringClass=Declaring;
  jvmtiEnv e{&et};environment=&e;
+ int frame_probes=0;
+ const std::function<bool()> prove_frame=[&]{++frame_probes;if(mode==68)throw std::runtime_error("unavailable verifier");if(mode==67)return false;bound_method_handle::Configure(FramePc,invoke_kind::CheckBoundReceiver,FrameReturn);return true;};
+ bound_method_handle::Configure(FramePc,invoke_kind::CheckBoundReceiver,(mode==58||mode>=65)?nullptr:FrameReturn);
  if((mode>=1&&mode<=10)||mode==25||mode==26){fail=mode;Need(!bound_method_handle::Prepare(jni,environment),"failed preparation escaped admission");Need(frames==0&&events==(mode==26)&&breakpoints==(mode==25),"failed preparation leaked an unexpected frame/event/breakpoint");fail=0;pending=false;}
- if(mode==37||mode==49||mode==51||mode==52){Need(!bound_method_handle::Prepare(jni,environment)&&!events&&!breakpoints,"failed native probe escaped admission");pending=false;}
- Need(bound_method_handle::Prepare(jni,environment),"valid preparation failed");int previous_caps=caps;Need(bound_method_handle::Prepare(jni,environment)&&caps==previous_caps,"prepared twice");
+ if(mode==37||mode==49||mode==51||mode==52||mode==60||mode==61||mode==62){Need(!bound_method_handle::Prepare(jni,environment)&&!events&&!breakpoints,"failed native probe escaped admission");pending=false;}
+ Need(bound_method_handle::Prepare(jni,environment,mode>=65?prove_frame:std::function<bool()>{}),"valid preparation failed");int previous_caps=caps;Need(bound_method_handle::Prepare(jni,environment)&&caps==previous_caps,"prepared twice");
  if(mode>=30){
-  const bool accelerated=mode!=32&&mode!=33&&mode!=39&&mode!=40;
+  const bool accelerated=mode!=32&&mode!=33&&mode!=39&&mode!=40&&mode!=42&&mode!=43&&mode!=53&&mode!=54&&mode!=58&&mode!=59&&mode!=67&&mode!=68;
   const bool direct_entry=accelerated&&Modern()&&mode!=34&&mode!=35&&mode!=36&&mode!=38&&mode!=42&&mode!=43;
-  const bool policy=mode>=44&&mode!=45&&mode!=46&&mode!=47&&mode!=48&&mode!=50&&mode!=53&&mode!=54&&mode!=55&&mode!=56&&mode!=57;
+  const bool policy=mode>=44&&mode!=45&&mode!=46&&mode!=47&&mode!=48&&mode!=50&&mode!=53&&mode!=54&&mode!=55&&mode!=56&&mode!=57&&mode!=58&&mode!=59&&mode!=67&&mode!=68&&!Modern();
+  if(mode>=65)Need(frame_probes>0,"first interface transaction did not run its Runnable verifier");
+  if(accelerated)Need((bound_method_handle::PreparationProofs()&63)==63,"native continuation lacks independent preparation proof");
   Need(events==!(direct_entry||policy),"native probe selected the wrong fallback");
   Need(static_cast<int>(bound_method_handle::Mode())==(policy?3:direct_entry?2:accelerated?1:0),"entry-mode evidence disagrees with the active path");
   if(inspection_replacement){
@@ -193,8 +206,8 @@ int main(int argc,char** argv){try{
   }
   Need(breakpoints==!policy,"policy transition leaked or lost a breakpoint");
   compatible=false;int before=local_reads;Dispatch();Need(!pending,"guard enabled before narrowing");
-  bound_method_handle::Configure(FramePc,invoke_kind::CheckBoundReceiver);bound_method_handle::Enable();compatible=true;Dispatch();Need(!pending,"compatible receiver rejected");
-  compatible=false;Dispatch();Need((mode==41?!pending:pending)&&thrown==6,"lost interface not rejected or handler lost");
+  bound_method_handle::Configure(FramePc,invoke_kind::CheckBoundReceiver,mode==58?nullptr:FrameReturn);bound_method_handle::Enable();compatible=true;Dispatch();Need(!pending,"compatible receiver rejected");
+  compatible=false;Dispatch();Need(mode==63?!pending:((mode==41?!pending:pending)&&thrown==6),"lost interface not rejected or handler lost");
   if(accelerated)Need(local_reads==before&&native_checks==2,"fast calls used Native stack inspection");
   pending=false;thrown=0;int previous=native_checks;
   Dispatch(Id<void*>(101));Dispatch(Id<void*>(100),1);Need(!pending&&native_checks==previous,"another method/PC was intercepted");
@@ -202,9 +215,10 @@ int main(int argc,char** argv){try{
   if(accelerated){
    pending=false;thrown=0;external_event=true;instrumentation[event_offset()]=1;external_failure=true;
    int previous=native_checks;Dispatch();Need(pending&&!thrown&&native_checks==previous,"external event exception precedence changed");
-   pending=false;external_failure=false;Dispatch();Need(pending&&thrown==6,"live external events bypassed the receiver guard");
-   Need(moves==int(direct_entry),"entry exception did not reuse ART's exception handler");
+   pending=false;external_failure=false;Dispatch();Need(mode==63?!pending:(pending&&thrown==6),"live external events bypassed the receiver guard");
+   Need(moves==int(direct_entry&&mode!=63),"entry exception did not reuse ART's exception handler");
   }
+  if(mode==64){pending=false;thrown=0;external_failure=false;external_return=true;external_event=true;instrumentation[event_offset()]=1;int previous=native_checks;Dispatch();Need(!pending&&native_checks==previous,"overrode another agent's forced return");}
   Need(frames==0,"JNI frame leaked");
   std::cout<<"Bound native entry case "<<mode<<" PASS\n";return 0;
  }
@@ -252,12 +266,12 @@ def main():
         (out / "compile.log").write_text(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError("Bound entry host compilation failed; inspect ignored evidence")
-        for case in range(58):
+        for case in range(69):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (out / f"case-{case}.log").write_text(result.stdout + result.stderr)
             if result.returncode:
                 raise RuntimeError(f"Bound entry case {case} failed; inspect ignored evidence")
-    print("Bound entry: 58 public/native preparation, fallback, rollback and callback cases PASS")
+    print("Bound entry: 69 public/native preparation, fallback, rollback and callback cases PASS")
     print("Evidence: " + str(out.relative_to(ROOT)))
 
 if __name__ == "__main__":

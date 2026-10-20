@@ -1,5 +1,6 @@
 #include "platform/common/invoke_kind.h"
 #include "platform/common/bound_method_handle.h"
+#include "platform/common/captured_method_handle.h"
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -446,7 +447,7 @@ void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
   scope_layout = layout;
   scope_verified.store(true, std::memory_order_release);
 }
-void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods, size_t gc_marking, size_t method_index, size_t iftable, abi::arm64::FrameReference reference, size_t exception, abi::arm64::FramePc frame_pc) {
+void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, size_t obsolete_methods, size_t gc_marking, size_t method_index, size_t iftable, abi::arm64::FrameReference reference, size_t exception, abi::arm64::FramePc frame_pc, abi::arm64::FrameReturn frame_return) {
   std::lock_guard<std::mutex> lock(scope_mutex);
   if (class_verified.load(std::memory_order_relaxed)) return;
   class_access = access_flags;
@@ -459,7 +460,7 @@ void ObserveClassLayout(size_t access_flags, size_t dex_cache, size_t ext_data, 
   frame_reference = reference;
   exception_offset = exception;
   observed_frame_pc = frame_pc;
-  bound_method_handle::Configure(frame_pc, CheckBoundReceiver);
+  bound_method_handle::Configure(frame_pc, CheckBoundReceiver, frame_return);
   class_verified.store(true, std::memory_order_release);
 }
 bool SelectionServices() {
@@ -514,7 +515,6 @@ static int InspectBoundReceiver(void* bound) {
   const auto kind = HandleField(delegate, "handleKind", "I", handle_kind_offset);
   if (kind < 0) return 0;
   const auto value = runtime_roots::Field<int>(delegate, kind);
-  if (value != 0 && value != 4) return 1;
   void* type = HandleReceiverType(read(delegate, "type", "Ljava/lang/invoke/MethodType;", handle_type_offset));
   if (!complete || !type) return 0;
   if (!(runtime_roots::Field<uint32_t>(type, class_access) & evolution::kAccInterface)) return 1;
@@ -523,6 +523,7 @@ static int InspectBoundReceiver(void* bound) {
       Reference<true>(runtime_roots::Field<uint32_t>(klass, class_iftable)));
   for (int32_t i = 0; interfaces && i + 1 < interfaces->length; i += 2)
     if (Reference<true>(interfaces->elements[i]) == reinterpret_cast<uintptr_t>(type)) return 1;
+  if (value != 0 && value != 4) return 3;  // Continue the graph before deciding whether it dispatches.
   const auto target_offset = HandleField(delegate, "artFieldOrMethod", "J", handle_target_offset);
   const auto* target = target_offset < 0 ? nullptr : reinterpret_cast<abi::arm64::ArtMethodPrefix*>(
       runtime_roots::Field<uintptr_t>(delegate, target_offset));
@@ -532,10 +533,16 @@ static int InspectBoundReceiver(void* bound) {
   if (!(runtime_roots::Field<uint32_t>(declaring, class_access) & evolution::kAccInterface)) return 1;
   return 2;
 }
-bool CheckBoundReceiver(void* self, void* bound) {
+int CheckBoundReceiver(void* self, void* bound) {
   if (runtime_roots::Field<void*>(self, exception_offset)) return false;
   const int result = InspectBoundReceiver(bound);
-  if (result == 1) return false;
+  if (result == 1) return 0;
+  if (result == 3) {
+    if (captured_method_handle::Complete()) return 2;
+    if (!runtime_roots::Field<void*>(self, exception_offset))
+      throw_exception(self, "Ljava/lang/InternalError;", "Captured MethodHandle continuation failed");
+    return 1;
+  }
   throw_exception(self, result == 2 ? "Ljava/lang/IncompatibleClassChangeError;" : "Ljava/lang/InternalError;",
                   result == 2 ? "MethodHandle receiver lost the declaring interface" : "Bound MethodHandle receiver inspection failed");
   return true;

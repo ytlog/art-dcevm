@@ -198,3 +198,8 @@ extern "C" JNIEXPORT jint JNICALL
 Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_boundHandleEntryMode(JNIEnv*, jclass) {
   return static_cast<jint>(artdcevm::bound_method_handle::Mode());
 }
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_boundHandlePreparationProofs(JNIEnv*, jclass) {
+  return static_cast<jint>(artdcevm::bound_method_handle::PreparationProofs());
+}

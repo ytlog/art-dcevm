@@ -343,7 +343,14 @@ class ApkVerificationTests(unittest.TestCase):
                         ("boundBadReference", "java.lang.IncompatibleClassChangeError"),
                         ("boundNullPrimitive", "java.lang.IncompatibleClassChangeError"),
                         ("boundWrongReturn", "java.lang.IncompatibleClassChangeError"),
-                        ("boundNullReference", "java.lang.NullPointerException")):
+                        ("boundNullReference", "java.lang.NullPointerException"),
+                        ("adapterUnusedBound", "java.lang.IncompatibleClassChangeError:"),
+                        ("adapterGuardFalse", "java.lang.IncompatibleClassChangeError:T"),
+                        ("adapterFilterReplacement", "java.lang.IncompatibleClassChangeError:P"),
+                        ("adapterFilterThrows", "java.lang.IncompatibleClassChangeError:"),
+                        ("adapterFilterInside", "java.lang.IncompatibleClassChangeError:"),
+                        ("adapterSpreadWrongLength", "java.lang.IncompatibleClassChangeError:"),
+                        ("adapterCatchInside", "java.lang.IncompatibleClassChangeError:")):
                     error = next(check for check in apply["checks"] if check["name"] == "0." + name)
                     original = dict(error)
                     error.update(expected=wrong_value, actual=wrong_value, passed=True)
@@ -351,6 +358,12 @@ class ApkVerificationTests(unittest.TestCase):
                         with self.assertRaises(runner.RunFailure):
                             runner.validate_report(report, scenario_group=group)
                     error.update(original)
+                for graph in runner.expected_graphs(True, 7):
+                    original = apply["checks"]
+                    apply["checks"] = [check for check in original if check["name"] != "gc0.adapter" + graph]
+                    with self.subTest(missing_graph=graph), self.assertRaises(runner.RunFailure):
+                        runner.validate_report(report, scenario_group="receiver-loss-bound")
+                    apply["checks"] = original
 
     def test_invoke_kind_groups_require_both_directions(self):
         for group, reverse in (("invoke-kind", "invoke-kind-instance"),

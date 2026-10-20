@@ -10,13 +10,17 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/hierarchy_snapshot.h"
 #include "platform/common/schema_snapshot.h"
+#include "platform/common/class_layout.h"
+#include <functional>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 using namespace artdcevm;
-namespace artdcevm::bound_method_handle { bool Prepare(JNIEnv*,jvmtiEnv*) { return true; } }
+namespace artdcevm::bound_method_handle { bool Prepare(JNIEnv*,jvmtiEnv*,const std::function<bool()>&) { return true; } }
+namespace artdcevm::runtime_thread { std::optional<VerifiedThread> Ready() noexcept {return std::nullopt;} void* Current(const VerifiedThread& thread) noexcept {return const_cast<transaction::Part*>(thread.state_);} }
+namespace artdcevm::class_layout { bool VerifyTarget(const std::optional<runtime_thread::VerifiedThread>&,abi::arm64::ClassRedefinitionPrefix*,const evolution::ClassSchema&){return false;} }
 namespace artdcevm::jni_interface_dispatch { bool Prepare() { return true; } }
 struct Type : _jclass {
   Type* parent;

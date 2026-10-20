@@ -23,6 +23,7 @@ add_library(artdcevm SHARED
   platform/common/method_handle_lookup.cc
   platform/common/invoke_kind.cc
   platform/common/bound_method_handle.cc
+  platform/common/captured_method_handle.cc
   platform/abi/arm64/common/bound_entry.S
   platform/common/jni_interface_dispatch.cc
   platform/common/narrowed_references.cc

@@ -50,7 +50,8 @@ void* linker = reinterpret_cast<void*>(0x1000);
 void* self = reinterpret_cast<void*>(0x2000);
 void* referrer = reinterpret_cast<void*>(0x3000);
 void Require(bool ok, const char* reason);
-namespace artdcevm::bound_method_handle { void Enable() {} void Configure(uint32_t (*)(void*,bool),bool (*)(void*,void*)) {} }
+namespace artdcevm::captured_method_handle { bool Complete(JNIEnv*,jthread){return true;} }
+namespace artdcevm::bound_method_handle { void Enable() {} void Configure(uint32_t (*)(void*,bool),int (*)(void*,void*),bool (*)(void*,bool)) {} }
 
 bool missing_method = false;
 abi::arm64::ArtMethodPrefix own_caller{};
@@ -275,7 +276,7 @@ int main(int argc, char** argv) {
         method.access_flags.store(0);bound[7]=0;
         invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"null binding intercepted before ART NPE");
         bound[7]=0x10000100;mh[2]=3;
-        invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"non-receiver binding intercepted");
+        Require(invoke_kind::CheckBoundReceiver(self,bound)==2&&exceptions==baseline,"non-receiver binding did not continue its graph");
         mh[2]=4;*reinterpret_cast<uint32_t*>(0x10000b00)=0;
         invoke_kind::CheckBoundReceiver(self,bound);Require(exceptions==baseline,"class receiver intercepted");
         *reinterpret_cast<uint32_t*>(0x10000b00)=0x0200;declaring[0]=0;

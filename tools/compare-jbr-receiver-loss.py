@@ -14,6 +14,7 @@ import shutil
 import subprocess
 
 from evidence_paths import new_evidence_directory
+from method_handle_adapter_expectations import expected_graphs
 
 ROOT = Path(__file__).resolve().parents[1]
 REVISION = 'cf1f197170a0f04c6559feb873e362583be021d1'
@@ -41,6 +42,7 @@ public class LossProbe {
   MethodHandle boxed=boundI.asType(MethodType.methodType(Object.class)),spread=boundI.asSpreader(Object[].class,0);
   MethodHandle caught=MethodHandles.catchException(boundI,IncompatibleClassChangeError.class,MethodHandles.publicLookup().findStatic(LossProbe.class,"recovered",MethodType.methodType(int.class,IncompatibleClassChangeError.class)));
   MethodHandle dropped=MethodHandles.dropArguments(boundI,0,String.class);
+  com.github.ytlog.artdcevm.fixture.ReceiverLossAdapters adapters=new com.github.ytlog.artdcevm.fixture.ReceiverLossAdapters(typed);
   cache(I.class,Target.class);int id=Integer.parseInt(args[3]),kind=Integer.parseInt(args[4]),form=Integer.parseInt(args[5]);
   if(id>=0)out("beforeJni",()->call(object,id,kind,form));
   else {out("beforeHotI",()->hotInterface(120000));out("beforeHotC",()->hotClass(120000));}
@@ -48,6 +50,7 @@ public class LossProbe {
    change(Paths.get(args[phase==0?1:2]));System.gc();String p="r"+round+"p"+phase;
    System.out.println("STATE "+p);out(p+"isInterface",()->I.class.isInstance(object));
    if(id>=0){out(p+"jni",()->call(object,id,kind,form));continue;}
+   for(java.util.Map.Entry<String,String> e:adapters.observations().entrySet())System.out.println(p+"Graph"+e.getKey()+"="+e.getValue());
    out(p+"kept",()->object.kept);out(p+"self",()->object.self==object);out(p+"identity",()->identity==System.identityHashCode(object));
    out(p+"direct",()->typed.value());out(p+"interfaceExact",()->(int)ih.invokeExact(typed));
    out(p+"interfaceArgs",()->ih.invokeWithArguments(object));out(p+"interfaceBound",()->(int)boundI.invokeExact());
@@ -121,6 +124,7 @@ def expected_java(own):
                         values[key] = 'java.lang.AbstractMethodError'
                     values.update(classReflection='java.lang.IllegalArgumentException',
                         freshClassHandle='java.lang.NoSuchMethodException', hotClass='-80000')
+            values.update({'Graph'+key:result for key,result in expected_graphs(phase == 0, int(value)).items()})
             expected.update({p+key:result for key,result in values.items()})
     return expected
 
@@ -138,6 +142,7 @@ def main():
     java = args.java_home.resolve()
     evidence = new_evidence_directory(ROOT/'build/evidence/jbr-receiver-loss')
     manifest = {'sourceOracleRevision':REVISION, 'toolSha256':sha(Path(__file__)),
+                'adapterExpectationsSha256':sha(ROOT/'tools/method_handle_adapter_expectations.py'),
                 'harnessTemplateSha256':hashlib.sha256(JAVA.encode()).hexdigest(),
                 'nativeSha256':hashlib.sha256(NATIVE.encode()).hexdigest(), 'runs':[]}
 
@@ -168,12 +173,15 @@ def main():
         name = 'Own' if own else 'DefaultOnly'
         target = 'com.github.ytlog.artdcevm.fixture.ReceiverLossFixture.'+name
         contract = 'com.github.ytlog.artdcevm.fixture.ReceiverLossFixture.Contract'
+        graphs = ROOT/'app/src/debug/java/com/github/ytlog/artdcevm/fixture/ReceiverLossAdapters.java'
         source = re.sub(r'\bTarget\b', target, re.sub(r'\bI\b', contract, JAVA))
         (old/'ReceiverLossFixture.java').write_text((ROOT/fixture).read_text())
         (patch/'ReceiverLossFixture.java').write_text((ROOT/replacement).read_text())
         (old/'LossProbe.java').write_text(source)
+        (old/'ReceiverLossAdapters.java').write_text(graphs.read_text())
         manifest.setdefault('fixtureSha256', {}).update({fixture.as_posix():sha(ROOT/fixture),
-                                                       replacement.as_posix():sha(ROOT/replacement)})
+                                                       replacement.as_posix():sha(ROOT/replacement),
+                                                       graphs.relative_to(ROOT).as_posix():sha(graphs)})
         relative = Path('com/github/ytlog/artdcevm/fixture/ReceiverLossFixture$'+name+'.class')
         run('compile-old', [java/'bin/javac','--release','11','-d',old,*sorted(old.glob('*.java'))],work)
         run('compile-patch', [java/'bin/javac','--release','11','-d',patch,patch/'ReceiverLossFixture.java'],work)

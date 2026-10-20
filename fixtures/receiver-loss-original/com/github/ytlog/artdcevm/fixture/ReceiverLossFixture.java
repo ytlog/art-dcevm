@@ -6,6 +6,7 @@ public final class ReceiverLossFixture {
         default int value() { return 7; }
         default int bodyError() { throw new IllegalStateException("target body"); }
         default int arguments(int count, String text) { return count + text.length(); }
+        default int array(Object... values) { return values.length; }
     }
     public static class DefaultOnly implements Contract {
         public int kept = 19;

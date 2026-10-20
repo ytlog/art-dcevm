@@ -15,6 +15,7 @@ import time
 
 from apk_verification import base_apk_path, require_install_success, verified_apk_sha256
 from evidence_paths import new_evidence_directory
+from method_handle_adapter_expectations import expected_graphs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1514,6 +1515,7 @@ for _round in range(2):
                     boundParameters="java.lang.IncompatibleClassChangeError" if _changed else 8,boundWidening="java.lang.IncompatibleClassChangeError" if _changed else 8,
                     boundBadReference="java.lang.ClassCastException",boundBadPrimitive="java.lang.ClassCastException",boundNullPrimitive="java.lang.NullPointerException",
                     boundNullReference="java.lang.IncompatibleClassChangeError" if _changed else "java.lang.NullPointerException",boundParameterArity="java.lang.invoke.WrongMethodTypeException")
+                _values.update({"adapter"+key:value for key,value in expected_graphs(_changed, _v).items()})
                 if _round > 0 or _phase != "abort":
                     _values.update(lateInterface=not _changed, lateClassHandle=_klass)
                 _checks.update({_prefix+str(_i)+"."+key:value for key,value in _values.items()})

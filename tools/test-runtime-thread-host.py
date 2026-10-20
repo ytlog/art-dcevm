@@ -15,6 +15,7 @@ SOURCE = r'''
 #include "platform/common/runtime_thread.h"
 #include "platform/common/transaction_context.h"
 #include "platform/common/class_layout.h"
+#include "platform/abi/arm64/shadow_frame_table.h"
 #include "platform/abi/arm64/runtime_thread_table.h"
 #include "platform/abi/arm64/release_order.h"
 #include <type_traits>
@@ -202,6 +203,15 @@ int main() {
     Check<target_abi::android13::Thread>(13); Check<target_abi::android14::Thread>(14);
     Check<target_abi::android15::Thread>(15); Check<target_abi::android16::Thread>(16);
     Check<target_abi::android17::Thread>(17);
+    target_abi::android13::ShadowFrame old_frame{};
+    target_abi::android16::ShadowFrame new_frame{};
+    old_frame.frame_flags = new_frame.frame_flags = 5;
+    auto old_return = target_abi::FrameReturnFor<target_abi::android13::Class>();
+    auto new_return = target_abi::FrameReturnFor<target_abi::android16::Class>();
+    Require(!old_return(&old_frame, false) && !new_return(&new_frame, false), "query requested a frame return");
+    Require(old_return(&old_frame, true) && new_return(&new_frame, true), "lost frame return flag");
+    Require(old_frame.frame_flags == 7 && new_frame.frame_flags == 7, "overwrote other frame flags");
+    Require(old_return(&old_frame, false) && new_return(&new_frame, false), "lost another agent's frame return");
     Require(!runtime_thread::Ready(), "Transaction scope leaked Thread state");
     Require(target_abi::CandidateReleases(31) == std::vector<int>({12,13,14,15,16,17}),
             "Release order changed");
@@ -257,6 +267,7 @@ def main():
                    str(native / 'platform/common/class_layout.cc'),
                    str(native / 'platform/common/invoke_kind.cc'),
                    str(native / 'platform/common/bound_method_handle.cc'),
+                   str(native / 'platform/common/captured_method_handle.cc'),
                    str(native / 'platform/common/structural_policy.cc'),
                    str(native / 'evolution/dex_schema.cc'), '-o', str(binary)]
         build = subprocess.run(command, capture_output=True, text=True)

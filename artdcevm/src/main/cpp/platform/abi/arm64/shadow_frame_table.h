@@ -30,6 +30,19 @@ template <typename Class> constexpr FramePc FramePcFor() {
     return AccessFramePc<android16::ShadowFrame>;
   return AccessFramePc<android13::ShadowFrame>;
 }
+using FrameReturn = bool (*)(void*, bool);
+template <typename Frame> bool ReturnFrame(void* address, bool request) {
+  // shadow_frame.h, fixed 11--17: kForcePopFrame = 1 << 1. Only the
+  // independently proved, non-synchronized void BindTo entry uses this flag.
+  auto* frame = static_cast<Frame*>(address);
+  if (request) frame->frame_flags |= 2;
+  return (frame->frame_flags & 2) != 0;
+}
+template <typename Class> constexpr FrameReturn FrameReturnFor() {
+  if constexpr (std::is_same_v<Class, android16::Class> || std::is_same_v<Class, android17::Class>)
+    return ReturnFrame<android16::ShadowFrame>;
+  return ReturnFrame<android13::ShadowFrame>;
+}
 using FrameReference = uint32_t (*)(const void*, uint32_t);
 template <typename Frame> uint32_t ReadFrameReference(const void* address, uint32_t index) {
   const auto* frame = static_cast<const Frame*>(address);

@@ -2,6 +2,8 @@
 #include "evolution/modifiers.h"
 #include "platform/common/schema_snapshot.h"
 #include "platform/common/bound_method_handle.h"
+#include "platform/common/class_layout.h"
+#include "platform/common/runtime_thread.h"
 #include "platform/common/jni_interface_dispatch.h"
 #include <algorithm>
 #include <string_view>
@@ -445,7 +447,14 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
       *error = "JNI interface receiver services unavailable in Native snapshot";
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
-    if (!bound_method_handle::Prepare(jni, env)) {
+    const auto prove_frame = [&]() {
+      const auto thread = runtime_thread::Ready();
+      if (!thread) return false;
+      abi::arm64::RedefinerPrefix driver{nullptr, 0, nullptr, runtime_thread::Current(*thread)};
+      abi::arm64::ClassRedefinitionPrefix target{&driver, definition.klass, nullptr};
+      return class_layout::VerifyTarget(thread, &target, snapshot->live);
+    };
+    if (!bound_method_handle::Prepare(jni, env, prove_frame)) {
       if (jni->ExceptionCheck()) jni->ExceptionClear();
       *error = "bound MethodHandle entry unavailable in Native snapshot";
       return JVMTI_ERROR_NOT_AVAILABLE;

@@ -220,7 +220,7 @@ template <typename Class, typename Method> struct Probe : View<Class, Method> {
     if (methods)
       invoke_kind::ObserveClassLayout(offsetof(Class, access_flags), offsetof(Class, dex_cache),
                                      offsetof(Class, ext_data), methods->offset, runtime_thread::Layout(thread).is_gc_marking,
-                                     offsetof(Method, dex_method_index), offsetof(Class, iftable), abi::FrameReferenceFor<Class>(), runtime_thread::Layout(thread).exception, abi::FramePcFor<Class>());
+                                     offsetof(Method, dex_method_index), offsetof(Class, iftable), abi::FrameReferenceFor<Class>(), runtime_thread::Layout(thread).exception, abi::FramePcFor<Class>(), abi::FrameReturnFor<Class>());
   }
   static constexpr ProbeOps Make(int android) {
     return {android, Observe, VerifyTarget, VerifyIter, HasInterpreted, KeepInterpreted, Access, Superclass, Origin};

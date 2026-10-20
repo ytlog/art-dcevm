@@ -80,6 +80,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
     /** Stops ART's JIT workers for the rest of the process (test engine library). */
     static native int suspendJit();
     static native int boundHandleEntryMode();
+    static native int boundHandlePreparationProofs();
     static native boolean jniPrepare(Class<?> base);
     static native long jniLoop(Object target, int kind, int count);
     static native long interpreterUnwind();
@@ -249,6 +250,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
         }
         if (engine) setup.put("capabilities", DcevmRuntime.capabilities());
         setup.put("boundHandleEntryMode", boundHandleEntryMode());
+        setup.put("boundHandlePreparationProofs", boundHandlePreparationProofs());
         // After setup: ART's Redefiner suspends the JIT itself and restarts it.
         // No benchmark method has run yet.
         if (mode.equals("interp")) {

@@ -23,6 +23,7 @@ public final class ReceiverLossState {
     private final MethodHandle[] boundArguments = new MethodHandle[2], caught = new MethodHandle[2], spread = new MethodHandle[2], boxed = new MethodHandle[2], dropped = new MethodHandle[2];
     private final Method[] classMethods = new Method[2];
     private final MethodHandle nullBound = interfaceHandle.bindTo(null);
+    private final ReceiverLossAdapters[] adapters = new ReceiverLossAdapters[2];
     private Object[] late;
 
     public ReceiverLossState() throws Exception {
@@ -41,6 +42,7 @@ public final class ReceiverLossState {
             boxed[i] = boundInterface[i].asType(MethodType.methodType(Object.class));
             dropped[i] = MethodHandles.dropArguments(boundInterface[i], 0, String.class);
             classMethods[i] = receivers[i].getClass().getMethod("value");
+            adapters[i] = new ReceiverLossAdapters(i == 0 ? typedDefault : typedOwn);
         }
     }
     public static int recovered(IncompatibleClassChangeError ignored) { return 31; }
@@ -63,6 +65,9 @@ public final class ReceiverLossState {
             Object interfaceResult = changed ? "java.lang.IncompatibleClassChangeError" : value;
             Object castResult = changed ? "java.lang.ClassCastException" : value;
             Object classResult = changed && i == 0 ? "java.lang.AbstractMethodError" : value;
+            for (java.util.Map.Entry<String, String> entry : adapters[i].observations().entrySet()) {
+                check.eq(p + "adapter" + entry.getKey(), ReceiverLossAdapters.expected(entry.getKey(), changed, value), entry.getValue());
+            }
             check.eq(p + "interface", !changed, ReceiverLossFixture.Contract.class.isInstance(receiver));
             check.eq(p + "direct", interfaceResult, InterfaceSymbolState.result(() -> saved.value()));
             check.eq(p + "interfaceExact", interfaceResult, InterfaceSymbolState.result(() -> (int) interfaceHandle.invokeExact(saved)));

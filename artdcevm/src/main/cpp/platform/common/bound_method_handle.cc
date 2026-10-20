@@ -1,4 +1,5 @@
 #include "platform/common/bound_method_handle.h"
+#include "platform/common/captured_method_handle.h"
 #include <atomic>
 #include <cstring>
 #include "evolution/modifiers.h"
@@ -28,8 +29,13 @@ thread_local void* entering_method = nullptr;
 thread_local bool forwarding_bound = false;
 auto& entry_method = artdcevm_bound_entry_method;
 std::atomic<bool> fast{false}, direct_entry{false};
+std::atomic<uint32_t> preparation_proofs{0};
 uint32_t (*frame_pc)(void*, bool) = nullptr;
-bool (*receiver_check)(void*, void*) = nullptr;
+int (*receiver_check)(void*, void*) = nullptr;
+bool (*return_frame)(void*, bool) = nullptr;
+thread_local bool capture_probe = false, public_capture = false, capture_observed = false;
+thread_local JNIEnv* probe_jni = nullptr;
+thread_local const std::function<bool()>* probe_frame = nullptr;
 using Add = void (*)(void*, void*, uint32_t);
 using AddTrace = void (*)(void*, void*, uint32_t, bool);
 using Switch = void (*)(abi::arm64::SwitchContextPrefix*, const void*, const uint16_t*);
@@ -93,6 +99,12 @@ void AddTraceListener(void* object, void* value, uint32_t events, bool trace) {
   original_add_trace(object, value, events, trace);
   CaptureInstrumentation(object, events, before);
 }
+bool ProveFrameServices() noexcept {
+  if (return_frame) return true;
+  if (!probe_frame || !*probe_frame) return false;
+  try { return (*probe_frame)() && return_frame; }
+  catch (...) { return false; }
+}
 bool Target(void* frame) {
   // Identity alone publishes no metadata. Only matching frames enter the
   // acquire-protected preparation/activation paths; unrelated entries need no
@@ -109,20 +121,34 @@ __attribute__((noinline)) void ProbeSwitch(abi::arm64::SwitchContextPrefix* cont
     explicit Entering(void* method) : previous(entering_method) { entering_method = method; }
     ~Entering() { entering_method = previous; }
   } scope(static_cast<const abi::arm64::ShadowFramePrefix*>(context->frame)->method);
-  if (Target(context->frame) && this_object(context->frame, 2)) native_entry = true;
+  if (Target(context->frame) && this_object(context->frame, 2)) {
+    native_entry = ProveFrameServices();
+    if (capture_probe) {
+      capture_observed = captured_method_handle::Complete(probe_jni);
+      if (capture_observed) return_frame(context->frame, true);
+      else if (!move_exception(context->self, context->frame, true, true)) {
+        frame_pc(context->frame, true);
+        return;
+      }
+    }
+  }
   original_switch(context, implementation, dex_pc);
 }
 __attribute__((noinline)) void EnterBound(abi::arm64::SwitchContextPrefix* context, const void* implementation, const uint16_t* dex_pc) {
   if (preparing.load(std::memory_order_acquire)) return ProbeSwitch(context, implementation, dex_pc);
   if (direct_entry.load(std::memory_order_acquire) && fast.load(std::memory_order_acquire) && enabled.load(std::memory_order_acquire) &&
-      frame_pc && frame_pc(context->frame, false) == 0 && EventByte(instrumentation_object, dex_pc_offset) == 0 &&
-      receiver_check(context->self, this_object(context->frame, 2))) {
-    // Reuse ART's event-exception path. At entry there are no acquired monitors;
-    // the context's result is already zero. ART chooses any local handler or
-    // forced-pop state, otherwise it unwinds this frame normally.
-    if (!move_exception(context->self, context->frame, true, true)) {
-      frame_pc(context->frame, true);
-      return;
+      frame_pc && frame_pc(context->frame, false) == 0 && !return_frame(context->frame, false) && EventByte(instrumentation_object, dex_pc_offset) == 0 &&
+      receiver_check) {
+    const int action = receiver_check(context->self, this_object(context->frame, 2));
+    if (action == 2) return_frame(context->frame, true);
+    if (action == 1) {
+      // Reuse ART's event-exception path. At entry there are no acquired monitors;
+      // the context's result is already zero. ART chooses any local handler or
+      // forced-pop state, otherwise it unwinds this frame normally.
+      if (!move_exception(context->self, context->frame, true, true)) {
+        frame_pc(context->frame, true);
+        return;
+      }
     }
   }
   original_switch(context, implementation, dex_pc);
@@ -139,8 +165,15 @@ __attribute__((noinline)) bool ProbePc(void* self, const void* accessor, const v
   if (!probing) return original_pc[index](self, accessor, frame, pc, instrumentation, result);
   void* previous = entering_method;
   entering_method = static_cast<const abi::arm64::ShadowFramePrefix*>(frame)->method;
-  const bool passed = original_pc[index](self, accessor, frame, pc, instrumentation, result);
-  if (pc == 0 && Target(const_cast<void*>(frame)) && this_object(frame, 2)) native_entry = true;
+  bool passed = original_pc[index](self, accessor, frame, pc, instrumentation, result);
+  if (passed && pc == 0 && Target(const_cast<void*>(frame)) && this_object(frame, 2)) {
+    native_entry = ProveFrameServices();
+    if (capture_probe) {
+      capture_observed = captured_method_handle::Complete(probe_jni);
+      if (capture_observed) return_frame(const_cast<void*>(frame), true);
+      else passed = false;
+    }
+  }
   entering_method = previous;
   return passed;
 }
@@ -156,7 +189,11 @@ __attribute__((noinline)) bool CheckPc(void* self, const void* accessor, const v
     ~Forwarding() { forwarding_bound = previous; }
   } scope;
   const bool passed = original_pc[index](self, accessor, frame, pc, instrumentation, result);
-  return passed && !receiver_check(self, this_object(frame, 2));
+  if (!passed) return false;
+  if (return_frame(const_cast<void*>(frame), false)) return true;
+  const int action = receiver_check(self, this_object(frame, 2));
+  if (action == 2) return_frame(const_cast<void*>(frame), true);
+  return action != 1;
 }
 template <size_t index>
 bool PcEvent(void* self, const void* accessor, const void* frame, uint32_t pc, const void* instrumentation, void* result) {
@@ -256,13 +293,19 @@ jmethodID Transform(jvmtiEnv* env, jclass klass) {
 void Check(jvmtiEnv* env, JNIEnv* jni, jthread thread) {
   jobject bound = nullptr;
   if (env->GetLocalInstance(thread, 0, &bound) || !bound) { Failed(jni); return; }
+  if (public_capture) {
+    checking = false;
+    capture_observed = captured_method_handle::Complete(jni, thread);
+    checking = true;
+    if (capture_observed && env->ForceEarlyReturnVoid(thread)) { capture_observed = false; Failed(jni); }
+    return;
+  }
   jobject delegate = jni->GetObjectField(bound, delegate_field);
   if (jni->ExceptionCheck()) return;
   jobject receiver = jni->GetObjectField(bound, receiver_field);
   if (jni->ExceptionCheck() || !delegate || !receiver) return;
   const jint kind = jni->GetIntField(delegate, kind_field);
   if (jni->ExceptionCheck()) return;
-  if (kind != 0 && kind != 4) return; // Fixed MethodHandle INVOKE_VIRTUAL / INVOKE_INTERFACE.
   jobject type = jni->GetObjectField(delegate, type_field);
   if (jni->ExceptionCheck()) return;
   auto parameters = type ? static_cast<jobjectArray>(jni->GetObjectField(type, parameters_field)) : nullptr;
@@ -274,6 +317,14 @@ void Check(jvmtiEnv* env, JNIEnv* jni, jthread thread) {
   jint modifiers = 0;
   if (env->GetClassModifiers(receiver_type, &modifiers)) { Failed(jni); return; }
   if (!(modifiers & evolution::kAccInterface)) return;
+  if (kind != 0 && kind != 4) {
+    // Nested BindTo entries must retain their own guards while libcore runs.
+    checking = false;
+    const bool completed = captured_method_handle::Complete(jni, thread);
+    checking = true;
+    if (completed && env->ForceEarlyReturnVoid(thread)) Failed(jni);
+    return;
+  }
   // Public reflection encodes both pointer and index IDs. Do not decode a JNI
   // reference or read an ArtMethod while the JVMTI callback is Native.
   jobject reflected = jni->CallStaticObjectMethod(handles_class, reflect_as, method_class, delegate);
@@ -296,7 +347,7 @@ extern "C" __attribute__((visibility("hidden"))) void artdcevmBoundInterpreterEn
 void JNICALL Breakpoint(jvmtiEnv* env, JNIEnv* jni, jthread thread,
                         jmethodID method, jlocation location) {
   if (method != transform.load(std::memory_order_acquire) || location != 0) return;
-  if (forwarding_bound) return;
+  if (forwarding_bound || capture_probe) return;
   if ((!probing && !enabled.load(std::memory_order_acquire)) || checking || jni->ExceptionCheck()) return;
   if (jni->PushLocalFrame(16)) return;
   Locals locals{jni};
@@ -311,21 +362,26 @@ EntryMode Mode() {
   return policy_entry.load(std::memory_order_acquire) ? EntryMode::kNativePolicy : !fast.load(std::memory_order_acquire) ? EntryMode::kPublicJvmti
       : direct_entry.load(std::memory_order_acquire) ? EntryMode::kNativeFrame : EntryMode::kNativeEvent;
 }
+uint32_t PreparationProofs() { return preparation_proofs.load(std::memory_order_acquire); }
 void Enable() { enabled.store(true, std::memory_order_release); }
-void Configure(uint32_t (*access)(void*, bool), bool (*check)(void*, void*)) {
+void Configure(uint32_t (*access)(void*, bool), int (*check)(void*, void*), bool (*finish)(void*, bool)) {
   frame_pc = access;
   receiver_check = check;
+  return_frame = finish;
 }
-bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
+bool Prepare(JNIEnv* jni, jvmtiEnv* env, const std::function<bool()>& frame_probe) {
   if (ready.load(std::memory_order_acquire)) return true;
   bool empty = false;
   if (!preparing.compare_exchange_strong(empty, true, std::memory_order_acq_rel)) return false;
-  struct Preparing { ~Preparing() { preparing.store(false, std::memory_order_release); } } scope;
+  struct Preparing { ~Preparing() { probe_frame = nullptr; probe_jni = nullptr; preparing.store(false, std::memory_order_release); } } scope;
+  probe_jni = jni;
+  probe_frame = &frame_probe;
   if (!jni || !env || jni->PushLocalFrame(16)) return false;
   Locals locals{jni};
   jvmtiCapabilities capabilities{};
   capabilities.can_generate_breakpoint_events = 1;
   capabilities.can_access_local_variables = 1;
+  capabilities.can_force_early_return = 1;
   if (env->AddCapabilities(&capabilities)) return false;
   jmethodID entry = transform.load(std::memory_order_acquire);
   if (!entry) {
@@ -358,6 +414,7 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     if (env->GetMethodLocation(entry, &start, &end) || start != 0 || end < 0) return false;
     transform.store(entry, std::memory_order_release);
   }
+  if (!captured_method_handle::Prepare(jni, env, entry)) return false;
   PrepareEntry();
   if (env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_BREAKPOINT, nullptr)) return false;
   const auto result = env->SetBreakpoint(entry, 0);
@@ -367,14 +424,38 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   }
   jclass probe = jni->FindClass("com/github/ytlog/artdcevm/internal/BoundMethodHandleProbe");
   jmethodID run = probe ? jni->GetStaticMethodID(probe, "run", "()V") : nullptr;
-  observed = native_entry = false;
+  observed = native_entry = capture_observed = false;
   probing = true;
   if (run) jni->CallStaticVoidMethod(probe, run);
   probing = false;
   bool passed = observed && !jni->ExceptionCheck();
   jint modifiers = 0;
   const bool ordinary_entry = passed && env->GetMethodModifiers(entry, &modifiers) == JVMTI_ERROR_NONE && !(modifiers & evolution::kAccSynchronized);
-  const bool helper_ready = passed && entry_hooks && native_entry;
+  preparation_proofs.store((observed ? 1 : 0) | (ordinary_entry ? 2 : 0) | (native_entry ? 4 : 0), std::memory_order_release);
+  bool helper_ready = passed && entry_hooks && native_entry && return_frame && ordinary_entry;
+  if (passed) {
+    // The identity probe must finish normally: ForceEarlyReturn can stop ART's
+    // event helper before its native-coverage postcondition. Prove public
+    // continuation separately, then prove the Runnable path below.
+    capture_observed = false;
+    public_capture = probing = true;
+    jni->CallStaticVoidMethod(probe, run);
+    public_capture = probing = false;
+    if (capture_observed) preparation_proofs.fetch_or(8, std::memory_order_release);
+    passed = capture_observed && !jni->ExceptionCheck();
+    helper_ready = helper_ready && passed;
+  }
+  if (helper_ready) {
+    // Independently prove the Runnable JNI continuation and ART's frame-return
+    // path before accepting a transaction, including the native-event fallback.
+    native_entry = capture_observed = false;
+    capture_probe = probing = true;
+    jni->CallStaticVoidMethod(probe, run);
+    capture_probe = probing = false;
+    passed = !jni->ExceptionCheck();
+    preparation_proofs.fetch_or((native_entry ? 16 : 0) | (capture_observed ? 32 : 0), std::memory_order_release);
+    helper_ready = passed && native_entry && capture_observed;
+  }
   if (helper_ready && ordinary_entry && inspection_hook && registered) {
     // The existing inspection policy keeps this bootstrap method interpreted.
     // Let ClearBreakpoint reclaim ART's global deoptimization/exit stubs.
@@ -386,12 +467,13 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
       bool accelerated = false;
       if (inspection_observed &&
           env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_BREAKPOINT, nullptr) == JVMTI_ERROR_NONE) {
-        native_entry = false;
+        native_entry = capture_observed = false;
+        capture_probe = true;
         probing = true;
         jni->CallStaticVoidMethod(probe, run);
-        probing = false;
+        probing = capture_probe = false;
         passed = !jni->ExceptionCheck();
-        accelerated = passed && native_entry;
+        accelerated = passed && native_entry && capture_observed;
       }
       policy_entry.store(accelerated, std::memory_order_release);
       if (passed && !accelerated) {
@@ -406,17 +488,19 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   }
   if (helper_ready && ordinary_entry && switch_hook && instrumentation_object && entry_method.load(std::memory_order_acquire) &&
       env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_BREAKPOINT, nullptr) == JVMTI_ERROR_NONE) {
-    native_entry = false;
+    native_entry = capture_observed = false;
+    capture_probe = true;
     probing = true;
     jni->CallStaticVoidMethod(probe, run);
-    probing = false;
+    probing = capture_probe = false;
     // With public events off, only the already captured native identity may
     // prove continued delivery. A failed probe keeps the public guard.
     passed = !jni->ExceptionCheck();
-    direct_entry.store(passed && native_entry, std::memory_order_release);
-    if (passed && !native_entry && env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_BREAKPOINT, nullptr)) passed = false;
+    direct_entry.store(passed && native_entry && capture_observed, std::memory_order_release);
+    if (passed && (!native_entry || !capture_observed) && env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_BREAKPOINT, nullptr)) passed = false;
   }
   if (passed) {
+    preparation_proofs.fetch_or((policy_entry.load() ? 64 : 0) | (direct_entry.load() ? 128 : 0), std::memory_order_release);
     fast.store(helper_ready, std::memory_order_release);
     ready.store(true, std::memory_order_release);
   }
