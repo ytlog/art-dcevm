@@ -69,7 +69,7 @@ int main(int argc,char**argv){
   jvmtiInterface_1_ table{};jvmtiEnv ti{&table};table.GetTag=GetTag;
   state=new State;state->env=&ti;state->ready=true;
   state->current_thread=[]()->void*{return Id<void*>(1);};
-  if(mode==17)state->same_object=Identity;
+  if(mode==17||mode==26)state->same_object=Identity;
   state->instantiation=Id<jclass>(80);state->missing=Id<jclass>(81);state->invocation=Id<jclass>(82);
   state->illegal_argument=Id<jclass>(83);state->cast_error=Id<jclass>(84);state->null_error=Id<jclass>(85);
   state->initializer_error=Id<jclass>(90);state->linkage_error=Id<jclass>(91);state->access_error=Id<jclass>(92);state->internal_error=Id<jclass>(93);
@@ -96,7 +96,7 @@ int main(int argc,char**argv){
     }else if(mode==24){
       std::weak_ptr<Root> weak=root;root.reset();Freed(&ti,reinterpret_cast<uintptr_t>(copy));
       Need(!weak.expired(),"ObjectFree invalidated native accessor still in use");Ended(&env);
-      Need(weak.expired()&&weak_deleted==1&&!recent.constructor&&!recent.root,"thread detach retained native history or weak identity");
+      Need(weak.expired()&&weak_deleted==1&&!recent.constructor&&!recent.root&&!recent_address,"thread detach retained native history or weak identity");
       std::cout<<"thread cache cleanup PASS\n";return 0;
     }else{
       if(mode==18)weak_cleared=true;
@@ -135,7 +135,21 @@ int main(int argc,char**argv){
     std::vector<Hook> hooks;std::string why;Need(Prepare(nullptr,nullptr,&hooks,&why)&&hooks.size()==2,"retry omitted prepared hooks");
     std::cout<<"retry hooks PASS\n";return 0;
   }
-  if(mode==0){
+  if(mode==15){
+    state->ready=false;
+    Need(Invoke(&env,Id<jobject>(1),Id<jobjectArray>(3),Original,Fallback)==Id<jobject>(303),"unavailable history lost legacy construction");
+    Need(fallback_calls==1&&get_tags==0&&weak_created==0&&!recent_address,"unavailable history accessed the tag cache");
+    Freed(&ti,reinterpret_cast<uintptr_t>(copy));std::cout<<"unavailable history fallback PASS\n";return 0;
+  }
+  if(mode==25||mode==26){
+    Invoke(&env,Id<jobject>(1),Id<jobjectArray>(3),Original,Fallback);
+    const int before_checks=checks,before_metadata=metadata_calls;
+    mode=10; // ART may return a non-null local reference with an exception pending.
+    Need(Invoke(&env,Id<jobject>(1),Id<jobjectArray>(3),Original,Fallback)==Id<jobject>(303),"hot target lost ART's local result");
+    Need(pending==82&&original_calls==2&&root->accessor==Accessor::kDirect&&root->public_epoch==1,"hot target failure changed accessor history or exception");
+    Need(checks==before_checks&&metadata_calls==before_metadata&&get_tags==1&&fallback_calls==0,"hot target failure repeated slow guards");
+    pending=0;
+  }else if(mode==0){
     Need(Invoke(&env,Id<jobject>(1),Id<jobjectArray>(3),Original,Fallback)==Id<jobject>(303),"lost the constructed local root");
     Need(root->accessor==Accessor::kDirect&&root->public_epoch==1,"successful constructor was not warmed");
     int before=metadata_calls,check_before=checks;Need(Invoke(&env,Id<jobject>(1),Id<jobjectArray>(3),Original,Fallback)==Id<jobject>(303),"fast construction failed");
@@ -164,7 +178,7 @@ int main(int argc,char**argv){
     if(mode==11||mode==12)Need(pending==(mode==11?93:100)&&original_calls==0,"metadata failure entered a constructor");
     if(mode==13)Need(original_calls==1&&fallback_calls==1,"nonstandard lookup lost its existing guard");
   }
-  Need(frames==0,"leaked local frame");Ended(&env);Need(!recent.constructor&&!recent.root,"thread detach retained native cache state");Freed(&ti,reinterpret_cast<uintptr_t>(copy));
+  Need(frames==0,"leaked local frame");Ended(&env);Need(!recent.constructor&&!recent.root&&!recent_address,"thread detach retained native cache state");Freed(&ti,reinterpret_cast<uintptr_t>(copy));
   std::cout<<"constructor case "<<mode<<" PASS\n";
  }catch(const std::exception&e){std::cerr<<e.what()<<"\n";return 1;}
 }
@@ -191,7 +205,7 @@ inline void shadowhook_dlclose(void*) {}
         (out / 'compile.log').write_bytes(result.stdout + result.stderr)
         if result.returncode:
             raise RuntimeError('Constructor host compile failed; inspect ignored evidence')
-        cases = [*range(15), 16, 17, 18, 19, 20, 21, 22, 24, 30, 31, 32]
+        cases = [*range(20), 20, 21, 22, 24, 25, 26, 30, 31, 32]
         for case in cases:
             result = subprocess.run([str(work / 'case'), str(case)], capture_output=True)
             (out / f'case-{case}.log').write_bytes(result.stdout + result.stderr)

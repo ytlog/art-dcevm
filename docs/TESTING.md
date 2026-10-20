@@ -256,7 +256,7 @@ python3 tools/run-jni-receiver-tests.py --serial DEVICE_SELECTOR --device-id and
 
 `boundHandlePreparationProofs` 记录启动时的身份、普通入口、初次原生入口、公开续执行、重复原生入口与原生续执行证明（位 0–5），以及检查策略／帧入口激活（位 6／7）；原生策略／帧入口性能报告分别要求 127／191。首次事务直接移除接口时，也在已证明的 Runnable 探针中运行既有 Class／Thread 校验后再选择原生续执行，不能依赖更早的普通重定义。
 
-`tools/compare-jbr-constructor-history.py --java-home <fixed-jbr>` 在独立解释器／默认 JBR 进程中，用共享构造器探针核对固定预期。设备 `constructor-history` 组覆盖公有／声明共享根的双向独立预热、单个／数组查询副本、错误参数预热、abstract／接口／注解转换、恢复、GC 和失败事务；`test-constructor-history-host.py` 验生产守卫、原始／引用转换、标签释放、弱引用清除／分配失败及线程退出清理。报告验证器的负例要求精确 cause 与完整观察集合。构造活动帧和初始化前／序列化发现仍是独立待补范围。
+`tools/compare-jbr-constructor-history.py --java-home <fixed-jbr>` 在独立解释器／默认 JBR 进程中，用共享构造器探针核对固定预期。设备 `constructor-history` 组覆盖公有／声明共享根的双向独立预热、单个／数组查询副本、错误参数预热、abstract／接口／注解转换、恢复、GC 和失败事务；`test-constructor-history-host.py` 验生产守卫、原始／引用转换、标签释放、弱引用清除／分配失败、线程退出清理，以及缓存命中后 ART 返回非空局部引用但仍挂起目标异常的行为。构造热入口仍逐次核验 ART 弱引用身份及事务 epoch；标签查询、参数适配和异常构造走独立慢路径，TLS 地址缓存仅保存原生元数据的地址。报告验证器的负例要求精确 cause 与完整观察集合。构造活动帧和初始化前／序列化发现仍是独立待补范围。
 
 `python3 tools/run-jni-frame-tests.py --serial DEVICE_SELECTOR --device-id android-device-1 --apk <frozen.apk> --id-mode index` 使用与 JNI 接收者矩阵相同的维度，并分别停住 Native 调用方和已进入的旧 Java 方法体，共 192 个隔离进程。mixed 使用 `-PjniPointerProbe=true` 构建的冻结 APK，并要求实测 tag0／tag1。每轮在接收者合法时先停住四个调用，再依次执行失败／提交／恢复失败／恢复，反序批次并 GC；JNI 局部引用、旧 Java `this`、保留字段和身份须保持。Native 停顿后才分派的调用使用当前接收者边界；旧方法体须继续返回原值，之后的新调用再检查边界。工作线程的公开 JNI 函数槽须与已配置的主线程一致，防止遗漏 CheckJNI 策略。index 的 120 项调用与 72 项原诊断、mixed 的 96 项调用与 72 项原诊断及 24 项独立 79 拒绝分别计数，拒绝不算调用对齐。`--replay` 用同一冻结 APK 重新核验原始观察；证据写入 `build/evidence/jni-frames/`。
 

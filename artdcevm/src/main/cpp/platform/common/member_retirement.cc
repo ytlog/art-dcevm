@@ -333,10 +333,8 @@ jobject ConstructorNewInstanceLegacy(JNIEnv* env, jobject constructor, jobjectAr
                                            : process->original_constructor_new_instance(env, constructor, args);
 }
 jobject ConstructorNewInstance(JNIEnv* env, jobject constructor, jobjectArray args) noexcept {
-  return constructor_history::Available()
-      ? constructor_history::Invoke(env, constructor, args, process->original_constructor_new_instance,
-                                    ConstructorNewInstanceLegacy)
-      : ConstructorNewInstanceLegacy(env, constructor, args);
+  return constructor_history::Invoke(env, constructor, args, process->original_constructor_new_instance,
+                                     ConstructorNewInstanceLegacy);
 }
 
 // JNI field access with a retired or placeholder field ID.

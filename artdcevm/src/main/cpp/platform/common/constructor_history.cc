@@ -62,9 +62,19 @@ struct Recent {
   std::shared_ptr<Root> root;
 };
 thread_local Recent recent;
+// The nontrivial owner still registers its native destructor on first use.
+// Cache only its stable TLS address so subsequent hits resolve one trivial TLS
+// slot rather than both the initialization guard and the owner. This is not a
+// Java identity cache: every hit still checks ART's weak reference below.
+thread_local Recent* recent_address = nullptr;
+Recent& Cached() {
+  if (!recent_address) recent_address = &recent;
+  return *recent_address;
+}
 void Ended(JNIEnv* jni) {
   if (recent.constructor) jni->DeleteWeakGlobalRef(recent.constructor);
   recent = {};
+  recent_address = nullptr;
 }
 struct Locals {
   JNIEnv* jni;
@@ -176,11 +186,7 @@ jobjectArray Many(JNIEnv* jni, jobject klass, jboolean public_only) noexcept {
   return constructors;
 }
 struct Found { Root* root; bool failed; };
-Found Find(JNIEnv* jni, jobject constructor) {
-  Recent& cached = recent;
-  if (cached.constructor && (state->same_object
-      ? state->same_object(jni, constructor, cached.constructor)
-      : jni->IsSameObject(constructor, cached.constructor))) return {cached.root.get(), false};
+__attribute__((noinline)) Found FindUncached(JNIEnv* jni, jobject constructor, Recent& cached) {
   jlong tag = 0;
   if (state->env->GetTag(constructor, &tag)) { Failure(jni); return {nullptr, true}; }
   auto* copy = reinterpret_cast<Copy*>(static_cast<uintptr_t>(tag));
@@ -190,6 +196,13 @@ Found Find(JNIEnv* jni, jobject constructor) {
   cached.constructor = weak;
   cached.root = copy ? copy->root : std::shared_ptr<Root>{};
   return {copy ? copy->root.get() : nullptr, false};
+}
+Found Find(JNIEnv* jni, jobject constructor) {
+  Recent& cached = Cached();
+  if (cached.constructor && (state->same_object
+      ? state->same_object(jni, constructor, cached.constructor)
+      : jni->IsSameObject(constructor, cached.constructor))) return {cached.root.get(), false};
+  return FindUncached(jni, constructor, cached);
 }
 
 bool Accessible(JNIEnv* jni, jobject constructor, jobject owner, uint32_t class_flags) {
@@ -254,27 +267,12 @@ bool Arguments(JNIEnv* jni, jobject constructor, jobjectArray args) {
   }
   return true;
 }
-}  // namespace
-bool Available() { return state && state->ready.load(std::memory_order_acquire); }
-uint32_t CacheProofs() { return !Available() ? 0 : state->same_object ? 3u : 1u; }
-const char* CacheReason() {
-  return !Available() ? "constructor tag metadata unavailable" : state->same_object ? "" : "using public JNI weak identity";
-}
-void Invalidate() noexcept { if (Available()) state->epoch.fetch_add(1, std::memory_order_acq_rel); }
-
-jobject Invoke(JNIEnv* jni, jobject constructor, jobjectArray args, NewInstance original, NewInstance fallback) {
-  auto found = Find(jni, constructor);
-  if (found.failed) return nullptr;
-  Root* root = found.root;
-  // Pre-initialization and non-standard constructor discovery keep the existing
-  // retirement guard; no invented root is shared with a public lookup.
-  if (!root) return fallback(jni, constructor, args);
-  const uint64_t epoch = state->epoch.load(std::memory_order_acquire);
-  // This epoch already proves public access, an instantiable owner and a live
-  // target. Mapping invalidates it while ART still suspends callers, so the
-  // shared retirement guard need not encode/check this target again.
-  if (root->public_epoch.load(std::memory_order_acquire) == epoch)
-    return original(jni, constructor, args);
+// Keep metadata lookup, argument adaptation and exception construction out of
+// the cache-hit frame. They require roots/registers that a proved public
+// allocation does not use; the hot entry can restore its frame before calling
+// ART. Both paths still use the same weak identity and transaction epoch.
+__attribute__((noinline)) jobject InvokeUncached(JNIEnv* jni, jobject constructor, jobjectArray args,
+                                                NewInstance original, Root* root, uint64_t epoch) {
   if (jni->PushLocalFrame(16)) return nullptr;
   Locals locals{jni};
   jobject owner = jni->GetObjectField(constructor, state->declaring);
@@ -315,6 +313,30 @@ jobject Invoke(JNIEnv* jni, jobject constructor, jobjectArray args, NewInstance 
   if (root->accessor.load(std::memory_order_acquire) == Accessor::kDirect && public_member)
     root->public_epoch.store(epoch, std::memory_order_release);
   return locals.Return(result);
+}
+}  // namespace
+bool Available() { return state && state->ready.load(std::memory_order_acquire); }
+uint32_t CacheProofs() { return !Available() ? 0 : state->same_object ? 3u : 1u; }
+const char* CacheReason() {
+  return !Available() ? "constructor tag metadata unavailable" : state->same_object ? "" : "using public JNI weak identity";
+}
+void Invalidate() noexcept { if (Available()) state->epoch.fetch_add(1, std::memory_order_acq_rel); }
+
+jobject Invoke(JNIEnv* jni, jobject constructor, jobjectArray args, NewInstance original, NewInstance fallback) {
+  if (!Available()) return fallback(jni, constructor, args);
+  auto found = Find(jni, constructor);
+  if (found.failed) return nullptr;
+  Root* root = found.root;
+  // Pre-initialization and non-standard constructor discovery keep the existing
+  // retirement guard; no invented root is shared with a public lookup.
+  if (!root) return fallback(jni, constructor, args);
+  const uint64_t epoch = state->epoch.load(std::memory_order_acquire);
+  // This epoch already proves public access, an instantiable owner and a live
+  // target. Mapping invalidates it while ART still suspends callers, so the
+  // shared retirement guard need not encode/check this target again.
+  if (root->public_epoch.load(std::memory_order_acquire) == epoch)
+    return original(jni, constructor, args);
+  return InvokeUncached(jni, constructor, args, original, root, epoch);
 }
 void Committed(JNIEnv*, jint count, const jvmtiClassDefinition* definitions) {
   if (!Available()) return;
