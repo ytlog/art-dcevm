@@ -229,7 +229,9 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook
 
 `interface-symbols` 还逐状态检查子接口 `findStatic` 的继承实例／自身 private／自身 static 选择，错误返回／参数描述符、返回／参数加载器别名和 null 名称。static 活参数证明与原 virtual 证明独立；宿主回归分别调用 Android 11–14 与 15–17 的 PointerSize 声明。
 
-`receiver-loss` 使用与 `compare-jbr-receiver-loss.py --java-home <fixed-jbr> --probe-jni-boundaries` 共享的普通接收者 fixture，覆盖失去接口后的直接／精确／参数转换／精确绑定句柄、缓存类句柄与反射、错误类型／null／方法体异常、保留字段与对象身份、后加载子类、三目标批次反序、两轮规划失败／提交／恢复及 GC。它纳入完整套件。`receiver-loss-bound` 另要求已绑定接口句柄的 `invokeWithArguments` 与 JBR 一致：当前 API 33/36 预期会被验证器判为失败（每次 4 个场景、16 项不匹配，ICCE 对 IllegalStateException），不得计作通过。JBR JNI 非法接收者探针运行于独立进程，CheckJNI 终止只记诊断；正常 Java 对照的每个热调用阶段均要求实际编译证据。
+`receiver-loss` 使用与 `compare-jbr-receiver-loss.py --java-home <fixed-jbr> --probe-jni-boundaries` 共享的普通接收者 fixture，覆盖失去接口后的直接／精确／参数转换／精确绑定句柄、缓存类句柄与反射、错误类型／null／方法体异常、保留字段与对象身份、后加载子类、三目标批次反序、两轮规划失败／提交／恢复及 GC。它纳入完整套件。完整套件还要求已绑定 `invokeWithArguments` 的数组／List／null 数组、返回值装箱、spread／drop 适配、捕获 ICCE、基本类型扩宽、引用转换、null 拆箱、错误参数个数与方法体异常。`receiver-loss-bound` 保留为同一完整分组的别名；缺少证据，或把错误异常同时写成 expected／actual，均不能通过独立验证器。固定 JBR 对照使用同一带参数方法及直接静态异常处理方法。JBR JNI 非法接收者探针运行于独立进程，CheckJNI 终止只记诊断；正常 Java 对照的每个热调用阶段均要求实际编译证据。
+
+`tools/test-bound-method-handle-host.py` 另覆盖 30 项公开 JVMTI 入口准备与回调行为：能力／元数据不可用、实际入口及局部变量探针、重入、准备与回滚失败后重试、兼容快路、null／非实例／obsolete 目标和已有 JNI 异常的保留。
 
 HookOverheadBenchmark schema 2 新增实际接口 `invokeExact` 和精确绑定调用，独立核对每项返回值校验和；设备驱动拒绝缺少 `methodHandleChecks` 的报告。比较应包含 `engine-client,added,removed,art-added,engine-body,selected`，每状态／模式至少三次新进程。`jit` 表示启用 JIT 并预热，不能单凭模式名声称每个 lambda 都已编译。
 

@@ -4,6 +4,7 @@ import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
 import java.lang.reflect.Method;
+import java.util.Collections;
 
 /** Cached Java members are created before either receiver loses its interface. */
 public final class ReceiverLossState {
@@ -19,6 +20,7 @@ public final class ReceiverLossState {
     private final MethodHandle adapter = interfaceHandle.asType(MethodType.methodType(int.class, Object.class));
     private final Method interfaceMethod = ReceiverLossFixture.Contract.class.getMethod("value");
     private final MethodHandle[] classHandles = new MethodHandle[2], boundInterface = new MethodHandle[2], boundClass = new MethodHandle[2], boundBody = new MethodHandle[2];
+    private final MethodHandle[] boundArguments = new MethodHandle[2], caught = new MethodHandle[2], spread = new MethodHandle[2], boxed = new MethodHandle[2], dropped = new MethodHandle[2];
     private final Method[] classMethods = new Method[2];
     private final MethodHandle nullBound = interfaceHandle.bindTo(null);
     private Object[] late;
@@ -30,9 +32,18 @@ public final class ReceiverLossState {
             boundInterface[i] = interfaceHandle.bindTo(i == 0 ? typedDefault : typedOwn);
             boundClass[i] = classHandles[i].bindTo(receivers[i]);
             boundBody[i] = MethodHandles.publicLookup().findVirtual(ReceiverLossFixture.Contract.class, "bodyError", MethodType.methodType(int.class)).bindTo(receivers[i]);
+            boundArguments[i] = MethodHandles.publicLookup().findVirtual(ReceiverLossFixture.Contract.class,
+                    "arguments", MethodType.methodType(int.class, int.class, String.class)).bindTo(receivers[i]);
+            caught[i] = MethodHandles.catchException(boundInterface[i], IncompatibleClassChangeError.class,
+                    MethodHandles.publicLookup().findStatic(ReceiverLossState.class, "recovered",
+                            MethodType.methodType(int.class, IncompatibleClassChangeError.class)));
+            spread[i] = boundInterface[i].asSpreader(Object[].class, 0);
+            boxed[i] = boundInterface[i].asType(MethodType.methodType(Object.class));
+            dropped[i] = MethodHandles.dropArguments(boundInterface[i], 0, String.class);
             classMethods[i] = receivers[i].getClass().getMethod("value");
         }
     }
+    public static int recovered(IncompatibleClassChangeError ignored) { return 31; }
     private int classExact(int kind) throws Throwable {
         return kind == 0 ? (int) classHandles[0].invokeExact(defaultReceiver) : (int) classHandles[1].invokeExact(ownReceiver);
     }
@@ -42,7 +53,7 @@ public final class ReceiverLossState {
         late = new Object[]{Class.forName(root + "DefaultLate").getConstructor().newInstance(),
                 Class.forName(root + "OwnLate").getConstructor().newInstance()};
     }
-    public void verify(Check check, String prefix, boolean changed, boolean probeBoundAdapters) throws Exception {
+    public void verify(Check check, String prefix, boolean changed) throws Exception {
         for (int i = 0; i < 2; ++i) {
             final int kind = i;
             Object receiver = receivers[i];
@@ -58,7 +69,27 @@ public final class ReceiverLossState {
             check.eq(p + "interfaceArgs", castResult, InterfaceSymbolState.result(() -> interfaceHandle.invokeWithArguments(receiver)));
             check.eq(p + "interfaceBound", interfaceResult, InterfaceSymbolState.result(() -> (int) boundInterface[kind].invokeExact()));
             check.eq(p + "interfaceAdapter", castResult, InterfaceSymbolState.result(() -> (int) adapter.invokeExact(receiver)));
-            if (probeBoundAdapters) check.eq(p + "interfaceBoundArgs", interfaceResult, InterfaceSymbolState.result(() -> boundInterface[kind].invokeWithArguments()));
+            check.eq(p + "interfaceBoundArgs", interfaceResult, InterfaceSymbolState.result(() -> boundInterface[kind].invokeWithArguments()));
+            check.eq(p + "boundArgsList", interfaceResult, InterfaceSymbolState.result(() -> boundInterface[kind].invokeWithArguments(Collections.emptyList())));
+            check.eq(p + "boundArgsNullArray", interfaceResult, InterfaceSymbolState.result(() -> boundInterface[kind].invokeWithArguments((Object[]) null)));
+            check.eq(p + "boundArgsWrongArity", "java.lang.invoke.WrongMethodTypeException", InterfaceSymbolState.result(() -> boundInterface[kind].invokeWithArguments(1)));
+            check.eq(p + "boundArgsNullList", "java.lang.NullPointerException", InterfaceSymbolState.result(() -> boundInterface[kind].invokeWithArguments((java.util.List<?>) null)));
+            check.eq(p + "boundBoxed", interfaceResult, InterfaceSymbolState.result(() -> (Object) boxed[kind].invokeExact()));
+            check.eq(p + "boundSpread", interfaceResult, InterfaceSymbolState.result(() -> (int) spread[kind].invokeExact(new Object[0])));
+            check.eq(p + "boundSpreadWrongLength", "java.lang.IllegalArgumentException", InterfaceSymbolState.result(() -> (int) spread[kind].invokeExact(new Object[]{1})));
+            check.eq(p + "boundCaught", changed ? 31 : value, InterfaceSymbolState.result(() -> caught[kind].invokeWithArguments()));
+            check.eq(p + "boundDropped", interfaceResult, InterfaceSymbolState.result(() -> dropped[kind].invokeWithArguments("ignored")));
+            check.eq(p + "boundDroppedWrongReference", "java.lang.ClassCastException", InterfaceSymbolState.result(() -> dropped[kind].invokeWithArguments(new Object())));
+            check.eq(p + "boundNullArgs", "java.lang.NullPointerException", InterfaceSymbolState.result(() -> nullBound.invokeWithArguments()));
+            check.eq(p + "boundBodyArgs", changed ? "java.lang.IncompatibleClassChangeError" : "java.lang.IllegalStateException", InterfaceSymbolState.result(() -> boundBody[kind].invokeWithArguments()));
+            Object argumentResult = changed ? "java.lang.IncompatibleClassChangeError" : 8;
+            check.eq(p + "boundParameters", argumentResult, InterfaceSymbolState.result(() -> boundArguments[kind].invokeWithArguments(5, "abc")));
+            check.eq(p + "boundWidening", argumentResult, InterfaceSymbolState.result(() -> boundArguments[kind].invokeWithArguments((short) 5, "abc")));
+            check.eq(p + "boundBadReference", "java.lang.ClassCastException", InterfaceSymbolState.result(() -> boundArguments[kind].invokeWithArguments(5, new Object())));
+            check.eq(p + "boundBadPrimitive", "java.lang.ClassCastException", InterfaceSymbolState.result(() -> boundArguments[kind].invokeWithArguments(5.5, "abc")));
+            check.eq(p + "boundNullPrimitive", "java.lang.NullPointerException", InterfaceSymbolState.result(() -> boundArguments[kind].invokeWithArguments(null, "abc")));
+            check.eq(p + "boundNullReference", changed ? "java.lang.IncompatibleClassChangeError" : "java.lang.NullPointerException", InterfaceSymbolState.result(() -> boundArguments[kind].invokeWithArguments(5, null)));
+            check.eq(p + "boundParameterArity", "java.lang.invoke.WrongMethodTypeException", InterfaceSymbolState.result(() -> boundArguments[kind].invokeWithArguments(5)));
             check.eq(p + "boundWrongReturn", "java.lang.invoke.WrongMethodTypeException", InterfaceSymbolState.result(() -> (long) boundInterface[kind].invokeExact()));
             check.eq(p + "boundWrongArgument", "java.lang.invoke.WrongMethodTypeException", InterfaceSymbolState.result(() -> (int) boundInterface[kind].invokeExact(1)));
             check.eq(p + "boundNull", "java.lang.NullPointerException", InterfaceSymbolState.result(() -> (int) nullBound.invokeExact()));

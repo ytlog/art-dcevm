@@ -1,4 +1,5 @@
 #include "platform/common/invoke_kind.h"
+#include "platform/common/bound_method_handle.h"
 #include <atomic>
 #include <cstdint>
 #include <cstring>
@@ -54,11 +55,6 @@ size_t class_iftable = ~size_t{0};
 abi::arm64::FrameReference frame_reference = nullptr;
 abi::arm64::ArtField* (*find_instance_field)(void*, std::string_view, std::string_view) = nullptr;
 bool (*descriptor_equals)(void*, const char*) = nullptr;
-// mirror/method_type.h: ObjPtr<MethodType> is one uintptr_t, fixed 11--17.
-bool (*exact_type)(void*, uintptr_t) = nullptr;
-std::atomic<jclass> bound_class_root{nullptr};
-std::atomic<void*> bound_class{nullptr};
-thread_local bool preparing_bound_class = false;
 bool legacy_handle_refine = false;
 void* handle_dispatch_target = nullptr;
 void* handle_dispatch_hook = nullptr;
@@ -69,7 +65,6 @@ using HandleRefine = void* (*)(void*, void*, const int&, Handle, Handle, uint32_
 HandleDispatch original_handle_dispatch = nullptr;
 HandleRefine original_handle_refine = nullptr;
 std::atomic<int64_t> handle_kind_offset{-1}, handle_target_offset{-1}, handle_type_offset{-1}, ptypes_offset{-1}, frame_refs_offset{-1};
-std::atomic<int64_t> bound_delegate_offset{-1}, bound_receiver_offset{-1}, emulated_type_offset{-1};
 
 
 template <bool read_barrier>
@@ -151,42 +146,6 @@ bool RejectInterfaceReceiver(void* self, uint32_t reference, void* target, void*
   throw_exception(self, interface_owner ? "Ljava/lang/IncompatibleClassChangeError;" : "Ljava/lang/AbstractMethodError;",
                   "MethodHandle receiver lost the declaring interface");
   return true;
-}
-void* FrameType(void* frame) {
-  if (!frame) return nullptr;
-  int64_t offset = HandleField(frame, "type", "Ljava/lang/invoke/MethodType;", emulated_type_offset);
-  return offset < 0 ? nullptr : reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(frame, offset)));
-}
-bool RejectBound(void* self, Handle handle, void* caller_type) {
-  if (!interface_symbols_enabled.load(std::memory_order_acquire) || !caller_type || !handle.Get<void>()) return false;
-  void* object = handle.Get<void>();
-  int64_t kind = HandleField(object, "handleKind", "I", handle_kind_offset);
-  if (kind < 0 || runtime_roots::Field<int>(object, kind) != 5) return false; // INVOKE_TRANSFORM, fixed 11--17.
-  void* klass = reinterpret_cast<void*>(Reference<true>(static_cast<abi::arm64::Object*>(object)->klass));
-  if (klass != bound_class.load(std::memory_order_acquire)) return false;
-  int64_t type = HandleField(object, "type", "Ljava/lang/invoke/MethodType;", handle_type_offset);
-  // ART may create distinct but equal MethodTypes. Its named equality service
-  // preserves Class identity and WrongMethodType/conversion ordering.
-  void* expected = type < 0 ? nullptr : reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(object, type)));
-  if (!expected || !exact_type || !exact_type(expected, reinterpret_cast<uintptr_t>(caller_type))) return false;
-  int64_t delegate = HandleField(object, "delegate", "Ljava/lang/invoke/MethodHandle;", bound_delegate_offset);
-  int64_t receiver = HandleField(object, "receiver", "Ljava/lang/Object;", bound_receiver_offset);
-  if (delegate < 0 || receiver < 0) return false;
-  void* target = reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(object, delegate)));
-  if (!target) return false;
-  kind = HandleField(target, "handleKind", "I", handle_kind_offset);
-  int64_t method = HandleField(target, "artFieldOrMethod", "J", handle_target_offset);
-  type = HandleField(target, "type", "Ljava/lang/invoke/MethodType;", handle_type_offset);
-  if (kind < 0 || method < 0 || type < 0) return false;
-  const int invoke = runtime_roots::Field<int>(target, kind);
-  if (invoke != 0 && invoke != 4) return false;
-  auto* member = reinterpret_cast<abi::arm64::ArtMethodPrefix*>(runtime_roots::Field<uintptr_t>(target, method));
-  // Retirement retains its existing precedence and guards; this path only
-  // handles a live interface declaration with a no-longer-compatible receiver.
-  if (!member || (member->access_flags.load(std::memory_order_relaxed) & abi::arm64::kAccObsoleteMethod)) return false;
-  return RejectInterfaceReceiver(self,
-      static_cast<uint32_t>(Reference<true>(runtime_roots::Field<uint32_t>(object, receiver))), member,
-      HandleReceiverType(reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(target, type)))));
 }
 bool DispatchHandle(void* self, void* frame, Handle handle,
                     const abi::arm64::InstructionOperands* operands, uint64_t* result) noexcept {
@@ -401,7 +360,6 @@ bool Prepare(std::vector<Hook>* hooks) {
   if (!current_thread || !throw_exception) return false;
   find_instance_field = reinterpret_cast<decltype(find_instance_field)>(symbols::Find(symbols::structural::kFindInstanceField));
   descriptor_equals = reinterpret_cast<decltype(descriptor_equals)>(symbols::Find(kClassDescriptorEquals));
-  exact_type = reinterpret_cast<decltype(exact_type)>(symbols::Find(kMethodTypeExact));
   // Resolve names now; activation waits for the first accepted symbolic change.
   // RefineTargetMethod's older ABI has one extra rooted method-type argument.
   for (const auto& symbol : {kHandleDispatch0, kHandleDispatch1, kHandleDispatch2,
@@ -534,7 +492,7 @@ const char* ClassKindUnavailable() {
 }
 bool InterfaceSymbols() {
   return ClassKinds() && frame_reference && class_iftable != ~size_t{0} && find_instance_field &&
-      handle_dispatch_target && exact_type && (!legacy_handle_refine || descriptor_equals);
+      handle_dispatch_target && (!legacy_handle_refine || descriptor_equals);
 }
 bool EnableInterfaceSymbols() {
   if (!InterfaceSymbols() || !Enable()) return false;
@@ -546,37 +504,8 @@ bool EnableInterfaceSymbols() {
     if (!handle_dispatch_hook) return false;
   }
   interface_symbols_enabled.store(true, std::memory_order_release);
+  bound_method_handle::Enable();
   return true;
-}
-bool PrepareBoundReceiverClass(JNIEnv* jni) {
-  if (bound_class_root.load(std::memory_order_acquire)) return true;
-  if (preparing_bound_class) return false;
-  struct Scope { Scope() { preparing_bound_class = true; } ~Scope() { preparing_bound_class = false; } } scope;
-  jclass local = jni->FindClass("java/lang/invoke/Transformers$BindTo");
-  if (!local) return false;
-  jclass root = static_cast<jclass>(jni->NewGlobalRef(local));
-  jni->DeleteLocalRef(local);
-  if (!root) return false;
-  jclass empty = nullptr;
-  if (!bound_class_root.compare_exchange_strong(empty, root, std::memory_order_release)) jni->DeleteGlobalRef(root);
-  return true; // The bootstrap Class is nonmoving and lives for the process.
-}
-jclass BoundReceiverClass() { return bound_class_root.load(std::memory_order_acquire); }
-void ObserveBoundReceiverClass(void* klass) { if (klass) bound_class.store(klass, std::memory_order_release); }
-bool RejectBoundInterfaceReceiver(void* self, Handle method, Handle callsite,
-                                  void* frame, const abi::arm64::InstructionOperands* operands) {
-  if (!interface_symbols_enabled.load(std::memory_order_acquire)) return false;
-  void* type = callsite.Get<void>();
-  // Fixed 11--12 caller transformers pass one EmulatedStackFrame argument.
-  void* receiver_type = legacy_handle_refine ? HandleReceiverType(type) : nullptr;
-  if (receiver_type && descriptor_equals(receiver_type, "Ldalvik/system/EmulatedStackFrame;") && operands && operands->num_operands == 1) {
-    uint32_t reference = frame_reference(frame, operands->GetOperand(0));
-    type = FrameType(reinterpret_cast<void*>(Reference<true>(reference)));
-  }
-  return RejectBound(self, method, type);
-}
-bool RejectBoundInterfaceReceiverWithFrame(void* self, Handle method, Handle frame) {
-  return interface_symbols_enabled.load(std::memory_order_acquire) && RejectBound(self, method, FrameType(frame.Get<void>()));
 }
 bool InterfaceResolution(void* cache, uint32_t index) {
   if (!ClassKinds() || !cache) return false;

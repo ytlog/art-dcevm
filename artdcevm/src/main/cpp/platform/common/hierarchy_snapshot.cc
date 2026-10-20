@@ -1,7 +1,7 @@
 #include "platform/common/hierarchy_snapshot.h"
 #include "evolution/modifiers.h"
 #include "platform/common/schema_snapshot.h"
-#include "platform/common/invoke_kind.h"
+#include "platform/common/bound_method_handle.h"
 #include "platform/common/jni_interface_dispatch.h"
 #include <algorithm>
 #include <string_view>
@@ -445,9 +445,9 @@ jvmtiError ResolveNewTypes(const jvmtiClassDefinition& definition, TypeResolver*
       *error = "JNI interface receiver services unavailable in Native snapshot";
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
-    if (!invoke_kind::PrepareBoundReceiverClass(jni)) {
+    if (!bound_method_handle::Prepare(jni, env)) {
       if (jni->ExceptionCheck()) jni->ExceptionClear();
-      *error = "bound MethodHandle receiver class unavailable in Native snapshot";
+      *error = "bound MethodHandle entry unavailable in Native snapshot";
       return JVMTI_ERROR_NOT_AVAILABLE;
     }
     break;

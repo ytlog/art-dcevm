@@ -3869,7 +3869,6 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
 
     private void runReceiverLossScenarios() throws Exception {
         ReceiverLossState state = new ReceiverLossState();
-        boolean probeBoundAdapters = arguments != null && "receiver-loss-bound".equals(arguments.getString("scenario"));
         StandardJvmtiClient.cacheInterfaceDispatch(0, ReceiverLossFixture.Own.class.getDeclaredMethod("value"));
         for (int round = 0; round < 2; ++round) for (int phase = 0; phase < 4; ++phase) {
             boolean fail = phase % 2 == 0, restoring = phase >= 2;
@@ -3890,10 +3889,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 if (firstApply) scenario.check("lateUnloadedAfter", false, StandardJvmtiClient.isLoaded(
                         "Lcom/github/ytlog/artdcevm/fixture/ReceiverLossLateFixture$DefaultLate;"));
                 if (lateAvailable) state.loadLate();
-                state.verify(scenario::check, "", changed, probeBoundAdapters);
+                state.verify(scenario::check, "", changed);
                 scenario.check("ownJni", 11, StandardJvmtiClient.callInterfaceDispatchInt(state.ownReceiver, 0));
                 System.gc(); System.runFinalization(); System.gc();
-                state.verify(scenario::check, "gc", changed, probeBoundAdapters);
+                state.verify(scenario::check, "gc", changed);
                 scenario.check("gcOwnJni", 11, StandardJvmtiClient.callInterfaceDispatchInt(state.ownReceiver, 0));
             });
         }

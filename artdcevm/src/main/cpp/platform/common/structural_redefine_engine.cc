@@ -11,6 +11,7 @@
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/bound_method_handle.h"
 #include "platform/common/jni_interface_dispatch.h"
 #include "platform/common/runtime_thread.h"
 #include "platform/common/verification_redirect.h"
@@ -291,6 +292,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   // its Thread/JNIEnv on this OS thread. Failure leaves per-link probing intact.
   jvmtiEventCallbacks callbacks{};
   callbacks.ClassPrepare = ClassPrepared;
+  callbacks.Breakpoint = bound_method_handle::Breakpoint;
   callbacks.ThreadStart = [](jvmtiEnv*, JNIEnv*, jthread) { runtime_thread::ThreadStarted(); };
   callbacks.ThreadEnd = [](jvmtiEnv*, JNIEnv*, jthread) { runtime_thread::ThreadEnded(); };
   prepared.subclass_watch = prepared.instance_check &&

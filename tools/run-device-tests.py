@@ -1506,6 +1506,14 @@ for _round in range(2):
                     classReflection="java.lang.IllegalArgumentException" if _changed and _i == 0 else _v,
                     freshClassHandle="java.lang.NoSuchMethodException" if _changed and _i == 0 else _v,
                     identity=True, self=True, kept=19 if _i == 0 else 23)
+                _values.update(interfaceBoundArgs=_iface,boundArgsList=_iface,boundArgsNullArray=_iface,boundBoxed=_iface,boundSpread=_iface,
+                    boundCaught=31 if _changed else _v,boundDropped=_iface,
+                    boundArgsWrongArity="java.lang.invoke.WrongMethodTypeException",boundArgsNullList="java.lang.NullPointerException",
+                    boundSpreadWrongLength="java.lang.IllegalArgumentException",boundDroppedWrongReference="java.lang.ClassCastException",
+                    boundNullArgs="java.lang.NullPointerException",boundBodyArgs="java.lang.IncompatibleClassChangeError" if _changed else "java.lang.IllegalStateException",
+                    boundParameters="java.lang.IncompatibleClassChangeError" if _changed else 8,boundWidening="java.lang.IncompatibleClassChangeError" if _changed else 8,
+                    boundBadReference="java.lang.ClassCastException",boundBadPrimitive="java.lang.ClassCastException",boundNullPrimitive="java.lang.NullPointerException",
+                    boundNullReference="java.lang.IncompatibleClassChangeError" if _changed else "java.lang.NullPointerException",boundParameterArity="java.lang.invoke.WrongMethodTypeException")
                 if _round > 0 or _phase != "abort":
                     _values.update(lateInterface=not _changed, lateClassHandle=_klass)
                 _checks.update({_prefix+str(_i)+"."+key:value for key,value in _values.items()})
@@ -1641,12 +1649,6 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
         raise RunFailure("The device report does not contain the complete scenario sequence")
     for scenario, (name, variants, code) in zip(scenarios, expected_scenarios):
         code, required = release_expectation(name, code, REQUIRED_CHECKS[name], device["api"], self_selection)
-        if scenario_group == "receiver-loss-bound":
-            required = dict(required)
-            changed = "-apply-" in name or "-restore-abort-" in name
-            for prefix in ("", "gc"):
-                for kind in range(2):
-                    required[prefix+str(kind)+".interfaceBoundArgs"] = "java.lang.IncompatibleClassChangeError" if changed else (7 if kind == 0 else 11)
         if not isinstance(scenario, dict) or scenario.get("name") != name:
             raise RunFailure("The device report has an unexpected scenario order")
         if scenario.get("variants") != variants:

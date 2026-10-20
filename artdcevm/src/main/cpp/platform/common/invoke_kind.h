@@ -39,16 +39,6 @@ bool InterfaceResolution(void* cache, uint32_t index);
 bool InterfaceSymbols();
 // Install the post-adaptation MethodHandle guard before accepting the transaction.
 bool EnableInterfaceSymbols();
-// Load only while Native; decode through the existing Class probe while Runnable.
-bool PrepareBoundReceiverClass(JNIEnv* jni);
-jclass BoundReceiverClass();
-void ObserveBoundReceiverClass(void* klass);
-// BindTo writes its captured receiver before invoking its delegate. Preserve
-// dispatch errors only after proving the outer call/frame has the exact type.
-bool RejectBoundInterfaceReceiver(void* self, abi::arm64::Handle method,
-    abi::arm64::Handle callsite, void* frame, const abi::arm64::InstructionOperands* operands);
-bool RejectBoundInterfaceReceiverWithFrame(void* self, abi::arm64::Handle method,
-    abi::arm64::Handle frame);
 const char* ClassKindUnavailable();
 bool EnableClassKinds();
 bool ClassKindProtection();

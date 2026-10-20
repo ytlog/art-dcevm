@@ -22,6 +22,7 @@ JAVA = r'''
 import java.lang.instrument.*;import java.lang.invoke.*;import java.lang.reflect.*;import java.nio.file.*;
 public class LossProbe {
  static Instrumentation inst;static I typed;static Target object;static MethodHandle classHandle;
+ public static int recovered(IncompatibleClassChangeError ignored){return 31;}
  public static void premain(String s,Instrumentation i){inst=i;}
  static native void cache(Class<?> i,Class<?> c);static native int call(Object o,int owner,int kind,int form);
  interface Op {Object run()throws Throwable;}
@@ -36,6 +37,10 @@ public class LossProbe {
   classHandle=ch;MethodHandle boundI=ih.bindTo(typed),boundC=ch.bindTo(object),adapted=ih.asType(MethodType.methodType(int.class,Object.class));
   Method im=I.class.getMethod("value"),cm=Target.class.getMethod("value");
   MethodHandle nullBound=ih.bindTo(null),bodyBound=MethodHandles.publicLookup().findVirtual(I.class,"bodyError",MethodType.methodType(int.class)).bindTo(typed);
+  MethodHandle parameters=MethodHandles.publicLookup().findVirtual(I.class,"arguments",MethodType.methodType(int.class,int.class,String.class)).bindTo(typed);
+  MethodHandle boxed=boundI.asType(MethodType.methodType(Object.class)),spread=boundI.asSpreader(Object[].class,0);
+  MethodHandle caught=MethodHandles.catchException(boundI,IncompatibleClassChangeError.class,MethodHandles.publicLookup().findStatic(LossProbe.class,"recovered",MethodType.methodType(int.class,IncompatibleClassChangeError.class)));
+  MethodHandle dropped=MethodHandles.dropArguments(boundI,0,String.class);
   cache(I.class,Target.class);int id=Integer.parseInt(args[3]),kind=Integer.parseInt(args[4]),form=Integer.parseInt(args[5]);
   if(id>=0)out("beforeJni",()->call(object,id,kind,form));
   else {out("beforeHotI",()->hotInterface(120000));out("beforeHotC",()->hotClass(120000));}
@@ -49,6 +54,17 @@ public class LossProbe {
    out(p+"interfaceAdapter",()->(int)adapted.invokeExact((Object)object));
    out(p+"interfaceBoundArgs",()->boundI.invokeWithArguments());out(p+"boundWrongReturn",()->(long)boundI.invokeExact());
    out(p+"boundWrongArgument",()->(int)boundI.invokeExact(1));out(p+"boundNull",()->(int)nullBound.invokeExact());out(p+"boundBody",()->(int)bodyBound.invokeExact());
+   out(p+"boundArgsList",()->boundI.invokeWithArguments(java.util.Collections.emptyList()));
+   out(p+"boundArgsNullArray",()->boundI.invokeWithArguments((Object[])null));out(p+"boundArgsWrongArity",()->boundI.invokeWithArguments(1));
+   out(p+"boundArgsNullList",()->boundI.invokeWithArguments((java.util.List<?>)null));
+   out(p+"boundBoxed",()->(Object)boxed.invokeExact());out(p+"boundSpread",()->(int)spread.invokeExact(new Object[0]));
+   out(p+"boundSpreadWrongLength",()->(int)spread.invokeExact(new Object[]{1}));out(p+"boundCaught",()->caught.invokeWithArguments());
+   out(p+"boundDropped",()->dropped.invokeWithArguments("ignored"));out(p+"boundDroppedWrongReference",()->dropped.invokeWithArguments(new Object()));
+   out(p+"boundNullArgs",()->nullBound.invokeWithArguments());out(p+"boundBodyArgs",()->bodyBound.invokeWithArguments());
+   out(p+"boundParameters",()->parameters.invokeWithArguments(5,"abc"));out(p+"boundWidening",()->parameters.invokeWithArguments((short)5,"abc"));
+   out(p+"boundBadReference",()->parameters.invokeWithArguments(5,new Object()));out(p+"boundBadPrimitive",()->parameters.invokeWithArguments(5.5,"abc"));
+   out(p+"boundNullPrimitive",()->parameters.invokeWithArguments(null,"abc"));out(p+"boundNullReference",()->parameters.invokeWithArguments(5,null));
+   out(p+"boundParameterArity",()->parameters.invokeWithArguments(5));
    out(p+"classExact",()->(int)ch.invokeExact(object));out(p+"classArgs",()->ch.invokeWithArguments(object));
    out(p+"classBound",()->(int)boundC.invokeExact());out(p+"classBoundArgs",()->boundC.invokeWithArguments());out(p+"interfaceReflection",()->im.invoke(object));
    out(p+"classReflection",()->cm.invoke(object));out(p+"freshClassHandle",()->MethodHandles.publicLookup().findVirtual(Target.class,"value",MethodType.methodType(int.class)).invokeWithArguments(object));
@@ -83,6 +99,12 @@ def expected_java(own):
             values.update(isInterface='true', kept='23' if own else '19', self='true', identity='true',
                 boundWrongReturn='java.lang.invoke.WrongMethodTypeException', boundWrongArgument='java.lang.invoke.WrongMethodTypeException',
                 boundNull='java.lang.NullPointerException', boundBody='java.lang.IllegalStateException')
+            values.update(boundArgsList=value,boundArgsNullArray=value,boundBoxed=value,boundSpread=value,boundCaught=value,boundDropped=value,
+                boundArgsWrongArity='java.lang.invoke.WrongMethodTypeException',boundArgsNullList='java.lang.NullPointerException',
+                boundSpreadWrongLength='java.lang.IllegalArgumentException',boundDroppedWrongReference='java.lang.ClassCastException',
+                boundNullArgs='java.lang.NullPointerException',boundBodyArgs='java.lang.IllegalStateException',boundParameters='8',boundWidening='8',
+                boundBadReference='java.lang.ClassCastException',boundBadPrimitive='java.lang.ClassCastException',boundNullPrimitive='java.lang.NullPointerException',
+                boundNullReference='java.lang.NullPointerException',boundParameterArity='java.lang.invoke.WrongMethodTypeException')
             values['hotInterface'] = values['hotClass'] = str(int(value)*40000)
             if phase == 0:
                 values.update(isInterface='false', direct='java.lang.IncompatibleClassChangeError',
@@ -91,6 +113,9 @@ def expected_java(own):
                     boundBody='java.lang.IncompatibleClassChangeError',
                     interfaceArgs='java.lang.ClassCastException', interfaceAdapter='java.lang.ClassCastException',
                     interfaceReflection='java.lang.IllegalArgumentException', hotInterface='-40000')
+                for key in ('boundArgsList','boundArgsNullArray','boundBoxed','boundSpread','boundDropped','boundBodyArgs','boundParameters','boundWidening','boundNullReference'):
+                    values[key]='java.lang.IncompatibleClassChangeError'
+                values['boundCaught']='31'
                 if not own:
                     for key in ('classExact','classArgs','classBound','classBoundArgs'):
                         values[key] = 'java.lang.AbstractMethodError'
