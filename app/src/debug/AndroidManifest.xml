@@ -1,5 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <instrumentation
+      android:name="com.github.ytlog.artdcevm.testing.JniFrameInstrumentation"
+      android:targetPackage="dev.artdcevm.lab"
+      android:label="Retained JNI ID active frames"
+      android:functionalTest="true"/>
+  <instrumentation
       android:name="com.github.ytlog.artdcevm.testing.JniReceiverLossInstrumentation"
       android:targetPackage="dev.artdcevm.lab"
       android:label="Isolated JNI receiver boundary probe"

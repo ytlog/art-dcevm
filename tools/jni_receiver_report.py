@@ -1,6 +1,6 @@
 """Independent expectations for retained JNI IDs after interface loss."""
 from itertools import product
-import re
+from jni_probe_report import validate_observations, validate_termination
 
 
 def matrix(id_mode):
@@ -58,46 +58,12 @@ def expected_checks(case):
 
 
 def validate_report(report, case, crash_log, instrumentation_log):
-    def require(condition, message):
-        if not condition: raise ValueError(message)
-    require(report.get("schemaVersion") == 1, "Missing JNI report schema")
-    require(not report.get("fatalError") and report.get("failures") == 0, "JNI probe failed")
     fields = dict(own=case["receiver"] == "own", interfaceOwner=case["owner"] == "interface",
                   nonvirtual=case["call"] == "nonvirtual", cacheBeforeAttach=case["cache"] == "before",
                   checkJni=case["checkjni"] == "true", form=int(case["form"]))
-    for name, value in fields.items():
-        require(type(report.get(name)) is type(value) and report[name] == value, "Wrong case field: " + name)
     tag = 0 if case.get("promote") == "true" and case["cache"] == "before" else 1
-    require(report.get("idTag") == tag, "Requested pointer/index ID was not observed")
     outcome, expected = expected_checks(case)
-    checks = report.get("checks", [])
-    require(len(checks) == len(expected), "Missing or extra independent observations")
-    for check, (name, value) in zip(checks, expected):
-        require(check.get("name") == name, "Wrong observation order")
-        for key in ("expected", "actual"):
-            require(type(check.get(key)) is type(value) and check[key] == value,
-                    "Wrong " + key + " for " + name)
-        require(check.get("passed") is True, "Observation did not pass: " + name)
-    has_diagnostic = "JNI DETECTED ERROR IN APPLICATION" in crash_log
-    if outcome == "checkjni-diagnostic":
-        require(not report.get("completed") and report.get("stage") == "r0apply.beforeCall",
-                "CheckJNI did not stop at the invalid receiver")
-        receiver = "Own" if case["receiver"] == "own" else "DefaultOnly"
-        # Nonvirtual class-owned copied IDs fail the original class-argument
-        # check first; interface-owned calls reach the receiver check.
-        if case["owner"] == "class" and case["call"] == "nonvirtual":
-            pattern = (r"can't call nonvirtual (?:<OBSOLETE> )?int .*ReceiverLossFixture\$Contract\.value\(\) "
-                       r"with class java\.lang\.Class<.*ReceiverLossFixture\$DefaultOnly>")
-        else:
-            pattern = (r"can't call (?:<OBSOLETE> )?int .*ReceiverLossFixture\$Contract\.value\(\) on instance of "
-                       r".*ReceiverLossFixture\$" + receiver + r"\b")
-        require(has_diagnostic and re.search(pattern, crash_log),
-                "Missing original CheckJNI receiver diagnostic")
-        require("SIGABRT" in crash_log, "Missing diagnostic abort")
-    else:
-        require(report.get("completed") is True and report.get("stage") == "finished",
-                "JNI probe did not complete")
-        require("INSTRUMENTATION_CODE: -1" in instrumentation_log, "Missing successful instrumentation exit")
-        require(not has_diagnostic and "Fatal signal" not in crash_log, "Unexpected native crash")
-    require("This non-structurally obsolete method" not in crash_log, "Copied DEX cache assertion")
+    validate_observations(report, fields, tag, expected)
+    validate_termination(report, case, outcome, crash_log, instrumentation_log,
+                         "ReceiverLossFixture", "r0apply.beforeCall")
     return outcome

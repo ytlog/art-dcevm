@@ -167,7 +167,7 @@ python3 tools/check-structural-symbols.py --report build/evidence/documentation-
 
 ART 私有能力只通过命名 ELF 符号访问，运行时由官方 ShadowHook 按目录声明的表范围查找；`.gnu_debugdata` 也是命名符号表，不涉及反汇编或地址推算。
 
-- [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h)：每套运行库都具备的 22 个当前使用的名称（19 个限定 `.dynsym`，标准 JVMTI 包装器与两个 MethodHandle 入口允许任一命名表）。
+- [structural_redefine_symbols.h](../artdcevm/src/main/cpp/platform/symbols/structural_redefine_symbols.h)：每套运行库都具备的 24 个当前使用的名称（19 个限定 `.dynsym`，标准 JVMTI 包装器、JNI 访问器、两个 MethodHandle 入口与旧帧身份入口允许任一命名表）。
 - [constructor_history_symbols.h](../artdcevm/src/main/cpp/platform/symbols/constructor_history_symbols.h)：构造器单个／数组发现入口的两种拼写、调用方与访问检查、标准 JNI 弱引用身份比较。命名比较通过相同／不同对象探针后使用，缺失时回到公开 JNI 表，弱引用仍由 ART 维护。
 - [member_retirement_symbols.h](../artdcevm/src/main/cpp/platform/symbols/member_retirement_symbols.h)：退役访问守卫使用的可变拼写：`Method_invoke` 与 `Constructor_newInstance0` 的无后缀和固定 `.__uniq` 后缀两种拼写、`EncodeFieldId` 新旧两组签名，以及可选的 `MethodHandleInvokeExactWithFrame`（13 起）。
 - [verification_redirect_symbols.h](../artdcevm/src/main/cpp/platform/symbols/verification_redirect_symbols.h)：验证重定向使用的 `FindClass` 新旧两种签名。
@@ -257,3 +257,7 @@ python3 tools/run-jni-receiver-tests.py --serial DEVICE_SELECTOR --device-id and
 `boundHandlePreparationProofs` 记录启动时的身份、普通入口、初次原生入口、公开续执行、重复原生入口与原生续执行证明（位 0–5），以及检查策略／帧入口激活（位 6／7）；原生策略／帧入口性能报告分别要求 127／191。首次事务直接移除接口时，也在已证明的 Runnable 探针中运行既有 Class／Thread 校验后再选择原生续执行，不能依赖更早的普通重定义。
 
 `tools/compare-jbr-constructor-history.py --java-home <fixed-jbr>` 在独立解释器／默认 JBR 进程中，用共享构造器探针核对固定预期。设备 `constructor-history` 组覆盖公有／声明共享根的双向独立预热、单个／数组查询副本、错误参数预热、abstract／接口／注解转换、恢复、GC 和失败事务；`test-constructor-history-host.py` 验生产守卫、原始／引用转换、标签释放、弱引用清除／分配失败及线程退出清理。报告验证器的负例要求精确 cause 与完整观察集合。构造活动帧和初始化前／序列化发现仍是独立待补范围。
+
+`python3 tools/run-jni-frame-tests.py --serial DEVICE_SELECTOR --device-id android-device-1 --apk <frozen.apk> --id-mode index` 使用与 JNI 接收者矩阵相同的维度，并分别停住 Native 调用方和已进入的旧 Java 方法体，共 192 个隔离进程。mixed 使用 `-PjniPointerProbe=true` 构建的冻结 APK，并要求实测 tag0／tag1。每轮在接收者合法时先停住四个调用，再依次执行失败／提交／恢复失败／恢复，反序批次并 GC；JNI 局部引用、旧 Java `this`、保留字段和身份须保持。Native 停顿后才分派的调用使用当前接收者边界；旧方法体须继续返回原值，之后的新调用再检查边界。工作线程的公开 JNI 函数槽须与已配置的主线程一致，防止遗漏 CheckJNI 策略。index 的 120 项调用与 72 项原诊断、mixed 的 96 项调用与 72 项原诊断及 24 项独立 79 拒绝分别计数，拒绝不算调用对齐。`--replay` 用同一冻结 APK 重新核验原始观察；证据写入 `build/evidence/jni-frames/`。
+
+`python3 tools/compare-jbr-jni-frames.py --java-home <fixed-jbr>` 复用相同 Java gate、接收者 fixture 和公开 JNI 原生探针，在默认 VM／解释器、普通／CheckJNI 的 192 个新进程中核验活动帧、重新分派、GC 与两轮原子失败。JBR 用损坏的同伴 classfile 触发失败，固定要求 `InternalError`；ART 则在合法批次的映射规划后注入 110，两者仅对照失败原子性。非法 JNI 调用必须触发原 CheckJNI 诊断，不宣称编译活动帧或任意调用图已被穷尽。`test-jni-frame-report.py` 负例拒绝错误帧返回、丢失 GC／线程策略证据、提前或软化的诊断、SIGSEGV 与把 79 写成调用成功。

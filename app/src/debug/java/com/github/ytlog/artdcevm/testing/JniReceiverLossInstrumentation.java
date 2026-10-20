@@ -18,7 +18,7 @@ import org.json.JSONObject;
 
 /** Each invalid CheckJNI receiver runs in its own process with durable checkpoints. */
 public final class JniReceiverLossInstrumentation extends Instrumentation {
-    private static native int promoteIds();
+    static native int promoteIds();
     private Bundle arguments;
     private final JSONObject report = new JSONObject();
     private final JSONArray checks = new JSONArray();

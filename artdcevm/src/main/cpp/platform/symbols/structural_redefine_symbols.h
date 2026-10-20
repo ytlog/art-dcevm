@@ -2,8 +2,7 @@
 #include "platform/symbols/art_symbol_compat.h"
 
 // Named ART symbols the engine resolves on every runtime. The mangled names are
-// identical in every collected Android 11--17 arm64 runtime; 19 entries require
-// .dynsym and 3 allow any named table. Presence proves the name only, not the
+// identical in every collected Android 11--17 arm64 runtime. Presence proves the name only, not the
 // source declarations or runtime behavior. tools/check-structural-symbols.py
 // re-verifies this catalog against assets/runtime_lib. Keep one declaration per
 // line in this exact form, the tool parses it.
@@ -35,6 +34,8 @@ inline constexpr NamedSymbol kUpdateClassStructurally{Library::kJvmti, "_ZN12ope
 // Runtime services for layout probes and retired-member checks.
 inline constexpr NamedSymbol kVisitJniReflectiveTargets{Library::kArt, "_ZN3art3jni12JniIdManager22VisitReflectiveTargetsEPNS_22ReflectiveValueVisitorE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kVisitReflectiveTargets{Library::kArt, "_ZN3art7Runtime22VisitReflectiveTargetsEPNS_22ReflectiveValueVisitorE"};
+// art_method.cc: structural copied defaults retain their old frame identity.
+inline constexpr NamedSymbol kGetNonObsoleteMethod{Library::kArt, "_ZN3art9ArtMethod20GetNonObsoleteMethodEv", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kFindDeclaredStaticField{Library::kArt, "_ZN3art6mirror5Class23FindDeclaredStaticFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
 inline constexpr NamedSymbol kFindDeclaredInstanceField{Library::kArt, "_ZN3art6mirror5Class25FindDeclaredInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};
 inline constexpr NamedSymbol kFindInstanceField{Library::kArt, "_ZN3art6mirror5Class17FindInstanceFieldENSt3__117basic_string_viewIcNS2_11char_traitsIcEEEES6_"};

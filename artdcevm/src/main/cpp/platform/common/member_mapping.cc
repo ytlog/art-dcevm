@@ -65,11 +65,27 @@ void* original_mapping = nullptr;
 void* original_update = nullptr;
 void* original_visit = nullptr;
 void* original_jni_visit = nullptr;
+void* (*original_non_obsolete)(void*) = nullptr;
 // Native pointer IDs are not enumerable by JniIdManager. Keep only generated
 // copied-method aliases, using the same committed mappings as ART. Readers are
 // Runnable under the shared mutator lock; writers run under ART's suspend-all.
 // The engine's existing obsolete-class roots retain these method allocations.
 std::map<void*, void*> copied_jni_targets;
+
+void* NonObsoleteMethod(void* method) noexcept {
+  const auto* prefix = static_cast<const abi::ArtMethodPrefix*>(method);
+  constexpr uint32_t copied_obsolete = 0x01000000 | abi::kAccObsoleteMethod;
+  if ((prefix->access_flags.load(std::memory_order_relaxed) & copied_obsolete) == copied_obsolete &&
+      copied_jni_targets.count(method)) {
+    // Structural replacement retains the complete old method allocation, not
+    // an in-place obsolete clone. Its copied default's declaring interface has
+    // no vtable at the implementation class's method index. Both the real
+    // frame and ART's instrumentation side stack retain this exact old method;
+    // it is their version identity, just as an old declared class method is.
+    return method;
+  }
+  return original_non_obsolete(method);
+}
 
 // Member mapping of one redefinition, planned while ART may still fail and
 // applied at commit without reading DEX data or calling lookups.
@@ -708,7 +724,8 @@ bool Prepare(const class_layout::Services& services, std::vector<Hook>* hooks, s
       {kCollectNewFieldAndMethodMappings, HookAddress(CollectMappings), &original_mapping},
       {kUpdateClassStructurally, HookAddress(Update), &original_update},
       {kVisitReflectiveTargets, HookAddress(Visit), &original_visit},
-      {kVisitJniReflectiveTargets, HookAddress(VisitJni), &original_jni_visit}};
+      {kVisitJniReflectiveTargets, HookAddress(VisitJni), &original_jni_visit},
+      {kGetNonObsoleteMethod, HookAddress(NonObsoleteMethod), HookSlot(&original_non_obsolete)}};
   std::vector<Hook> resolved;
   for (const auto& entry : required) {
     void* address = symbols::Find(entry.symbol);

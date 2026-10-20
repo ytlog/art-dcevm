@@ -61,6 +61,8 @@ jvmtiError InvokeStructural(jvmtiEnv*, jint, const jvmtiClassDefinition*, transa
 int api_override = 0, initialize_calls = 0;
 bool missing_initializer = false;
 int mode = 0, hook_calls = 0, set_calls = 0, hooks_at_set = 0;
+int non_obsolete_calls = 0;
+void* NonObsoleteOriginal(void*) { ++non_obsolete_calls; return &non_obsolete_calls; }
 bool failed_jni_visit_hook = false;
 int probe_registration_calls = 0;
 int bridge_attempts = 0, bridge_calls = 0, invocation_calls = 0, thread_end_enables = 0;
@@ -286,6 +288,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   if (key == symbols::runtime_thread::kUseReadBarrier.name) return nullptr;
   if (mode == 3 && key == symbols::structural::kCollectNewFieldAndMethodMappings.name) return nullptr;
   if (mode == 42 && key == symbols::structural::kVisitJniReflectiveTargets.name) return nullptr;
+  if (mode == 44 && key == symbols::structural::kGetNonObsoleteMethod.name) return nullptr;
   if (mode >= 6 && key == symbols::imt_sealing::kLinearAllocAllocKind.name) return nullptr;
   if (mode == 19 && key == symbols::narrowed_references::kVisitReference.name) return nullptr;
   if ((mode == 6 || mode == 10 || mode == 11 || mode == 12 || mode == 13 || mode == 14 || mode >= 16) &&
@@ -343,7 +346,9 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
     if (mode == 20 && !failed_reference_hook) { failed_reference_hook = true; return nullptr; }
   }
   if (mode == 1 && hook_calls == 2) return nullptr;
-  if (mode == 43 && !failed_jni_visit_hook && target == &addresses[symbols::structural::kVisitJniReflectiveTargets.name]) {
+  if ((mode == 43 || mode == 45) && !failed_jni_visit_hook &&
+      target == &addresses[(mode == 43 ? symbols::structural::kVisitJniReflectiveTargets :
+                           symbols::structural::kGetNonObsoleteMethod).name]) {
     failed_jni_visit_hook = true; return nullptr;
   }
   if (!failed_retransform_hook &&
@@ -645,10 +650,12 @@ int main(int argc, char** argv) {
       return 0;
     }
     const auto result = structural_redefine::Install(&vm, &env, {});
-    if (mode == 42 || mode == 43) {
-      if (mode == 42) {
+    if (mode >= 42 && mode <= 45) {
+      const auto& service = mode < 44 ? symbols::structural::kVisitJniReflectiveTargets :
+                                       symbols::structural::kGetNonObsoleteMethod;
+      if (mode % 2 == 0) {
         Require(result == JVMTI_ERROR_NONE && set_calls == 0 && active.size() == 6 &&
-                class_layout::State().find(symbols::structural::kVisitJniReflectiveTargets.name) != std::string::npos &&
+                class_layout::State().find(service.name) != std::string::npos &&
                 structural_redefine::Capabilities().find("\"methodDeletion\":false") != std::string::npos,
                 "Missing JNI ID visitor advertised mapping/retirement or lost its diagnosis");
       } else {
@@ -960,6 +967,20 @@ int main(int argc, char** argv) {
       first.methods.push_back({&copy, &current, mapping::MethodMapping::kCopied});
       Require(mapping::CopiedJniTarget(id) == id, "Uncommitted copied plan changed JNI ID");
       mapping::ApplyCopiedJniMappings(&first);
+      auto saved_non_obsolete = mapping::original_non_obsolete;
+      mapping::original_non_obsolete = NonObsoleteOriginal;
+      constexpr uint32_t copied_obsolete = 0x01000000 | abi::arm64::kAccObsoleteMethod;
+      copy.access_flags.store(copied_obsolete);
+      copy2.access_flags.store(copied_obsolete);
+      own.access_flags.store(abi::arm64::kAccObsoleteMethod);
+      Require(mapping::NonObsoleteMethod(&copy) == &copy && non_obsolete_calls == 0 &&
+              copy.access_flags.load() == copied_obsolete,
+              "Retained structural frame lost its version identity or obsolete flag");
+      Require(mapping::NonObsoleteMethod(&copy2) == &non_obsolete_calls && non_obsolete_calls == 1 &&
+              mapping::NonObsoleteMethod(&own) == &non_obsolete_calls && non_obsolete_calls == 2 &&
+              mapping::NonObsoleteMethod(&current) == &non_obsolete_calls && non_obsolete_calls == 3,
+              "Unregistered copy, declared obsolete or live method bypassed ART");
+      mapping::original_non_obsolete = saved_non_obsolete;
       Require(aliases.context().retain_method_aliases && !alias_batch->retires_members,
               "Copied-only mapping did not request obsolete storage retention");
       const jvmtiClassDefinition alias_definition{first_type, 0, nullptr};
@@ -992,6 +1013,8 @@ int main(int argc, char** argv) {
       second.methods.push_back({&current, &newer, mapping::MethodMapping::kKept});
       second.methods.push_back({&copy2, &own, mapping::MethodMapping::kKept});
       mapping::ApplyCopiedJniMappings(&second);
+      Require(mapping::NonObsoleteMethod(&copy) == &copy && non_obsolete_calls == 3,
+              "Later JNI target mapping changed an old frame's version identity");
       Require(mapping::CopiedJniTarget(id) == reinterpret_cast<jmethodID>(&newer) &&
               mapping::CopiedJniTarget(reinterpret_cast<jmethodID>(&copy2)) == reinterpret_cast<jmethodID>(&own),
               "Copied pointer did not follow later ordinary member mapping");
@@ -1082,7 +1105,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        cases = [(case, None, False) for case in range(44)]
+        cases = [(case, None, False) for case in range(46)]
         cases += [(case, api, False) for api in (30, 31, 32) for case in range(23, 29)]
         cases += [(23, api, True) for api in (30, 31, 32, 33)]
         for case, api, missing in cases:
