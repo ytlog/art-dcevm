@@ -280,16 +280,15 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   const bool interface_members = abilities.member_mapping && abilities.interface_members;
   const bool superclass_changed = live.superclass != incoming.superclass;
   const bool parents_changed = live.interfaces != incoming.interfaces;
-  // JBR accepts this without live objects, but ART additionally needs a new
-  // self-array identity graph and libcore's enum constants cache does not
-  // accept the uninitialized values array that JBR reports as null. Keeping
-  // an existing Enum superclass does not introduce either mismatch.
+  // JBR accepts this without live objects, but libcore's enum constants
+  // cache does not accept the uninitialized values array JBR reports as
+  // null. Keeping an existing Enum superclass does not introduce this gap.
   if (superclass_changed && (incoming.access & acc::kAccEnum))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                  "new Enum superclass requires self-array and uninitialized enum-constant semantics");
-  if (interface_kind_changed && incoming.self_array_reference)
+                  "new Enum superclass requires uninitialized enum-constant reflection semantics");
+  if (interface_kind_changed && incoming.self_array_reference && !abilities.self_array_verification)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
-                  "class/interface conversion requires a replacement graph for self-array components");
+                  "class/interface conversion requires verifier component identity services");
   if (interface_target && !interface_kind_changed && (superclass_changed || (parents_changed && !interface_members)))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "interface redefinition does not support parent changes");

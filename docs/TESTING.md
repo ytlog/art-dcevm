@@ -218,6 +218,8 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由 Hook 库按目�
 
 类种类转换使用 `tools/compare-jbr-class-kinds.py --java-home <fixed-jbr>` 先测固定 JBR，再运行设备的 `--scenario-group class-kinds`；矩阵、已有实例与子类型前提、缓存调用及原生分配边界见[类种类演进](CLASS_KIND_EVOLUTION.md)。
 
+无直接目标实例的自类型数组转换使用 `tools/compare-jbr-self-arrays.py --java-home <fixed-jbr>` 与设备 `--scenario-group self-arrays`。同一 Java 探针检查一至三维数组、保活组件、冷／热缓存、反射／MethodHandle、GC 和恢复；固定 JBR 的跨加载器数组解析及失败批次后恢复异常另记为 `knownOracleDifferences`，不计为对齐。完整设备套件包含该组。
+
 有存活实例的具体类转 abstract 使用 `tools/compare-jbr-live-abstract.py --java-home <fixed-jbr>` 核对固定 JBR 的字段、分派、构造、活动帧、GC、恢复与失败批次。它分别运行解释器和指定热调用方编译的 JIT 模式，并检查转换后的重编译记录。设备 ART 当前仍拒绝 70；布局阻塞和源码实现前提见[存活实例转 abstract](LIVE_ABSTRACT_EVOLUTION.md)。
 
 `proxy-interface` 组的父接口场景包括正反四目标批次顺序、父接口自身的父接口演进、A+B 与仅 A 的两个 Proxy 类、handler Method 身份、缓存 Proxy 构造器、精确收窄引用规则、热分派、GC 与规划后回滚。验证器独立要求对应两轮的行为记录一致，仅排除输入顺序和拒绝原因的目标前缀。

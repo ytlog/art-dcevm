@@ -923,6 +923,16 @@ int main(int argc, char** argv) {
       auto array_class = live; array_class.self_array_reference = true;
       Require(policy::Evaluate(iface, array_class, {}, kinds).error == JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
               "self arrays must not mix old components with a different class/interface kind");
+      kinds.self_array_verification = true;
+      Require(policy::Evaluate(iface, array_class, {}, kinds).error == JVMTI_ERROR_NONE,
+              "verified self-array components must allow an instance-free interface-to-class conversion");
+      auto array_interface = iface; array_interface.self_array_reference = true;
+      const auto array_conversion = policy::Evaluate(live, array_interface, {}, kinds);
+      Require(array_conversion.error == JVMTI_ERROR_NONE && array_conversion.requires_instance_precheck &&
+              array_conversion.requires_no_instances && array_conversion.requires_member_mapping,
+              "self arrays must retain the class-to-interface instance and mapping requirements");
+      Require(policy::Evaluate(array_class, array_interface, facts, kinds).error == JVMTI_ERROR_FAILS_VERIFICATION,
+              "self arrays must not open kind conversions with loaded subtypes");
       auto annotation = iface; annotation.access |= acc::kAccAnnotation;
       const auto annotated = policy::Evaluate(iface, annotation, facts, kinds);
       Require(annotated.error == JVMTI_ERROR_NONE && !annotated.interface_kind_changed &&

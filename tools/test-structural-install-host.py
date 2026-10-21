@@ -265,6 +265,10 @@ jvmtiError JNICALL Redefine(jvmtiEnv*, jint, const jvmtiClassDefinition*) { retu
 extern "C" void* shadowhook_dlopen(const char*) { return reinterpret_cast<void*>(1); }
 extern "C" void shadowhook_dlclose(void*) {}
 extern "C" void* shadowhook_dlsym(void*, const char* name) {
+  // Preserve the original installation/rollback contract without optional
+  // verifier-cache services. test-verification-redirect-host.py exercises
+  // complete legacy pairs, modern services and incomplete service sets.
+  if (std::strstr(name, "verifier12RegTypeCache")) return nullptr;
   // Preserve the base installer contract with optional invoke-kind services
   // absent. test-invoke-kind-host.py exercises their separate ABI families.
   if (std::strstr(name, "ClassLinker13ResolveMethod") ||

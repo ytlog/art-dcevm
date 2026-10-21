@@ -215,6 +215,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("interface-selection".equals(isolated)) runInterfaceSelectionMatrix();
             else if ("constructor-history".equals(isolated)) runConstructorHistoryScenarios();
             else if ("class-kinds".equals(isolated)) runClassKindScenarios();
+            else if ("self-arrays".equals(isolated)) runSelfArrayScenarios();
             else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
                 runAbstractUnimplementedScenario(isolated.substring("interface-abstract-unimplemented-".length()));
@@ -405,6 +406,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly) runStaticNarrowingScenarios();
         if (!ordinaryOnly) runConstructorHistoryScenarios();
         if (!ordinaryOnly) runClassKindScenarios();
+        if (!ordinaryOnly) runSelfArrayScenarios();
         if (!ordinaryOnly) runMemberDescriptorScenarios();
         if (!ordinaryOnly) runInterfaceSymbolScenarios();
         if (!ordinaryOnly) runInverseParentScenarios();
@@ -481,6 +483,87 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             while (keys.hasNext()) {
                 String key = keys.next();
                 scenario.check(modes[i] + "." + key, values.getString(key), actual.get(key));
+            }
+        }
+    }
+
+    private void checkSelfArrays(Scenario scenario, String prefix, SelfArrayProbe probe,
+                                 SelfArrayProbe other, boolean iface) throws Exception {
+        org.json.JSONObject expected = new org.json.JSONObject(new String(
+                readAsset("self-array-expectations.json"), java.nio.charset.StandardCharsets.UTF_8));
+        java.util.Map<String, Object> actual = probe.observe(other);
+        scenario.check(prefix + "interface", iface, actual.remove("interface"));
+        for (java.util.Map.Entry<String, Object> entry : actual.entrySet())
+            scenario.check(prefix + entry.getKey(), expected.get(entry.getKey()), entry.getValue());
+    }
+
+    private void runSelfArrayScenarios() throws Exception {
+        String name = "com.github.ytlog.artdcevm.fixture.SelfArrayTarget";
+        String path = name.replace('.', '/') + ".dex";
+        for (String kind : new String[]{"class", "interface"}) {
+            final boolean originalInterface = kind.equals("interface");
+            String original = "self-array-" + kind;
+            String changed = "self-array-" + (originalInterface ? "class" : "interface");
+            byte[] bytes = readAsset(original + "/" + path);
+            for (boolean warm : new boolean[]{false, true}) {
+                ClassLoader loader = new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(bytes),
+                        context.getClassLoader().getParent());
+                ClassLoader otherLoader = new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(bytes),
+                        context.getClassLoader().getParent());
+                Class<?> type = Class.forName(name, true, loader);
+                Class<?> twin = Class.forName(name, true, otherLoader);
+                SelfArrayProbe other = new SelfArrayProbe(twin);
+                SelfArrayProbe[] probe = {warm ? new SelfArrayProbe(type) : null};
+                String prefix = "self-array-" + kind + "-" + (warm ? "warm" : "cold");
+                for (int round = 0; round < 2; ++round) {
+                    String cell = prefix + "-" + round;
+                    runScenario(cell + "-apply", 0, scenario -> {
+                        scenario.redefine(new Class<?>[]{type}, changed);
+                        if (probe[0] == null) probe[0] = new SelfArrayProbe(type);
+                        checkSelfArrays(scenario, "", probe[0], other, !originalInterface);
+                        checkSelfArrays(scenario, "twin.", other, probe[0], originalInterface);
+                        System.gc();
+                        checkSelfArrays(scenario, "gc.", probe[0], other, !originalInterface);
+                    });
+                    runScenario(cell + "-restore", 0, scenario -> {
+                        scenario.redefine(new Class<?>[]{type}, original);
+                        checkSelfArrays(scenario, "", probe[0], other, originalInterface);
+                        System.gc();
+                        checkSelfArrays(scenario, "gc.", probe[0], other, originalInterface);
+                    });
+                }
+                runScenario(prefix + "-verify-abort", 62, scenario -> {
+                    byte[] invalid = InterfaceAbortInstrumentation.invalidReturn(readAsset(changed + "/" + path));
+                    scenario.expectRejectionBy(type, twin);
+                    scenario.redefineBytes(new Class<?>[]{type, twin}, new byte[][]{
+                            readAsset(changed + "/" + path), invalid}, new String[]{changed, changed});
+                    checkSelfArrays(scenario, "", probe[0], other, originalInterface);
+                    checkSelfArrays(scenario, "twin.", other, probe[0], originalInterface);
+                });
+                runScenario(prefix + "-mapping-abort", 110, scenario -> {
+                    scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(new Class<?>[]{type}, changed);
+                    scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                    System.gc();
+                    checkSelfArrays(scenario, "", probe[0], other, originalInterface);
+                });
+                runScenario(prefix + "-recovery", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{type}, changed);
+                    checkSelfArrays(scenario, "", probe[0], other, !originalInterface);
+                });
+                runScenario(prefix + "-recovery-restore", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{type}, original);
+                    checkSelfArrays(scenario, "", probe[0], other, originalInterface);
+                });
+                if (!originalInterface) {
+                    Object instance = type.getConstructor().newInstance();
+                    runScenario(prefix + "-instance-reject", 70, scenario -> {
+                        scenario.redefine(new Class<?>[]{type}, changed);
+                        scenario.check("instanceKept", true, type.isInstance(instance));
+                        scenario.check("instanceCall", 29, type.getMethod("zzValue").invoke(instance));
+                        checkSelfArrays(scenario, "", probe[0], other, false);
+                    });
+                }
             }
         }
     }
@@ -573,12 +656,23 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 }
             }
         }
-        runScenario("class-kind-self-array-reject", 66, scenario -> {
+        Object selfArray = java.lang.reflect.Array.newInstance(ClassKindFixture.InterfaceTarget.class, 0);
+        Class<?> selfArrayType = selfArray.getClass();
+        runScenario("class-kind-self-array", 0, scenario -> {
             scenario.redefine(new Class<?>[]{ClassKindFixture.InterfaceTarget.class}, "class-kind-i-array-c");
-            scenario.check("interfaceKept", true, ClassKindFixture.InterfaceTarget.class.isInterface());
-            scenario.expectError("oldNullCall", NullPointerException.class, () -> ClassKindCalls.interfaceCall(null));
+            scenario.check("interface", false, ClassKindFixture.InterfaceTarget.class.isInterface());
+            scenario.expectError("oldNullCall", IncompatibleClassChangeError.class, () -> ClassKindCalls.interfaceCall(null));
+            scenario.check("returnArray", true, ClassKindFixture.InterfaceTarget.class.getMethod("array").getReturnType() == selfArrayType);
+            scenario.check("component", true, selfArrayType.getComponentType() == ClassKindFixture.InterfaceTarget.class);
             System.gc();
-            scenario.check("afterGc", true, ClassKindFixture.InterfaceTarget.class.isInterface());
+            scenario.check("afterGc", false, ClassKindFixture.InterfaceTarget.class.isInterface());
+        });
+        runScenario("class-kind-self-array-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{ClassKindFixture.InterfaceTarget.class}, "class-kind-i-original");
+            scenario.check("interface", true, ClassKindFixture.InterfaceTarget.class.isInterface());
+            scenario.check("component", true, selfArray.getClass().getComponentType() == ClassKindFixture.InterfaceTarget.class);
+            scenario.expectError("oldNullCall", NullPointerException.class, () -> ClassKindCalls.interfaceCall(null));
+            scenario.expectError("removedBuilder", NoSuchMethodException.class, () -> ClassKindFixture.InterfaceTarget.class.getMethod("array"));
         });
         ClassKindCalls.LiveImpl live = new ClassKindCalls.LiveImpl();
         Method cached = ClassKindFixture.LiveTarget.class.getMethod("value");
@@ -5258,7 +5352,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         final JSONObject result;
         final JSONArray checks = new JSONArray();
         final int expectedCode;
-        Class<?> rejectedClass;
+        Class<?>[] rejectedClasses;
         long jvmtiNanos;
         boolean passed = true;
 
@@ -5271,12 +5365,18 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         void redefine(Class<?>[] classes, String... variants) throws Exception {
             if (classes.length != variants.length) throw new IllegalArgumentException("Fixture batch mismatch");
             byte[][] dexes = new byte[classes.length][];
-            JSONArray names = new JSONArray();
             for (int index = 0; index < classes.length; index++) {
-                names.put(variants[index]);
                 dexes[index] = readAsset(variants[index] + "/"
                         + classes[index].getName().replace('.', '/') + ".dex");
             }
+            redefineBytes(classes, dexes, variants);
+        }
+
+        void redefineBytes(Class<?>[] classes, byte[][] dexes, String... variants) throws Exception {
+            if (classes.length != variants.length || classes.length != dexes.length)
+                throw new IllegalArgumentException("Fixture batch mismatch");
+            JSONArray names = new JSONArray();
+            for (String variant : variants) names.put(variant);
             result.put("variants", names);
             writeReport(false);
             int actualCode;
@@ -5338,8 +5438,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
 
         /** Names the batch member that the engine policy must reject. */
-        void expectRejectionBy(Class<?> klass) {
-            rejectedClass = klass;
+        void expectRejectionBy(Class<?>... classes) {
+            rejectedClasses = classes;
         }
 
         // The engine resets lastRejection for each standard-entry transaction, so
@@ -5350,8 +5450,13 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 check("lastRejection", "", reason);
                 return;
             }
-            Class<?> rejected = rejectedClass != null ? rejectedClass : classes[0];
-            String prefix = "L" + rejected.getName().replace('.', '/') + ";: ";
+            Class<?>[] rejected = rejectedClasses != null ? rejectedClasses : new Class<?>[]{classes[0]};
+            StringBuilder descriptors = new StringBuilder();
+            for (Class<?> type : rejected) {
+                if (descriptors.length() != 0) descriptors.append(", ");
+                descriptors.append('L').append(type.getName().replace('.', '/')).append(';');
+            }
+            String prefix = descriptors.append(": ").toString();
             result.put("lastRejection", reason);
             check("rejectedByPolicy", prefix, reason.startsWith(prefix) ? prefix : reason);
         }

@@ -37,6 +37,8 @@ bool VerifyTarget(const std::optional<runtime_thread::VerifiedThread>& thread, a
 // in CheckClass with every layout VerifyTarget accepted for this transaction.
 // False when none is verified or the accepted layouts disagree.
 bool ClassAccess(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self, jclass klass, uint32_t* access);
+// Runnable, rooted Class already decoded by the caller; no allocation or suspension.
+bool ClassAccess(const runtime_thread::VerifiedThread& thread, const void* klass, uint32_t* access);
 // After ART allocated a redefinition's replacement classes: drop the layouts
 // whose holder slots do not name the target and a class of the incoming DEX.
 // Returns the selected layout's table index, or -1 with `why`.

@@ -389,7 +389,8 @@ for _old, _destinations in (("c", ("i", "a")), ("i", ("c", "a")), ("a", ("c", "i
             _name = f"class-kind-{_old}-{_next}-{_round}"
             CLASS_KIND_SCENARIOS.extend(((_name, [f"class-kind-{_old}-{_next}"], 0),
                                         (_name + "-restore", [f"class-kind-{_old}-original"], 0)))
-CLASS_KIND_SCENARIOS.append(("class-kind-self-array-reject", ["class-kind-i-array-c"], 66))
+CLASS_KIND_SCENARIOS.append(("class-kind-self-array", ["class-kind-i-array-c"], 0))
+CLASS_KIND_SCENARIOS.append(("class-kind-self-array-restore", ["class-kind-i-original"], 0))
 for _round in range(2):
     for _kind, _variant in (("annotation", "kind-live-annotation"), ("interface", "kind-live-original")):
         CLASS_KIND_SCENARIOS.append((f"class-kind-live-{_kind}-{_round}", [_variant], 0))
@@ -404,6 +405,40 @@ for _round in range(2):
 CLASS_KIND_SCENARIOS.extend((f"class-kind-enum-reject-{kind}", [f"class-kind-enum-{kind}"], 66) for kind in ("c", "i", "a"))
 CLASS_KIND_SCENARIOS.extend((f"class-kind-{kind}-enum", [f"class-kind-{kind}-e"], 66) for kind in ("c", "i", "a"))
 SCENARIOS += tuple(CLASS_KIND_SCENARIOS)
+SELF_ARRAY_EXPECTATIONS = json.loads((ROOT / "app/src/debug/assets/self-array-expectations.json").read_text())
+SELF_ARRAY_SCENARIOS = []
+SELF_ARRAY_REQUIRED = {}
+for _kind in ("class", "interface"):
+    _original_interface = _kind == "interface"
+    _original = "self-array-" + _kind
+    _changed = "self-array-" + ("class" if _original_interface else "interface")
+    for _warm in ("cold", "warm"):
+        _prefix = f"self-array-{_kind}-{_warm}"
+        for _round in range(2):
+            for _phase in ("apply", "restore"):
+                _name = f"{_prefix}-{_round}-{_phase}"
+                _iface = not _original_interface if _phase == "apply" else _original_interface
+                SELF_ARRAY_SCENARIOS.append((_name, [_changed if _phase == "apply" else _original], 0))
+                _required = dict(SELF_ARRAY_EXPECTATIONS, interface=_iface)
+                _required.update({"gc." + key: value for key, value in dict(SELF_ARRAY_EXPECTATIONS, interface=_iface).items()})
+                if _phase == "apply":
+                    _required.update({"twin." + key: value for key, value in dict(SELF_ARRAY_EXPECTATIONS, interface=_original_interface).items()})
+                SELF_ARRAY_REQUIRED[_name] = _required
+        for _phase, _code in (("verify-abort", 62), ("mapping-abort", 110), ("recovery", 0), ("recovery-restore", 0)):
+            _name = _prefix + "-" + _phase
+            SELF_ARRAY_SCENARIOS.append((_name, [_changed, _changed] if _phase == "verify-abort" else
+                                        [_original if _phase == "recovery-restore" else _changed], _code))
+            SELF_ARRAY_REQUIRED[_name] = dict(SELF_ARRAY_EXPECTATIONS,
+                interface=not _original_interface if _phase == "recovery" else _original_interface)
+            if _phase == "verify-abort":
+                SELF_ARRAY_REQUIRED[_name].update({"twin." + key: value for key, value in dict(SELF_ARRAY_EXPECTATIONS, interface=_original_interface).items()})
+            if _phase == "mapping-abort": SELF_ARRAY_REQUIRED[_name].update(armed=0, failureHits=1)
+        if not _original_interface:
+            _name = _prefix + "-instance-reject"
+            SELF_ARRAY_SCENARIOS.append((_name, [_changed], 70))
+            SELF_ARRAY_REQUIRED[_name] = dict(SELF_ARRAY_EXPECTATIONS, interface=False, instanceKept=True, instanceCall=29)
+SCENARIOS += tuple(SELF_ARRAY_SCENARIOS)
+
 CONSTRUCTOR_HISTORY_EXPECTATIONS = json.loads((ROOT / "app/src/debug/assets/constructor-history-expectations.json").read_text())
 CONSTRUCTOR_HISTORY_SCENARIOS = []
 for _kind in ("abstract", "interface", "annotation"):
@@ -1349,7 +1384,9 @@ REQUIRED_CHECKS["class-kind-abort"] = {"armed": 0, "classKept": False, "enumKept
     "constantKept": True, "oldNullCall": "java.lang.NullPointerException"}
 REQUIRED_CHECKS["class-kind-hook-reject"] = {"hookInstalled": 0, "hookCleared": 0,
     "classKept": False, "oldNullCall": "java.lang.NullPointerException"}
-REQUIRED_CHECKS["class-kind-self-array-reject"] = {"interfaceKept": True, "oldNullCall": "java.lang.NullPointerException", "afterGc": True}
+REQUIRED_CHECKS["class-kind-self-array"] = {"interface": False, "oldNullCall": "java.lang.IncompatibleClassChangeError", "afterGc": False, "returnArray": True, "component": True}
+REQUIRED_CHECKS["class-kind-self-array-restore"] = {"interface": True, "component": True, "oldNullCall": "java.lang.NullPointerException", "removedBuilder": "java.lang.NoSuchMethodException"}
+REQUIRED_CHECKS.update(SELF_ARRAY_REQUIRED)
 for _kind in ("c", "e"):
     REQUIRED_CHECKS[f"class-kind-live-reject-{_kind}"] = {"interfaceKept": True, "oldCall": 31, "jni": 31, "marker": 43}
 REQUIRED_CHECKS["class-kind-proxy-reject"] = {"interfaceKept": True, "oldCall": 37, "reflection": 37, "jni": 37, "afterGc": 37}
@@ -1575,6 +1612,8 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         return tuple(MEMBER_DESCRIPTOR_SCENARIOS)
     if scenario_group == "constructor-history":
         return tuple(CONSTRUCTOR_HISTORY_SCENARIOS)
+    if scenario_group == "self-arrays":
+        return tuple(SELF_ARRAY_SCENARIOS)
     if scenario_group == "class-kinds":
         return tuple(CLASS_KIND_SCENARIOS)
     if scenario_group == "interface-selection":
@@ -1847,7 +1886,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

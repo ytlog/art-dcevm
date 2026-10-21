@@ -23,4 +23,7 @@ void Begin();
 bool Prepare(std::vector<Hook>* hooks, std::string* failure);
 // Either FindClass spelling is hooked, so verification can be redirected.
 bool ResolvesClasses();
+// Old array components can be translated at ART's verifier register cache.
+// This does not allocate private array mirrors or alter published components.
+bool ResolvesRegisterTypes();
 }  // namespace artdcevm::verification_redirect

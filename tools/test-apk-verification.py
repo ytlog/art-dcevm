@@ -198,6 +198,29 @@ class ApkVerificationTests(unittest.TestCase):
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(broken, scenario_group='class-kinds')
 
+    def test_self_arrays_require_components_cached_calls_loader_isolation_and_recovery(self):
+        report = complete_report(36)
+        report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('self-array-')]
+        runner.validate_report(report, scenario_group='self-arrays')
+        for name, key in (('self-array-class-cold-0-apply', 'component1'),
+                          ('self-array-class-warm-1-restore', 'cachedField'),
+                          ('self-array-interface-cold-0-apply', 'gc.handlePack'),
+                          ('self-array-interface-warm-verify-abort', 'twin.arrayLiteral'),
+                          ('self-array-class-warm-mapping-abort', 'failureHits'),
+                          ('self-array-interface-cold-recovery', 'otherCast'),
+                          ('self-array-class-cold-instance-reject', 'instanceCall')):
+            broken = copy.deepcopy(report)
+            scenario = next(s for s in broken['scenarios'] if s['name'] == name)
+            scenario['checks'] = [c for c in scenario['checks'] if c['name'] != key]
+            with self.subTest(scenario=name, missing=key), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group='self-arrays')
+        broken = copy.deepcopy(report)
+        scenario = next(s for s in broken['scenarios'] if s['name'] == 'self-array-interface-warm-0-apply')
+        call = next(c for c in scenario['checks'] if c['name'] == 'matrix')
+        call['expected'] = call['actual'] = 'java.lang.ArrayStoreException'
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(broken, scenario_group='self-arrays')
+
     def test_proxy_parent_graph_requires_type_reference_and_call_evidence(self):
         report = complete_report(36)
         report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("proxy-interface")]

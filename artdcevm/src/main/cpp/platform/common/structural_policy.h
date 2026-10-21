@@ -114,6 +114,8 @@ struct Abilities {
   // old virtual/interface callers. Class -> interface additionally requires
   // no exact instances; changing the interface bit requires no loaded subtypes.
   bool class_kinds = false;
+  // Canonical array lookup and register-type component redirection are available.
+  bool self_array_verification = false;
 };
 
 struct Decision {

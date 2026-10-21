@@ -299,10 +299,13 @@ void KeepInterpreted(const VerifiedThread&, ClassRedefinitionPrefix* self, jclas
   kProbes[Selected()].keep_interpreted(DecodeClass(art.mirror_class, self, klass));
 }
 
-bool ClassAccess(const VerifiedThread&, ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
+bool ClassAccess(const VerifiedThread& thread, ClassRedefinitionPrefix* self, jclass klass, uint32_t* access) {
+  if (!enabled) return false;
+  return ClassAccess(thread, DecodeClass(art.mirror_class, self, klass), access);
+}
+bool ClassAccess(const VerifiedThread&, const void* mirror, uint32_t* access) {
   const transaction::Context* context = transaction::Current();
   if (!enabled || !context || !context->probed) return false;
-  const void* mirror = DecodeClass(art.mirror_class, self, klass);
   if (!mirror) return false;
   std::optional<uint32_t> agreed;
   for (size_t i = 0; i < kLayoutCount; ++i) {
