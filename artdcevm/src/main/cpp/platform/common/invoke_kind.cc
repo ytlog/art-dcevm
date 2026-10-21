@@ -484,6 +484,10 @@ bool SelfCalls(bool interface_target) {
       class_verified.load(std::memory_order_acquire);
 }
 bool Protecting() { return enabled.load(std::memory_order_acquire); }
+bool CopiedFrames() {
+  return installed.load(std::memory_order_acquire) && class_verified.load(std::memory_order_acquire) &&
+      original_cache_read && mark && (use_read_barrier || gc_marking_offset != ~size_t{0});
+}
 bool ClassKinds() {
   return ClassKindUnavailable() == nullptr;
 }

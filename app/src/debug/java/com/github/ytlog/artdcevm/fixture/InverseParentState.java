@@ -37,10 +37,13 @@ public final class InverseParentState {
         for(int i=0;i<2;i++) parentHandles[i]=MethodHandles.publicLookup().findVirtual(parents[i],"valueX",MethodType.methodType(int.class));
     }
     public final class Active implements AutoCloseable {
-        final java.util.concurrent.CountDownLatch ready=new java.util.concurrent.CountDownLatch(4),resume=new java.util.concurrent.CountDownLatch(1);
+        final java.util.concurrent.CountDownLatch ready, resume=new java.util.concurrent.CountDownLatch(1);
+        final int first;
         final Object[] results=new Object[4]; final Thread[] threads=new Thread[4];
-        Active() throws Exception {
-            for(int i=0;i<4;i++) {
+        Active() throws Exception { this(0); }
+        Active(int first) throws Exception {
+            this.first=first; ready=new java.util.concurrent.CountDownLatch(4-first);
+            for(int i=first;i<4;i++) {
                 final int k=i; final Method method=children[i].getMethod("await",java.util.concurrent.CountDownLatch.class,java.util.concurrent.CountDownLatch.class);
                 threads[i]=new Thread(()->results[k]=result(()->method.invoke(receivers[k],ready,resume)));
                 threads[i].setDaemon(true); threads[i].start();
@@ -52,15 +55,18 @@ public final class InverseParentState {
         }
         public Object observation(int i) { return results[i]; }
         public void verify(Check check) throws Exception {
-            for(int i=0;i<4;i++) {check.eq("active"+i,11,results[i]);check.eq("joined"+i,true,!threads[i].isAlive());}
+            for(int i=first;i<4;i++) {check.eq("active"+i,11,results[i]);check.eq("joined"+i,true,!threads[i].isAlive());}
         }
     }
     public Active startActive() throws Exception { return new Active(); }
+    public Active startStaticActive() throws Exception { return new Active(2); }
     public Object cachedHandleResult(int k) {
         return result(()->k<2?handles[k].invokeWithArguments(receivers[k]):handles[k].invokeWithArguments());
     }
-    public Class<?>[] targets(boolean reverse) {
-        Class<?>[] targets={children[0],children[1],children[2],children[3],parents[0],InverseParentFixture.Peer.class};
+    public Class<?>[] targets(boolean reverse) { return targets(reverse, false); }
+    public Class<?>[] targets(boolean reverse, boolean staticsOnly) {
+        Class<?>[] targets=staticsOnly ? new Class<?>[]{children[2],children[3],parents[0],InverseParentFixture.Peer.class}
+                : new Class<?>[]{children[0],children[1],children[2],children[3],parents[0],InverseParentFixture.Peer.class};
         if(reverse) for(int i=0;i<targets.length/2;i++){Class<?> t=targets[i];targets[i]=targets[targets.length-1-i];targets[targets.length-1-i]=t;}
         return targets;
     }
@@ -70,8 +76,11 @@ public final class InverseParentState {
     // The pinned JBR aliases some cached reflection slots after adding mirandas.
     // Measure that reference-VM defect separately; never require unsafe aliasing on ART.
     public void verify(Check check,String prefix,boolean changed,boolean checkCachedReflection) throws Exception {
+        verify(check,prefix,changed,checkCachedReflection,false);
+    }
+    public void verify(Check check,String prefix,boolean changed,boolean checkCachedReflection,boolean staticsOnly) throws Exception {
         MethodType type=MethodType.methodType(int.class);
-        for(int i=0;i<4;i++) {
+        for(int i=staticsOnly?2:0;i<4;i++) {
             final int k=i; final Object receiver=receivers[i]; final Class<?> child=children[i],parent=parents[i%2];
             String key=prefix+i+".";
             Object expected=changed?(i%2==0?9:"java.lang.AbstractMethodError"):"java.lang.ClassCastException";
@@ -91,7 +100,7 @@ public final class InverseParentState {
             check.eq(key+"proxyLocal",23,locals[i].invoke(proxies[i]));
             check.eq(key+"nullLocal","java.lang.NullPointerException",result(()->InverseParentFixture.local(null,k)));
         }
-        if(late==null&&changed)late=Class.forName("com.github.ytlog.artdcevm.fixture.InverseParentFixture$Late").getConstructor().newInstance();
+        if(!staticsOnly&&late==null&&changed)late=Class.forName("com.github.ytlog.artdcevm.fixture.InverseParentFixture$Late").getConstructor().newInstance();
         if(late!=null) {
             check.eq(prefix+"lateLocal",11,InverseParentFixture.local(late,0));
             check.eq(prefix+"lateParent",changed?9:"java.lang.ClassCastException",result(()->InverseParentFixture.parent(late,0)));

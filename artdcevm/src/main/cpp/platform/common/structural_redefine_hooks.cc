@@ -195,13 +195,22 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       const structural_policy::MemberKey key{next.name, next.descriptor};
       if (!(next.access & (evolution::kAccStatic | evolution::kAccPrivate)) ||
           !inherited.count(key)) continue;
-      if (snapshot.live.interfaces != incoming.interfaces && batch->active_frame) {
-        // ART 13's structural deoptimization can read an invalid vtable slot
-        // for these copied obsolete frames; ART 16 also loses private self
-        // access. Neither the unchanged direct declaration nor a virtual
-        // selector hook supplies the missing frame-relinking contract.
+      const auto old = std::find_if(snapshot.live.methods.begin(), snapshot.live.methods.end(),
+          [&](const auto& method) { return method.name == next.name && method.descriptor == next.descriptor; });
+      const bool declared = old != snapshot.live.methods.end();
+      const bool kept_public_static = (incoming.access & evolution::kAccInterface) &&
+          declared && old->IsStatic() && next.IsStatic() &&
+          (old->access & evolution::kAccPublic) && (next.access & evolution::kAccPublic);
+      if (snapshot.live.interfaces != incoming.interfaces && batch->active_frame &&
+          (!kept_public_static || !invoke_kind::CopiedFrames())) {
+        // Public static self calls do not perform virtual selection or need
+        // obsolete caller private access. Their copied default frames still
+        // require installed DEX ownership and member-map normalization guards.
+        // Private declarations retain the unresolved direct-frame boundary.
         decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
-        decision.reason = "active interface parent collision requires obsolete direct-frame relinking";
+        decision.reason = kept_public_static
+            ? "active public static parent collision requires obsolete copied-frame ownership services"
+            : "active interface parent collision requires obsolete direct-frame relinking";
         break;
       }
       if (next.IsStatic() && !method_handle_lookup::Enable()) {
@@ -209,9 +218,6 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
         decision.reason = "fresh interface MethodHandle lookup services unavailable";
         break;
       }
-      bool declared = false;
-      for (const auto& old : snapshot.live.methods)
-        declared |= old.name == next.name && old.descriptor == next.descriptor;
       if (!declared) {
         if ((next.access & evolution::kAccPrivate) && !next.IsStatic() && !snapshot.changes_invoke_kind) {
           decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;

@@ -188,6 +188,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             String isolated = arguments.getString("scenario");
             if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
             else if ("inverse-parents".equals(isolated)) runInverseParentScenarios();
+            else if ("inverse-static".equals(isolated)) runInverseStaticScenarios();
             else if ("receiver-loss".equals(isolated) || "receiver-loss-bound".equals(isolated)) runReceiverLossScenarios();
             else if ("interface-symbols".equals(isolated)) runInterfaceSymbolScenarios();
             else if ("member-descriptors".equals(isolated)) runMemberDescriptorScenarios();
@@ -4022,6 +4023,36 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (value != 2) throw new AssertionError("KindFixture.Caller precondition: " + value);
     }
 
+    private void runInverseStaticScenarios() throws Exception {
+        InverseParentState state = new InverseParentState();
+        for (int k=2;k<4;k++) StandardJvmtiClient.cacheInterfaceDispatch(k,state.own[k]);
+        for (int i=0;i<DISPATCH_CALLS;i++) for(int k=2;k<4;k++)
+            if(com.github.ytlog.artdcevm.fixture.InverseParentFixture.local(state.receivers[k],k)!=11)
+                throw new AssertionError("inverse static warmup");
+        for (int round=0;round<2;round++) for (int phase=0;phase<4;phase++) {
+            boolean restoring=phase>=2,fail=phase%2==0,changed=phase==1||phase==2;
+            String name="inverse-static-"+new String[]{"abort","apply","restore-abort","restore"}[phase]+"-"+round;
+            String variant="inverse-parent-"+(restoring?"original":"added");
+            Class<?>[] targets=state.targets(round!=0,true);
+            String[] variants=new String[targets.length]; java.util.Arrays.fill(variants,variant);
+            runScenario(name,fail?110:0,scenario->{
+                InverseParentState.Active active=state.startStaticActive();
+                try {
+                    if(fail) scenario.check("armed",0,InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(targets,variants);
+                    if(fail) scenario.check("failureHits",1,InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                    Runtime.getRuntime().gc();
+                } finally {active.close();}
+                active.verify(scenario::check);
+                state.verify(scenario::check,"",changed,true,true);
+                for(int k=2;k<4;k++) scenario.check("jni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+                Runtime.getRuntime().gc();
+                state.verify(scenario::check,"gc",changed,true,true);
+                for(int k=2;k<4;k++) scenario.check("gcJni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+            });
+        }
+    }
+
     private void runInverseParentScenarios() throws Exception {
         InverseParentState state = new InverseParentState();
         for (int i=0;i<4;i++) StandardJvmtiClient.cacheInterfaceDispatch(i,state.own[i]);
@@ -4034,7 +4065,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             String variant="inverse-parent-"+(restoring?"original":"added");
             Class<?>[] targets=state.targets(round!=0);
             String[] variants=new String[targets.length]; java.util.Arrays.fill(variants,variant);
-            final int rejectedIndex=round==0?0:3;
+            final int rejectedIndex=round==0?0:1;
             if(!fail) runScenario("inverse-parent-active-"+(restoring?"restore-":"apply-")+round,71,scenario->{
                 scenario.expectRejectionBy(state.children[rejectedIndex]);
                 InverseParentState.Active active=state.startActive();
@@ -4053,6 +4084,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 for(int k=0;k<4;k++) scenario.check("gcJni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
             });
         }
+        runInverseStaticScenarios();
     }
 
     private void runReceiverLossScenarios() throws Exception {

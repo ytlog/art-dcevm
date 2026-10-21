@@ -180,6 +180,7 @@ int main(int argc, char** argv) {
     Require(modern_access(&modern_pc,true)==7&&modern_pc.dex_pc==~uint32_t{0},"modern frame unwind PC incorrect");
     std::vector<Hook> hooks;
     bool supported = mode == 1 || mode == 2 || mode == 3 || mode >= 6;
+    Require(!invoke_kind::CopiedFrames(), "copied-frame guard available before installation");
     Require(invoke_kind::Prepare(&hooks) == supported, "wrong optional-service decision");
     if (!supported) {
       Require(hooks.empty(), "partial optional hooks escaped preparation");
@@ -355,6 +356,7 @@ int main(int argc, char** argv) {
         Require(!invoke_kind::SelfCalls(), "unprobed scope enabled self calls");
         invoke_kind::ObserveScope(&fake_thread,&thread_layout,&layout,{&admission.root});
         Require(!invoke_kind::SelfCalls(), "unprobed Class enabled self calls");
+        Require(!invoke_kind::CopiedFrames(), "unprobed Class enabled copied-frame admission");
         if (mode == 11 || mode == 16) {
           for (const auto& hook : hooks)
             if (std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheLegacy.name)
@@ -369,6 +371,7 @@ int main(int argc, char** argv) {
           fake_thread.marking = 1;
         }
         invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8);
+        Require(invoke_kind::CopiedFrames() == (mode != 13), "copied-frame admission ignored missing ownership hook or required self selector");
         const bool complete = mode == 6 || mode == 10 || mode == 12;
         Require(invoke_kind::SelfCalls() == complete && invoke_kind::SelectionServices() == complete,
                 "combined selection capability is not the conjunction");
@@ -512,6 +515,7 @@ int main(int argc, char** argv) {
       }
       invoke_kind::Installed(false);
       Require(!invoke_kind::Enable(), "enabled after installer rollback");
+      Require(!invoke_kind::CopiedFrames(), "copied-frame admission survived rollback");
       Require(!invoke_kind::SelfCalls(false) && !invoke_kind::SelfCalls(true), "self admission survived rollback");
     }
     std::cout << "Invocation guard case " << mode << " PASS\n";

@@ -463,6 +463,35 @@ class ApkVerificationTests(unittest.TestCase):
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group=group)
 
+    def test_active_static_parent_changes_require_calls_gc_and_rollback(self):
+        for api in (33,36):
+            with self.subTest(api=api):
+                names={item[0] for item in runner.scenario_sequence("inverse-static")}
+                report=complete_report(api=api)
+                report["scenarios"]=[item for item in report["scenarios"] if item["name"] in names]
+                runner.validate_report(report,scenario_group="inverse-static")
+                apply=next(item for item in report["scenarios"] if item["name"]=="inverse-static-apply-0")
+                for key in ("active2","active3","joined2","joined3","jni2","gc3.parent","3.cachedOwn","3.cachedHandle"):
+                    original=apply["checks"]
+                    apply["checks"]=[check for check in original if check["name"]!=key]
+                    with self.subTest(missing=key),self.assertRaises(runner.RunFailure):
+                        runner.validate_report(report,scenario_group="inverse-static")
+                    apply["checks"]=original
+                check=next(check for check in apply["checks"] if check["name"]=="3.cachedOwn")
+                original=dict(check)
+                check.update(expected="java.lang.AbstractMethodError",actual="java.lang.AbstractMethodError",passed=True)
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report,scenario_group="inverse-static")
+                check.update(original)
+                apply["actualCode"]=71
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report,scenario_group="inverse-static")
+                apply["actualCode"]=0
+                abort=next(item for item in report["scenarios"] if item["name"]=="inverse-static-restore-abort-0")
+                abort["checks"]=[check for check in abort["checks"] if check["name"]!="failureHits"]
+                with self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report,scenario_group="inverse-static")
+
     def test_obsolete_self_calls_follow_reported_selection_services(self):
         names = {item[0] for item in runner.scenario_sequence("method-private")}
         for api, selection in ((33, False), (35, True), (35, False), (36, True),

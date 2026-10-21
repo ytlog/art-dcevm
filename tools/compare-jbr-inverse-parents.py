@@ -24,29 +24,37 @@ public class InverseParentOracle {
   }
   public static void main(String[] args)throws Exception {
     InverseParentState state=new InverseParentState();
+    boolean staticsOnly=args.length>1&&args[1].equals("static");
+    if(staticsOnly) {
+      java.util.concurrent.CountDownLatch open=new java.util.concurrent.CountDownLatch(0);
+      for(int k=2;k<4;k++) {
+        java.lang.reflect.Method method=state.children[k].getMethod("await",java.util.concurrent.CountDownLatch.class,java.util.concurrent.CountDownLatch.class);
+        for(int i=0;i<30000;i++) if(!Integer.valueOf(11).equals(method.invoke(state.receivers[k],open,open)))throw new AssertionError("static await warmup");
+      }
+    }
     for(int i=0;i<30000;i++) for(int k=0;k<4;k++)
       if(InverseParentFixture.local(state.receivers[k],k)!=11)throw new AssertionError("warmup");
     for(int round=0;round<2;round++) for(int phase=0;phase<4;phase++) {
       boolean restoring=phase>=2,fail=phase%2==0,changed=phase==1||phase==2;
-      Class<?>[] targets=state.targets(round!=0);
+      Class<?>[] targets=state.targets(round!=0,staticsOnly);
       ClassDefinition[] definitions=new ClassDefinition[targets.length];
       for(int i=0;i<targets.length;i++) definitions[i]=new ClassDefinition(targets[i],
         fail&&i==targets.length-1?new byte[]{0,1}:Files.readAllBytes(Paths.get(args[0],
           restoring?"original":"added",targets[i].getName().replace('.','/')+".class")));
-      InverseParentState.Active active=state.startActive();
+      InverseParentState.Active active=staticsOnly?state.startStaticActive():state.startActive();
       try {
         try{inst.redefineClasses(definitions);if(fail)throw new AssertionError("batch accepted");}
         catch(InternalError expected){if(!fail||expected.getClass()!=InternalError.class)throw expected;checks++;}
       } finally {active.close();}
-      for(int k=0;k<4;k++) System.out.println("active"+round+"/"+phase+"/"+k+"="+active.observation(k));
-      state.verify(InverseParentOracle::eq,"",changed,false);
-      for(int k=0;k<4;k++) {
+      for(int k=staticsOnly?2:0;k<4;k++) System.out.println("active"+round+"/"+phase+"/"+k+"="+active.observation(k));
+      state.verify(InverseParentOracle::eq,"",changed,false,staticsOnly);
+      for(int k=staticsOnly?2:0;k<4;k++) {
         final int slot=k;
         System.out.println("cachedReflection"+round+"/"+phase+"/"+k+"="+
             InverseParentState.result(()->state.own[slot].invoke(state.receivers[slot])));
         System.out.println("cachedHandle"+round+"/"+phase+"/"+k+"="+state.cachedHandleResult(k));
       }
-      System.gc();state.verify(InverseParentOracle::eq,"gc",changed,false);
+      System.gc();state.verify(InverseParentOracle::eq,"gc",changed,false,staticsOnly);
       System.out.println("state "+round+"/"+phase+" PASS");
     }
     System.out.println("PASS checks="+checks);
@@ -92,24 +100,30 @@ def main():
     mf=evidence/'manifest.mf';mf.write_text('Premain-Class: InverseParentOracle\nCan-Redefine-Classes: true\n\n')
     agent=evidence/'agent.jar'
     run('agent',[java/'bin/jar','cfm',agent,mf,'-C',harness,'InverseParentOracle.class'])
-    for name,flags in [('interpreter',['-Xint']),('jit',['-Xbatch','-XX:+PrintCompilation',
-            '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.InverseParentFixture::local'])]:
+    for name,flags,statics in [('interpreter',['-Xint'],False),('jit',['-Xbatch','-XX:+PrintCompilation',
+            '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.InverseParentFixture::local'],False),
+            ('static-interpreter',['-Xint'],True),('static-jit',['-Xbatch','-XX:+PrintCompilation',
+            '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.InverseParentFixture$Static*::await'],True)]:
         output=run(name,[java/'bin/java',*flags,'-Xcheck:jni','-XX:+AllowEnhancedClassRedefinition',
-          '-javaagent:'+str(agent),'-cp',str(harness)+':'+str(old),'InverseParentOracle',patches])
+          '-javaagent:'+str(agent),'-cp',str(harness)+':'+str(old),'InverseParentOracle',patches,*(['static'] if statics else [])])
         if output.count(' PASS\n')!=8:raise RuntimeError('Incomplete inverse parent matrix')
         if name=='jit' and not any('InverseParentFixture::local' in line and 'CompileCommand:' not in line for line in output.splitlines()):
             raise RuntimeError('Missing compiled old caller evidence')
+        if name=='static-jit':
+            for child in ('StaticDefault','StaticAbstract'):
+                if not any('InverseParentFixture$'+child+'::await' in line and 'CompileCommand:' not in line and 'made not compilable' not in line for line in output.splitlines()):
+                    raise RuntimeError('Missing compiled static caller evidence')
         observations=dict(re.findall(r'^((?:active|cachedReflection|cachedHandle)\d/\d/\d)=(.*)$',output,re.M))
         expected={}
         for round in range(2):
             for phase in range(4):
-                for slot in range(4):
+                for slot in range(2 if statics else 0,4):
                     expected[f'active{round}/{phase}/{slot}']='java.lang.IncompatibleClassChangeError' if phase%2 and slot<2 else '11'
                     for prefix in ('cachedReflection','cachedHandle'):
                         expected[f'{prefix}{round}/{phase}/{slot}']='java.lang.AbstractMethodError' if phase in (1,2) and slot%2 else '11'
         if observations != expected:raise RuntimeError('Pinned active-frame or cached-slot observations changed')
-        manifest['runs'].append(dict(mode=name,states=8,checks=int(re.search(r'^PASS checks=(\d+)$',output,re.M)[1]),
-            observations=observations,referenceDefects=['cached reflection/handle aliases inherited abstract', 'obsolete private self call throws ICCE'],passed=True))
+        manifest['runs'].append(dict(mode=name,staticsOnly=statics,states=8,checks=int(re.search(r'^PASS checks=(\d+)$',output,re.M)[1]),
+            observations=observations,referenceDefects=['cached reflection/handle aliases inherited abstract']+([] if statics else ['obsolete private self call throws ICCE']),passed=True))
     manifest['inputs']={str(p.relative_to(ROOT)):hashlib.sha256(p.read_bytes()).hexdigest() for p in sources+[Path(__file__)]}
     manifest['harnessSha256']=hashlib.sha256(SOURCE.encode()).hexdigest();manifest['passed']=True
     (evidence/'summary.json').write_text(json.dumps(manifest,indent=2)+'\n')
