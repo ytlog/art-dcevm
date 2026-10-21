@@ -2,7 +2,6 @@
 #include <atomic>
 #include <cstdarg>
 #include <mutex>
-#include "evolution/modifiers.h"
 #include "platform/abi/arm64/common/jni_invoke.h"
 #include "platform/common/art_hook.h"
 #include "platform/common/member_mapping.h"
@@ -38,10 +37,10 @@ bool Reject(jobject receiver, jmethodID method) {
   // Public JVMTI decodes both pointer and index IDs. Do not retain app Classes,
   // method classifications or a caller's disposable JVMTI environment.
   jclass declaring = nullptr;
-  jint modifiers = 0;
+  jboolean interface_owner = JNI_FALSE;
   bool readable = environment->GetMethodDeclaringClass(method, &declaring) == JVMTI_ERROR_NONE && declaring &&
-      environment->GetClassModifiers(declaring, &modifiers) == JVMTI_ERROR_NONE;
-  bool incompatible = readable && (modifiers & evolution::kAccInterface) && !jni->IsInstanceOf(receiver, declaring);
+      environment->IsInterface(declaring, &interface_owner) == JVMTI_ERROR_NONE;
+  bool incompatible = readable && interface_owner && !jni->IsInstanceOf(receiver, declaring);
   if (declaring) jni->DeleteLocalRef(declaring);
   if (jni->ExceptionCheck()) return true;
   if (!readable || incompatible) {

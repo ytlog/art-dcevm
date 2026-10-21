@@ -75,6 +75,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
     private Bundle arguments;
     private Context context;
     private Throwable preparationError;
+    private int benchmarkCpu = -1;
     private final JSONObject report = new JSONObject();
 
     /** Stops ART's JIT workers for the rest of the process (test engine library). */
@@ -82,6 +83,8 @@ public final class HookOverheadBenchmark extends Instrumentation {
     static native int boundHandleEntryMode();
     static native int boundHandlePreparationProofs();
     static native boolean jniPrepare(Class<?> base);
+    static native int pinCpu(int cpu);
+    static native int pinnedCpu();
     static native long jniLoop(Object target, int kind, int count);
     static native long interpreterUnwind();
     private static long unwindFromInterpretedCaller() { return interpreterUnwind(); }
@@ -150,7 +153,7 @@ public final class HookOverheadBenchmark extends Instrumentation {
             throw new IllegalArgumentException("Unsupported state " + state);
         if (!mode.equals("jit") && !mode.equals("interp"))
             throw new IllegalArgumentException("Unsupported mode " + mode);
-        report.put("schemaVersion", 2).put("state", state).put("mode", mode)
+        report.put("schemaVersion", 4).put("state", state).put("mode", mode)
                 .put("device", new JSONObject().put("model", Build.MODEL)
                         .put("api", Build.VERSION.SDK_INT).put("release", Build.VERSION.RELEASE));
         // Selects CheckJNI before any agent; this only loads the engine library.
@@ -158,6 +161,13 @@ public final class HookOverheadBenchmark extends Instrumentation {
         report.put("checkJni", arguments == null ? null : arguments.getString("checkjni"));
         System.loadLibrary("artdcevm_bench");
         if (!jniPrepare(HookBenchTypes.Base.class)) throw new AssertionError("JNI IDs unavailable");
+        String cpuArgument = argument("cpu", "none");
+        if (!cpuArgument.equals("none")) {
+            benchmarkCpu = Integer.parseInt(cpuArgument);
+            if (benchmarkCpu < 0 || pinCpu(benchmarkCpu) != benchmarkCpu)
+                throw new AssertionError("Cannot bind benchmark CPU " + benchmarkCpu);
+        }
+        report.put("cpuAffinity", benchmarkCpu);
 
         HookBenchTypes.Base[] early = {new HookBenchTypes.E0(), new HookBenchTypes.E1(),
                 new HookBenchTypes.E2(), new HookBenchTypes.E3(), new HookBenchTypes.E4(),
@@ -344,6 +354,11 @@ public final class HookOverheadBenchmark extends Instrumentation {
         measure(workloads, "jniCallIntMethod", compiled, n -> jniLoop(target, 0, n));
         measure(workloads, "jniCallStaticIntMethod", compiled, n -> jniLoop(target, 1, n));
         measure(workloads, "jniGetIntField", compiled, n -> jniLoop(target, 2, n));
+        measure(workloads, "jniIsAssignableFromArray", compiled, n -> jniLoop(target, 3, n));
+        JSONObject arrayCheck = workloads.getJSONObject("jniIsAssignableFromArray");
+        if (arrayCheck.getLong("checksum") != (long) arrayCheck.getInt("callsPerBatch") * SAMPLES)
+            throw new AssertionError("Invalid JNI array covariance checksum");
+        setup.put("arrayAssignabilityChecks", true);
         measure(workloads, "classForNameLoaded", compiled, n -> {
             long total = 0;
             for (int i = 0; i < n; i++) total += Class.forName(forName, false, loader).hashCode() & 1;
@@ -360,6 +375,8 @@ public final class HookOverheadBenchmark extends Instrumentation {
      * over {@link #SAMPLES} batches.
      */
     private void measure(JSONObject into, String name, boolean compiled, Workload workload) throws Throwable {
+        if (benchmarkCpu >= 0 && pinnedCpu() != benchmarkCpu)
+            throw new AssertionError("Benchmark CPU binding lost before " + name);
         int count = 64;
         while (true) {
             long begin = System.nanoTime();
@@ -385,7 +402,10 @@ public final class HookOverheadBenchmark extends Instrumentation {
         Arrays.sort(sorted);
         JSONArray raw = new JSONArray();
         for (double sample : samples) raw.put(Math.round(sample * 1000) / 1000.0);
+        if (benchmarkCpu >= 0 && pinnedCpu() != benchmarkCpu)
+            throw new AssertionError("Benchmark CPU binding lost after " + name);
         into.put(name, new JSONObject().put("callsPerBatch", count)
+                .put("cpuAffinity", benchmarkCpu)
                 .put("medianNs", sorted[SAMPLES / 2]).put("minNs", sorted[0])
                 .put("p10Ns", sorted[SAMPLES / 10]).put("p90Ns", sorted[SAMPLES - 1 - SAMPLES / 10])
                 .put("samplesNs", raw).put("checksum", checksum));

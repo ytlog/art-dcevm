@@ -39,6 +39,8 @@ bool VerifyTarget(const std::optional<runtime_thread::VerifiedThread>& thread, a
 bool ClassAccess(const runtime_thread::VerifiedThread& thread, abi::arm64::ClassRedefinitionPrefix* self, jclass klass, uint32_t* access);
 // Runnable, rooted Class already decoded by the caller; no allocation or suspension.
 bool ClassAccess(const runtime_thread::VerifiedThread& thread, const void* klass, uint32_t* access);
+// Runnable, rooted Class. Read its loader only with the verified Class layouts.
+bool ClassLoader(const runtime_thread::VerifiedThread& thread, const void* klass, void** loader);
 // After ART allocated a redefinition's replacement classes: drop the layouts
 // whose holder slots do not name the target and a class of the incoming DEX.
 // Returns the selected layout's table index, or -1 with `why`.

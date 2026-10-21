@@ -20,7 +20,7 @@ void* hookA=nullptr;void* hookV=nullptr;void* directA=nullptr;void* directV=null
 jmethodID alias=nullptr;int aliasLookups=0;
 namespace artdcevm::member_mapping { jmethodID CopiedJniTarget(jmethodID id) noexcept {aliasLookups++;return alias?alias:id;} }
 int mode=0,hooks=0,unhooks=0,originals=0,lookups=0,locals=0,deletes=0,instances=0;
-bool failHook=false,failUnhook=false,pending=false,lookupFail=false,modFail=false,envFail=false,compatible=true,interface=true;
+bool failHook=false,failUnhook=false,pending=false,lookupFail=false,interfaceFail=false,envFail=false,compatible=true,interface=true;
 std::string exception;
 JNIEnv* nativeEnv;JavaVM machine; jvmtiEnv environment; jvalue operands[4]{};
 void Require(bool v,const char* why){if(!v)throw std::runtime_error(why);}
@@ -56,14 +56,15 @@ jboolean Pending(JNIEnv*){return pending;}
 void Delete(JNIEnv*,jobject){deletes++;}
 jboolean Instance(JNIEnv*,jobject,jclass){instances++;return compatible;}
 jvmtiError Declaring(jvmtiEnv* env,jmethodID,jclass* out){Require(env==&environment,"borrowed caller environment");lookups++;if(lookupFail)return JVMTI_ERROR_INVALID_METHODID;*out=reinterpret_cast<jclass>(20);locals++;return JVMTI_ERROR_NONE;}
-jvmtiError Modifiers(jvmtiEnv*,jclass,jint* out){*out=interface?0x200:1;return modFail?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
+jvmtiError IsInterface(jvmtiEnv*,jclass,jboolean* out){*out=interface?JNI_TRUE:JNI_FALSE;return interfaceFail?JVMTI_ERROR_INTERNAL:JVMTI_ERROR_NONE;}
+jvmtiError Modifiers(jvmtiEnv*,jclass,jint*){throw std::runtime_error("receiver classification queried unrelated class modifiers");}
 Value RunDirectV(jobject receiver,jmethodID method,...){va_list args;va_start(args,method);Value result=reinterpret_cast<CallV>(directV)(reinterpret_cast<void*>(77),receiver,method,args);va_end(args);return result;}
 Value RunV(jobject receiver,jmethodID method,...){va_list args;va_start(args,method);Value result=reinterpret_cast<CallV>(hookV)(reinterpret_cast<void*>(77),receiver,method,args);va_end(args);return result;}
 int main(int argc,char** argv){try{
  mode=argc>1?std::stoi(argv[1]):0;operands[0].i=37;operands[1].j=0x123456789LL;operands[2].d=2.5;operands[3].l=reinterpret_cast<jobject>(56);
  JNINativeInterface_ jni{};jni.ExceptionCheck=Pending;jni.DeleteLocalRef=Delete;jni.IsInstanceOf=Instance;JNIEnv native{&jni};nativeEnv=&native;
  JNIInvokeInterface_ vm{};vm.GetEnv=GetEnv;machine.functions=&vm;
- jvmtiInterface_1 table{};table.GetMethodDeclaringClass=Declaring;table.GetClassModifiers=Modifiers;environment.functions=&table;
+ jvmtiInterface_1 table{};table.GetMethodDeclaringClass=Declaring;table.IsInterface=IsInterface;table.GetClassModifiers=Modifiers;environment.functions=&table;
  namespace guard=artdcevm::jni_interface_dispatch;
  Require(!guard::Enable()&&!guard::Prepare(),"unconfigured service available");
  guard::Configure(&machine,&environment);
@@ -92,7 +93,7 @@ int main(int argc,char** argv){try{
  int before=lookups;pending=true;callA(object,id);Require(lookups==before,"pending exception inspected");pending=false;
  callA(nullptr,id);callA(object,nullptr);Require(lookups==before,"null ordering changed");
  lookupFail=true;callA(object,id);Require(pending&&exception=="Ljava/lang/InternalError;","lookup failure fell through");pending=false;lookupFail=false;
- modFail=true;callA(object,id);Require(pending&&exception=="Ljava/lang/InternalError;","modifier failure fell through");pending=false;modFail=false;
+ interfaceFail=true;callA(object,id);Require(pending&&exception=="Ljava/lang/InternalError;","interface query failure fell through");pending=false;interfaceFail=false;
  envFail=true;before=lookups;callA(object,id);Require(pending&&lookups==before&&exception=="Ljava/lang/InternalError;","missing environment fell through");
  Require(locals==deletes,"declaring local roots leaked");
  std::cout<<"JNI receiver guard PASS\n";

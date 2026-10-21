@@ -289,6 +289,10 @@ Decision Evaluate(const ClassSchema& live, const ClassSchema& incoming,
   if (interface_kind_changed && incoming.self_array_reference && !abilities.self_array_verification)
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "class/interface conversion requires verifier component identity services");
+  if (interface_kind_changed && incoming.self_array_reference && (superclass_changed || parents_changed) &&
+      !abilities.self_array_assignability)
+    return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+                  "self-array parent changes require strict verifier assignability services");
   if (interface_target && !interface_kind_changed && (superclass_changed || (parents_changed && !interface_members)))
     return Reject(JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
                   "interface redefinition does not support parent changes");

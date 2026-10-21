@@ -32,7 +32,11 @@
 
 自类型数组保留 ART 的已发布 Class 身份，包括验证时首次加载的一至多维数组。整个数组查找期间暂停事务的描述符重定向，使递归组件解析仍指向已发布类；这避免把私有替换类的数组发布到 ClassTable 或写入 DexCache。验证器分解数组时，命名 `RegTypeCache` 服务把旧组件按 ART 已有 OldClasses/NewClasses 根映射到替换类。ART 11–15 的 `FindClass`/`InsertClass` 成对使用，并按替换类的 final 标志重算组件精确度；ART 16/17 使用 `FromClass`。验证继续执行原 ART 代码，失败仍拒绝整批。提交时由原生 `ReplaceReferences` 更新已发布数组的组件；增强库不分配替代数组镜像、不改共享组件字段、不重写全局引用。
 
-`self-arrays` 设备组使用与固定 JBR 相同的 `SelfArrayProbe`，覆盖 final 普通类 ↔ 接口、冷／热数组、一至三维组件、保活数组、字段和方法返回类型、缓存反射及 MethodHandle、数组读写／强制转换的精确异常、两轮恢复、GC、验证失败和映射规划失败后的恢复。数组中只保留 null 或下一级数组，没有直接目标实例；另外创建直接实例的拒绝场景仍要求 70，单独计数。此次验收不同时变更父类或父接口；数组与这些层级变更叠加的组合仍需单独验证。
+`self-arrays` 设备组使用与固定 JBR 相同的 `SelfArrayProbe`，覆盖 final 普通类 ↔ 接口、冷／热数组、一至三维组件、保活数组、字段和方法返回类型、缓存反射及 MethodHandle、数组读写／强制转换的精确异常、两轮恢复、GC、验证失败和映射规划失败后的恢复。数组中只保留 null 或下一级数组，没有直接目标实例；另外创建直接实例的拒绝场景仍要求 70，单独计数。`self-array-parents` 另覆盖转换时交换 Serializable／Cloneable 父接口：保留一至三维数组及其镜像，验证当前组件父接口图下的协变、强转、缓存／新反射和 MethodHandle 返回视图，以及失败事务、GC 和恢复。两种 fixture 的兼容视图直接返回自类型数组，不用强转掩盖验证器差异；非法 DEX 对照删除不兼容视图中的必要强转，必须以 62 拒绝。普通父类变更、带 default／abstract 方法的应用父接口及父接口同批重定义等叠加组合仍需单独验证。
+
+数组协变还有一个独立的验证器决策点：[ART 的数组赋值检查](https://android.googlesource.com/platform/art/+/android-13.0.0_r1/runtime/mirror/class-inl.h)直接读取已发布数组的组件，不能沿用旧父接口图。增强库只在命名验证器赋值入口关联当前 RegType 与实际创建它的原生缓存，以描述符确定数组维数，并要求 ART 的已解析类型证明，再调用原生 `GetComponentType` 和严格赋值检查；只有组件确实映射到替换类时才使用新结果，未映射的 primitive／普通数组保留原判断。旧 ART 的 `FromClass` 在入口先映射组件，避免内部查找内联后返回旧类型；组件查找前从已保活的替换 Class 重读已探测布局中的加载器。缓存构造入口清除前一生命周期的证明，未解析、未知缓存或嵌套类加载验证时不覆盖原判断。RegType 和缓存保持不透明，不读取其字段或 vtable；不安装全局数组赋值 Hook，数组身份、GC 根和迁移仍由 ART 管理。缺少完整命名服务时，带自类型数组的种类与父接口同时变更保留 66。
+
+固定 JBR 在父接口交换时还保留了数组首次创建时的协变关系：组件 Class 的父接口已更新，数组的 assignable／instance／cast 结果却可停留在旧图上，不兼容视图中的强转因此错误成功。`compare-jbr-self-arrays.py --parents` 按冷／热首次创建状态独立核对这些结果并记入 `knownOracleDifferences`，不计作与 Android 当前父接口图相同的调用语义。Android 保留精确 ClassCastException；不复制这一缓存异常。
 
 固定 JBR 的同名双加载器探针暴露了独立边界：仅转换一个加载器的目标时，另一个加载器的数组常量、matrix/cube 和 cast 可错误解析到被转换的类型；含坏类文件的同名双加载器失败批次还可能污染下一次恢复后的转换。`compare-jbr-self-arrays.py` 将这些结果记入 `knownOracleDifferences`，与 Android 保持加载器隔离、失败回滚及恢复的预期分开核对，不把这些差异或安全拒绝计作调用对齐。
 
@@ -51,7 +55,7 @@ Java 反射另保留固定 JBR 的访问器历史。公有查询（`getConstruct
 - 固定 JBR：`python3 tools/compare-jbr-class-kinds.py --java-home <fixed-jbr>`；可显式添加 `--include-unsafe-live-enum`，在独立进程中复核已知 GC 失败。该选项可能生成仅存于忽略证据目录的 VM 崩溃日志。
 - 设备：`tools/run-device-tests.py --scenario-group class-kinds`，覆盖 class/interface/annotation 双向重复转换、旧调用与 null 接收者的精确异常、instanceof/checkcast、缓存反射/MethodHandle/JNI ID、枚举字段和常量、存活实例与子类型拒绝、分配后整批回滚及恢复。
 - 历史访问器：`python3 tools/compare-jbr-constructor-history.py --java-home <fixed-jbr>` 使用与设备相同的 Java 探针和独立固定预期；设备 `--scenario-group constructor-history` 覆盖公有／声明根双向独立的冷／热与错误参数预热、副本与数组、两轮转换恢复、GC 和规划后失败。主机 `test-constructor-history-host.py` 另验生产守卫、原始类型拓宽、标签回收、弱引用清除／分配失败、线程退出清理与安装重试。
-- 自类型数组：`python3 tools/compare-jbr-self-arrays.py --java-home <fixed-jbr>`；设备 `--scenario-group self-arrays`。`test-verification-redirect-host.py` 验证生产重定向的作用域、加载器身份、精确度、服务缺失及原验证结果传递；`test-apk-verification.py` 拒绝缺失数组行为或擅改异常的报告。
+- 自类型数组：`python3 tools/compare-jbr-self-arrays.py --java-home <fixed-jbr>`；添加 `--parents` 测父接口交换，设备 `--scenario-group self-arrays` 包含两组，`--scenario-group self-array-parents` 可单独运行父接口组。`test-verification-redirect-host.py` 验证生产重定向的作用域、加载器身份、精确度、服务缺失及原验证结果传递；`test-apk-verification.py` 拒绝缺失数组行为或擅改异常的报告。
 - 主机：结构策略、真实命名调用守卫和固定声明、类文件配方、安装与回滚契约；完整设备套件继续验证原有功能。
 
 设备及 APK 哈希和逐次验证命令只记录在忽略的 `local/verification/` 中。此矩阵不声称支持带已有实例的普通类转接口、新增 Enum 父类或移除 Enum 父类。普通类／接口自类型数组已在上述前提下开放；服务缺失保留 66。原始指针 JNI ID 启动配置仍可能被 ART 的结构重定义准入以 79 拒绝，这些结果单列为未对齐，不计作数组调用成功。JBR 的跨加载器和失败批次边界另行记录，不声称该组合完全对齐。

@@ -319,6 +319,23 @@ bool ClassAccess(const VerifiedThread&, const void* mirror, uint32_t* access) {
   return true;
 }
 
+bool ClassLoader(const VerifiedThread& thread, const void* mirror, void** loader) {
+  const transaction::Context* context = transaction::Current();
+  if (!enabled || !context || !context->probed || !mirror) return false;
+  std::optional<uint32_t> agreed;
+  for (size_t i = 0; i < kLayoutCount; ++i) {
+    if (!(context->layouts & (LayoutMask{1} << i))) continue;
+    uint32_t dex_cache, class_loader;
+    int32_t class_def, type;
+    kProbes[i].origin(mirror, &dex_cache, &class_loader, &class_def, &type);
+    if (agreed && *agreed != class_loader) return false;
+    agreed = class_loader;
+  }
+  if (!agreed) return false;
+  *loader = runtime_thread::Read(thread, *agreed);
+  return true;
+}
+
 bool ClassOrigin(const VerifiedThread& thread, ClassRedefinitionPrefix* self, jclass klass,
                  const DexFilePrefix** dex, int32_t* class_def, bool* boot, std::string* descriptor) {
   const transaction::Context* context = transaction::Current();

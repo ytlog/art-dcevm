@@ -116,6 +116,8 @@ struct Abilities {
   bool class_kinds = false;
   // Canonical array lookup and register-type component redirection are available.
   bool self_array_verification = false;
+  // Strict array covariance can follow a replacement's changed parent graph.
+  bool self_array_assignability = false;
 };
 
 struct Decision {

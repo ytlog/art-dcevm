@@ -704,6 +704,37 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
         int instruction = code + 16 + u32(bytes, code + 12) * 2 - 2;
         if (code == 0 || bytes[instruction] != 0x0f) throw new AssertionError("Expected return-int");
         bytes[instruction] = 0x11; // return-object in an int method: real ART verifier failure.
+        return sealDex(bytes);
+    }
+    // Remove the sole check-cast from a fixture's incompatible parent view.
+    // The DEX stays well-formed; ART must reject the now invalid array return.
+    static byte[] invalidParentView(byte[] original, String method) throws Exception {
+        byte[] bytes = original.clone();
+        int[] cursor = {u32(bytes, u32(bytes, 100) + 24)};
+        int[] counts = new int[4];
+        for (int i = 0; i < 4; ++i) counts[i] = uleb(bytes, cursor);
+        for (int i = 0; i < counts[0] + counts[1]; ++i) { uleb(bytes, cursor); uleb(bytes, cursor); }
+        for (int section = 2; section < 4; ++section) {
+            int index = 0;
+            for (int i = 0; i < counts[section]; ++i) {
+                index += uleb(bytes, cursor); uleb(bytes, cursor);
+                int code = uleb(bytes, cursor);
+                int name = u32(bytes, u32(bytes, 92) + index * 8 + 4);
+                int[] string = {u32(bytes, u32(bytes, 60) + name * 4)};
+                uleb(bytes, string);
+                int end = string[0];
+                while (bytes[end] != 0) ++end;
+                if (!method.equals(new String(bytes, string[0], end - string[0], java.nio.charset.StandardCharsets.UTF_8))) continue;
+                if (code == 0 || u32(bytes, code + 12) != 4 || bytes[code + 16] != 0x07
+                        || bytes[code + 18] != 0x1f || bytes[code + 22] != 0x11)
+                    throw new AssertionError("Expected move-object, check-cast and return-object");
+                java.util.Arrays.fill(bytes, code + 18, code + 22, (byte) 0);
+                return sealDex(bytes);
+            }
+        }
+        throw new AssertionError("Parent view method not found");
+    }
+    private static byte[] sealDex(byte[] bytes) throws Exception {
         System.arraycopy(MessageDigest.getInstance("SHA-1").digest(java.util.Arrays.copyOfRange(bytes, 32, bytes.length)), 0, bytes, 12, 20);
         Adler32 checksum = new Adler32(); checksum.update(bytes, 12, bytes.length - 12);
         int sum = (int) checksum.getValue();

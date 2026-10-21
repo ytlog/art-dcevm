@@ -221,6 +221,38 @@ class ApkVerificationTests(unittest.TestCase):
         with self.assertRaises(runner.RunFailure):
             runner.validate_report(broken, scenario_group='self-arrays')
 
+    def test_self_array_parents_require_covariance_views_and_atomic_recovery(self):
+        report = complete_report(36)
+        report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('self-array-parents-')]
+        runner.validate_report(report, scenario_group='self-array-parents')
+        for name, key in (('self-array-parents-class-cold-0-apply', 'parents.serializable.cast3'),
+                          ('self-array-parents-class-warm-1-restore', 'gc.parents.cloneable.instance2'),
+                          ('self-array-parents-interface-cold-0-apply', 'parents.serializable.handleView3'),
+                          ('self-array-parents-interface-warm-verify-abort', 'twin.parents.cloneable.cachedView'),
+                          ('self-array-parents-class-warm-mapping-abort', 'parents.serializable.cachedOwner'),
+                          ('self-array-parents-interface-cold-parent-verify-abort', 'gc.parents.cloneable.assignable3'),
+                          ('self-array-parents-interface-cold-recovery', 'parents.cloneable.freshView'),
+                          ('self-array-parents-class-cold-instance-reject', 'parents.directParents')):
+            broken = copy.deepcopy(report)
+            scenario = next(s for s in broken['scenarios'] if s['name'] == name)
+            scenario['checks'] = [c for c in scenario['checks'] if c['name'] != key]
+            with self.subTest(scenario=name, missing=key), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group='self-array-parents')
+        for kind, present in [('class', 'serializable'), ('interface', 'cloneable')]:
+            other = 'cloneable' if present == 'serializable' else 'serializable'
+            expected = runner.SELF_ARRAY_PARENT_EXPECTATIONS[kind]
+            self.assertIs(expected[present + '.direct'], True)
+            self.assertIs(expected[other + '.assignable'], False)
+            for rank in range(1, 4):
+                self.assertIs(expected[present + '.cast' + str(rank)], True)
+                self.assertEqual(expected[other + '.cast' + str(rank)], 'java.lang.ClassCastException')
+        broken = copy.deepcopy(report)
+        scenario = next(s for s in broken['scenarios'] if s['name'] == 'self-array-parents-class-warm-0-apply')
+        check = next(c for c in scenario['checks'] if c['name'] == 'parents.serializable.cachedView')
+        check['expected'] = check['actual'] = True
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(broken, scenario_group='self-array-parents')
+
     def test_proxy_parent_graph_requires_type_reference_and_call_evidence(self):
         report = complete_report(36)
         report["scenarios"] = [s for s in report["scenarios"] if s["name"].startswith("proxy-interface")]

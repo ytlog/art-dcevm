@@ -406,37 +406,53 @@ CLASS_KIND_SCENARIOS.extend((f"class-kind-enum-reject-{kind}", [f"class-kind-enu
 CLASS_KIND_SCENARIOS.extend((f"class-kind-{kind}-enum", [f"class-kind-{kind}-e"], 66) for kind in ("c", "i", "a"))
 SCENARIOS += tuple(CLASS_KIND_SCENARIOS)
 SELF_ARRAY_EXPECTATIONS = json.loads((ROOT / "app/src/debug/assets/self-array-expectations.json").read_text())
+SELF_ARRAY_PARENT_EXPECTATIONS = json.loads((ROOT / "app/src/debug/assets/self-array-parent-expectations.json").read_text())
 SELF_ARRAY_SCENARIOS = []
 SELF_ARRAY_REQUIRED = {}
-for _kind in ("class", "interface"):
-    _original_interface = _kind == "interface"
-    _original = "self-array-" + _kind
-    _changed = "self-array-" + ("class" if _original_interface else "interface")
-    for _warm in ("cold", "warm"):
-        _prefix = f"self-array-{_kind}-{_warm}"
-        for _round in range(2):
-            for _phase in ("apply", "restore"):
-                _name = f"{_prefix}-{_round}-{_phase}"
-                _iface = not _original_interface if _phase == "apply" else _original_interface
-                SELF_ARRAY_SCENARIOS.append((_name, [_changed if _phase == "apply" else _original], 0))
-                _required = dict(SELF_ARRAY_EXPECTATIONS, interface=_iface)
-                _required.update({"gc." + key: value for key, value in dict(SELF_ARRAY_EXPECTATIONS, interface=_iface).items()})
-                if _phase == "apply":
-                    _required.update({"twin." + key: value for key, value in dict(SELF_ARRAY_EXPECTATIONS, interface=_original_interface).items()})
-                SELF_ARRAY_REQUIRED[_name] = _required
-        for _phase, _code in (("verify-abort", 62), ("mapping-abort", 110), ("recovery", 0), ("recovery-restore", 0)):
-            _name = _prefix + "-" + _phase
-            SELF_ARRAY_SCENARIOS.append((_name, [_changed, _changed] if _phase == "verify-abort" else
-                                        [_original if _phase == "recovery-restore" else _changed], _code))
-            SELF_ARRAY_REQUIRED[_name] = dict(SELF_ARRAY_EXPECTATIONS,
-                interface=not _original_interface if _phase == "recovery" else _original_interface)
-            if _phase == "verify-abort":
-                SELF_ARRAY_REQUIRED[_name].update({"twin." + key: value for key, value in dict(SELF_ARRAY_EXPECTATIONS, interface=_original_interface).items()})
-            if _phase == "mapping-abort": SELF_ARRAY_REQUIRED[_name].update(armed=0, failureHits=1)
-        if not _original_interface:
-            _name = _prefix + "-instance-reject"
-            SELF_ARRAY_SCENARIOS.append((_name, [_changed], 70))
-            SELF_ARRAY_REQUIRED[_name] = dict(SELF_ARRAY_EXPECTATIONS, interface=False, instanceKept=True, instanceCall=29)
+
+def self_array_expected(topology, iface, **extra):
+    result = dict(SELF_ARRAY_EXPECTATIONS, interface=iface, **extra)
+    if topology:
+        result.update({"parents." + key: value for key, value in SELF_ARRAY_PARENT_EXPECTATIONS["interface" if iface else "class"].items()})
+    return result
+
+for _topology in ("", "parents-"):
+    for _kind in ("class", "interface"):
+        _original_interface = _kind == "interface"
+        _original = "self-array-" + _topology + _kind
+        _changed = "self-array-" + _topology + ("class" if _original_interface else "interface")
+        for _warm in ("cold", "warm"):
+            _prefix = f"self-array-{_topology}{_kind}-{_warm}"
+            for _round in range(2):
+                for _phase in ("apply", "restore"):
+                    _name = f"{_prefix}-{_round}-{_phase}"
+                    _iface = not _original_interface if _phase == "apply" else _original_interface
+                    SELF_ARRAY_SCENARIOS.append((_name, [_changed if _phase == "apply" else _original], 0))
+                    _required = self_array_expected(_topology, _iface)
+                    _required.update({"gc." + key: value for key, value in self_array_expected(_topology, _iface).items()})
+                    if _phase == "apply":
+                        _required.update({"twin." + key: value for key, value in self_array_expected(_topology, _original_interface).items()})
+                    SELF_ARRAY_REQUIRED[_name] = _required
+            if _topology:
+                _name = _prefix + "-parent-verify-abort"
+                SELF_ARRAY_SCENARIOS.append((_name, [_changed], 62))
+                _expected = self_array_expected(_topology, _original_interface)
+                SELF_ARRAY_REQUIRED[_name] = dict(_expected)
+                for _scope in ("twin.", "gc."):
+                    SELF_ARRAY_REQUIRED[_name].update({_scope + key: value for key, value in _expected.items()})
+            for _phase, _code in (("verify-abort", 62), ("mapping-abort", 110), ("recovery", 0), ("recovery-restore", 0)):
+                _name = _prefix + "-" + _phase
+                SELF_ARRAY_SCENARIOS.append((_name, [_changed, _changed] if _phase == "verify-abort" else
+                                            [_original if _phase == "recovery-restore" else _changed], _code))
+                SELF_ARRAY_REQUIRED[_name] = self_array_expected(_topology,
+                    not _original_interface if _phase == "recovery" else _original_interface)
+                if _phase == "verify-abort":
+                    SELF_ARRAY_REQUIRED[_name].update({"twin." + key: value for key, value in self_array_expected(_topology, _original_interface).items()})
+                if _phase == "mapping-abort": SELF_ARRAY_REQUIRED[_name].update(armed=0, failureHits=1)
+            if not _original_interface:
+                _name = _prefix + "-instance-reject"
+                SELF_ARRAY_SCENARIOS.append((_name, [_changed], 70))
+                SELF_ARRAY_REQUIRED[_name] = self_array_expected(_topology, False, instanceKept=True, instanceCall=29)
 SCENARIOS += tuple(SELF_ARRAY_SCENARIOS)
 
 CONSTRUCTOR_HISTORY_EXPECTATIONS = json.loads((ROOT / "app/src/debug/assets/constructor-history-expectations.json").read_text())
@@ -1614,6 +1630,8 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
         return tuple(CONSTRUCTOR_HISTORY_SCENARIOS)
     if scenario_group == "self-arrays":
         return tuple(SELF_ARRAY_SCENARIOS)
+    if scenario_group == "self-array-parents":
+        return tuple(row for row in SELF_ARRAY_SCENARIOS if row[0].startswith("self-array-parents-"))
     if scenario_group == "class-kinds":
         return tuple(CLASS_KIND_SCENARIOS)
     if scenario_group == "interface-selection":
@@ -1886,7 +1904,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays", "self-array-parents"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

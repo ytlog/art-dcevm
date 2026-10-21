@@ -32,6 +32,8 @@ done
 
 设备 runner 的 `run.json` 记录 `totalSeconds`、各 ADB 阶段的 `commandSeconds`，新 APK 还记录场景与 JVMTI 耗时、检查点耗时及最慢五个场景。场景时间包含场景内检查点，JVMTI 时间是其子集；检查点累计值截止本次发布前，不能将这些值相加。日常先用对应 `--scenario-group` 定向验证，提交前执行适用的完整矩阵。计时不改变返回码、断言、场景数或 30,000 次热调用覆盖。
 
+开发阶段只运行受影响的功能组、生产主机检查和预先选定的性能单元；代码冻结后再执行一次适用的完整验收。失败时先缩到失败单元定位，修复后按影响范围补验，复用已证明未受影响的结果并记录来源、源码及产物哈希。修改共享决策路径时重新评估影响范围；文档修改只需相应文档检查。性能协议在运行前固定，保留失败记录，不追加轮次把越线结果平均掉。
+
 ## JBR 对照
 
 `tools/compare-jbr-interface-removal.py` 将同一组 Java 夹具编译为 ClassFile，在固定 JBR `21.0.11+10-b1163.116` 上执行。源码基准为 `cf1f197170a0f04c6559feb873e362583be021d1`，运行时不匹配时拒绝把结果记为该基准的对齐证据：
@@ -220,6 +222,8 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由 Hook 库按目�
 
 无直接目标实例的自类型数组转换使用 `tools/compare-jbr-self-arrays.py --java-home <fixed-jbr>` 与设备 `--scenario-group self-arrays`。同一 Java 探针检查一至三维数组、保活组件、冷／热缓存、反射／MethodHandle、GC 和恢复；固定 JBR 的跨加载器数组解析及失败批次后恢复异常另记为 `knownOracleDifferences`，不计为对齐。完整设备套件包含该组。
 
+自类型数组叠加 Serializable／Cloneable 父接口交换使用 `compare-jbr-self-arrays.py --java-home <fixed-jbr> --parents` 和设备 `--scenario-group self-array-parents`，并纳入 `self-arrays` 与完整套件。兼容的数组返回视图直接返回，覆盖一至三维的缓存／新反射及 MethodHandle；去掉不兼容视图强转的真实非法 DEX 必须拒绝 62。固定 JBR 的数组首次创建关系残留另记差异；具体范围见[类种类演进](CLASS_KIND_EVOLUTION.md)。
+
 有存活实例的具体类转 abstract 使用 `tools/compare-jbr-live-abstract.py --java-home <fixed-jbr>` 核对固定 JBR 的字段、分派、构造、活动帧、GC、恢复与失败批次。它分别运行解释器和指定热调用方编译的 JIT 模式，并检查转换后的重编译记录。设备 ART 当前仍拒绝 70；布局阻塞和源码实现前提见[存活实例转 abstract](LIVE_ABSTRACT_EVOLUTION.md)。
 
 `proxy-interface` 组的父接口场景包括正反四目标批次顺序、父接口自身的父接口演进、A+B 与仅 A 的两个 Proxy 类、handler Method 身份、缓存 Proxy 构造器、精确收窄引用规则、热分派、GC 与规划后回滚。验证器独立要求对应两轮的行为记录一致，仅排除输入顺序和拒绝原因的目标前缀。
@@ -237,6 +241,10 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由 Hook 库按目�
 `tools/test-bound-method-handle-host.py` 另覆盖 69 项公开 JVMTI／原生入口准备与回调行为：能力／元数据不可用、实际入口及局部变量探针、重入、准备与回滚失败后重试、兼容快路、null／非实例／obsolete 目标和已有 JNI 异常的保留；新增原生覆盖探针、具名模板地址合并、服务／标记不可用、同步方法与元数据失败后备、外部事件异常优先及 ART 异常处理转交；还覆盖检查策略的目标回调命中、其他方法或线程命中不能作为证明、原回调保留、清除断点／关闭通知失败、二次覆盖失败及恢复失败后的拒绝和重试。
 
 HookOverheadBenchmark schema 2 新增实际接口 `invokeExact` 和精确绑定调用，独立核对每项返回值校验和。`setup.boundHandleEntryMode` 记录当前实现：0 为公开 JVMTI，1 为 Runnable 事件检查，2 为无自身逐指令通知的帧入口检查，3 为清除自身断点后的检查策略／原生事件路径；基线旧包可无此字段。`setup.unwindFrames`／`unwindEngineFrames`／`unwindAfterEngine` 记录实际 DWARF 回溯计数；现代解释模式必须经过增强库包装帧并继续回溯，禁止在入口处截断。设备驱动拒绝缺少 `methodHandleChecks` 的报告。比较应包含 `engine-client,added,removed,art-added,engine-body,selected`，每状态／模式至少三次新进程。`jit` 表示启用 JIT 并预热，不能单凭模式名声称每个 lambda 都已编译。
+
+Schema 3 另测三维引用数组的 JNI `IsAssignableFrom`，要求 `arrayAssignabilityChecks` 和逐批返回值校验和。验证器数组修复须同时测这条普通运行路径，避免把全局数组判断 Hook 的开销遗漏在反射／MethodHandle 指标之外；比较使用相同测试夹具、签名和资源，仅替换增强库的对照 APK。
+
+Schema 4 支持 `--cpu-affinity <cpu>`，只在 Debug 基准的当前线程内设置亲和性。每项测量前后都核验单核掩码和实际运行 CPU，驱动同时核对顶层与每项指标的证明；丢失绑定则拒绝报告。基线和候选须选择同一 CPU；默认不绑定。固定 CPU 的对照须与原始未绑定结果分别保留，不能据此把原先的越线改写为通过，也不能单凭该对照证明原先波动的精确原因。
 
 跨提交比较先保留原始整包结果。测试类或 DEX 有变化时，即使基准 Java 源码相同，整包差值也不能直接归因于增强库。可用兼容的 Debug 测试引擎构造同一测试包的库替换对照：
 

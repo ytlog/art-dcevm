@@ -63,13 +63,57 @@ public class SelfArrayOracle {
 }
 '''
 
+PARENT_HARNESS = r'''
+import java.lang.instrument.*;
+import java.net.*;
+import java.nio.file.*;
+import java.util.*;
+import com.github.ytlog.artdcevm.testing.SelfArrayProbe;
+public class SelfArrayOracle {
+  static Instrumentation inst;
+  public static void premain(String args, Instrumentation value) { inst=value; }
+  static void observe(String phase, SelfArrayProbe probe) throws Exception {
+    for (Map.Entry<String,Object> entry : probe.observeParents().entrySet())
+      System.out.println(phase+"."+entry.getKey()+"="+entry.getValue());
+  }
+  static void change(String phase, Class<?> type, byte[] bytes) throws Exception {
+    inst.redefineClasses(new ClassDefinition(type,bytes));
+    System.out.println(phase+".status=OK");
+  }
+  public static void main(String[] args) throws Exception {
+    Path original=Path.of(args[0]), changed=Path.of(args[1]);
+    String name="com.github.ytlog.artdcevm.fixture.SelfArrayTarget";
+    String file=name.replace('.','/')+".class";
+    Class<?> type=Class.forName(name,true,new URLClassLoader(new URL[]{original.toUri().toURL()},null));
+    SelfArrayProbe probe=args[2].equals("warm") ? new SelfArrayProbe(type,true) : null;
+    byte[] patch=Files.readAllBytes(changed.resolve(file)), before=Files.readAllBytes(original.resolve(file));
+    for(int round=0;round<2;++round) {
+      String phase=round+".apply";
+      change(phase,type,patch);
+      if(probe==null) probe=new SelfArrayProbe(type,true);
+      observe(phase,probe); System.gc(); observe(phase+".gc",probe);
+      phase=round+".restore";
+      change(phase,type,before); observe(phase,probe); System.gc(); observe(phase+".gc",probe);
+    }
+    try {
+      inst.redefineClasses(new ClassDefinition(type,Files.readAllBytes(Path.of(args[3]))));
+      System.out.println("format-abort.status=UNEXPECTED_SUCCESS");
+    } catch(Throwable error) { System.out.println("format-abort.status="+error.getClass().getName()); }
+    observe("format-abort",probe);
+    change("recovery",type,patch); observe("recovery",probe);
+    change("recovery-restore",type,before); observe("recovery-restore",probe);
+  }
+}
+'''
+
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--java-home', required=True, type=Path)
+    parser.add_argument('--parents', action='store_true', help='Also swap Serializable/Cloneable parents during kind conversion')
     args = parser.parse_args()
     java = args.java_home.resolve() / 'bin'
-    out = new_evidence_directory(ROOT / 'build/evidence/jbr-self-arrays')
+    out = new_evidence_directory(ROOT / ('build/evidence/jbr-self-array-parents' if args.parents else 'build/evidence/jbr-self-arrays'))
     work = out / 'work'
     work.mkdir()
 
@@ -86,20 +130,23 @@ def main():
                 'probeSha256': hashlib.sha256(PROBE.read_bytes()).hexdigest(),
                 'expectationsSha256': hashlib.sha256(EXPECTATIONS.read_bytes()).hexdigest(),
                 'toolSha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(), 'cells': []}
+    if args.parents:
+        manifest['parentExpectationsSha256'] = hashlib.sha256((ROOT / 'app/src/debug/assets/self-array-parent-expectations.json').read_bytes()).hexdigest()
     for kind in ('class', 'interface'):
         directory = work / kind
         directory.mkdir()
-        source = ROOT / ('fixtures/self-array-' + kind) / (TARGET.replace('.', '/') + '.java')
+        source = ROOT / ('fixtures/self-array-' + ('parents-' if args.parents else '') + kind) / (TARGET.replace('.', '/') + '.java')
         run('compile-' + kind, [java / 'javac', '--release', '9', '-d', directory, source])
         data = (directory / (TARGET.replace('.', '/') + '.class')).read_bytes()
         (work / (kind + '-invalid.class')).write_bytes(bytes([0, 1]))
         manifest[kind + 'Sha256'] = hashlib.sha256(data).hexdigest()
-    (work / 'SelfArrayOracle.java').write_text(HARNESS)
+    (work / 'SelfArrayOracle.java').write_text(PARENT_HARNESS if args.parents else HARNESS)
     run('compile-harness', [java / 'javac', '--release', '11', '-d', work, PROBE, work / 'SelfArrayOracle.java'])
     (work / 'manifest.mf').write_text('Premain-Class: SelfArrayOracle\nCan-Redefine-Classes: true\n\n')
     agent = work / 'agent.jar'
     run('agent', [java / 'jar', 'cfm', agent, work / 'manifest.mf', '-C', work, 'SelfArrayOracle.class'])
     common = json.loads(EXPECTATIONS.read_text())
+    parent_expected = json.loads((ROOT / 'app/src/debug/assets/self-array-parent-expectations.json').read_text())
     for kind in ('class', 'interface'):
         changed = 'interface' if kind == 'class' else 'class'
         iface = kind == 'interface'
@@ -110,6 +157,49 @@ def main():
                             work / (changed + '-invalid.class')])
             actual = dict(line.split('=', 1) for line in raw.splitlines() if '=' in line)
             expected = {}
+
+            if args.parents:
+                def parents(phase, state, gc=False, status='OK'):
+                    expected[phase + '.status'] = status
+                    for prefix in ('', 'gc.') if gc else ('',):
+                        expected.update({phase + '.' + prefix + key: str(value).lower() if isinstance(value, bool) else str(value)
+                                         for key, value in parent_expected[state].items()})
+                for number in range(2):
+                    parents(str(number) + '.apply', changed, gc=True)
+                    parents(str(number) + '.restore', kind, gc=True)
+                parents('format-abort', kind, status='java.lang.InternalError')
+                parents('recovery', changed)
+                parents('recovery-restore', kind)
+                # Fixed JBR updates the component's parents but retains the
+                # array subtype relations from its first creation. The cast
+                # in the removed-parent view follows that stale relation;
+                # the newly compatible view returns directly without a cast.
+                # Keep these observations outside the Android contract.
+                first = kind if warm == 'warm' else changed
+                boundary = {}
+                phases = [(str(n) + '.' + p, changed if p == 'apply' else kind, True)
+                          for n in range(2) for p in ('apply', 'restore')]
+                phases += [('format-abort', kind, False), ('recovery', changed, False),
+                           ('recovery-restore', kind, False)]
+                for phase, state, gc in phases:
+                    if state == first:
+                        continue
+                    for prefix in ('', 'gc.') if gc else ('',):
+                        for parent in ('serializable', 'cloneable'):
+                            values = {parent + '.' + key + str(rank): parent_expected[first][parent + '.' + key + str(rank)]
+                                      for key in ('assignable', 'instance', 'cast') for rank in range(1, 4)}
+                            if parent_expected[first][parent + '.assignable']:
+                                values.update({parent + '.' + call + suffix: True for call in ('cachedView', 'freshView', 'handleView') for suffix in ('', '2', '3')})
+                            for key, value in values.items():
+                                full = phase + '.' + prefix + key
+                                boundary[full] = {'androidContract': expected[full],
+                                    'fixedJbr': str(value).lower() if isinstance(value, bool) else str(value)}
+                                expected[full] = boundary[full]['fixedJbr']
+                mismatches = {key: {'expected': value, 'actual': actual.get(key)}
+                              for key, value in expected.items() if actual.get(key) != value}
+                manifest['cells'].append({'name': name, 'observations': actual, 'expected': expected,
+                    'mismatches': mismatches, 'knownOracleDifferences': boundary, 'passed': not mismatches})
+                continue
 
             def expect(phase, is_interface, twin=False, gc=False, status='OK'):
                 expected[phase + '.status'] = status

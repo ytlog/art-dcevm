@@ -139,6 +139,7 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       (!((snapshot.live.access ^ incoming.access) & evolution::kAccInterface) ||
        (process->capabilities.subclass_watch && invoke_kind::ClassKinds()));
   abilities.self_array_verification = verification_redirect::ResolvesRegisterTypes();
+  abilities.self_array_assignability = verification_redirect::ResolvesArrayAssignability();
   abilities.kind_changes = abilities.member_mapping && batch->loaded;
   abilities.interface_removal = abilities.member_mapping && process->capabilities.subclass_watch &&
       imt_sealing::Available() && narrowed_references::Available();

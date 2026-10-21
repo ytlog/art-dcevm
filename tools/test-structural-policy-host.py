@@ -933,6 +933,17 @@ int main(int argc, char** argv) {
               "self arrays must retain the class-to-interface instance and mapping requirements");
       Require(policy::Evaluate(array_class, array_interface, facts, kinds).error == JVMTI_ERROR_FAILS_VERIFICATION,
               "self arrays must not open kind conversions with loaded subtypes");
+      auto array_parent = array_interface;
+      array_parent.interfaces = {"Lfixture/Parent;"};
+      auto parent_facts = policy::LoadedHierarchy{};
+      parent_facts.added_interfaces["Lfixture/Parent;"].access = acc::kAccPublic | acc::kAccInterface;
+      Require(policy::Evaluate(array_class, array_parent, parent_facts, kinds).error == JVMTI_ERROR_UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED,
+              "self-array parent changes require strict covariance services");
+      kinds.self_array_assignability = true;
+      const auto parent_conversion = policy::Evaluate(array_class, array_parent, parent_facts, kinds);
+      Require(parent_conversion.error == JVMTI_ERROR_NONE && parent_conversion.requires_instance_precheck &&
+              parent_conversion.requires_member_mapping && parent_conversion.methods_structural,
+              "strict self-array covariance must retain kind-conversion safeguards");
       auto annotation = iface; annotation.access |= acc::kAccAnnotation;
       const auto annotated = policy::Evaluate(iface, annotation, facts, kinds);
       Require(annotated.error == JVMTI_ERROR_NONE && !annotated.interface_kind_changed &&

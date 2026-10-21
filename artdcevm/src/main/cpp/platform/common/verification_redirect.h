@@ -26,4 +26,6 @@ bool ResolvesClasses();
 // Old array components can be translated at ART's verifier register cache.
 // This does not allocate private array mirrors or alter published components.
 bool ResolvesRegisterTypes();
+// Resolved array covariance can use ART's strict component register types.
+bool ResolvesArrayAssignability();
 }  // namespace artdcevm::verification_redirect

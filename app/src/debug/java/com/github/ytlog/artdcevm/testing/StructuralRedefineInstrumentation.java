@@ -216,6 +216,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("constructor-history".equals(isolated)) runConstructorHistoryScenarios();
             else if ("class-kinds".equals(isolated)) runClassKindScenarios();
             else if ("self-arrays".equals(isolated)) runSelfArrayScenarios();
+            else if ("self-array-parents".equals(isolated)) runSelfArrayScenarios(true);
             else if ("invoke-interface-kind".equals(isolated)) runInterfaceInvokeKindScenarios();
             else if (isolated.startsWith("interface-abstract-unimplemented-"))
                 runAbstractUnimplementedScenario(isolated.substring("interface-abstract-unimplemented-".length()));
@@ -493,17 +494,28 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 readAsset("self-array-expectations.json"), java.nio.charset.StandardCharsets.UTF_8));
         java.util.Map<String, Object> actual = probe.observe(other);
         scenario.check(prefix + "interface", iface, actual.remove("interface"));
-        for (java.util.Map.Entry<String, Object> entry : actual.entrySet())
-            scenario.check(prefix + entry.getKey(), expected.get(entry.getKey()), entry.getValue());
+        org.json.JSONObject parents = new org.json.JSONObject(new String(
+                readAsset("self-array-parent-expectations.json"), java.nio.charset.StandardCharsets.UTF_8))
+                .getJSONObject(iface ? "interface" : "class");
+        for (java.util.Map.Entry<String, Object> entry : actual.entrySet()) {
+            String key = entry.getKey();
+            Object wanted = key.startsWith("parents.") ? parents.get(key.substring(8)) : expected.get(key);
+            scenario.check(prefix + key, wanted, entry.getValue());
+        }
     }
 
     private void runSelfArrayScenarios() throws Exception {
+        runSelfArrayScenarios(false);
+        runSelfArrayScenarios(true);
+    }
+
+    private void runSelfArrayScenarios(boolean parents) throws Exception {
         String name = "com.github.ytlog.artdcevm.fixture.SelfArrayTarget";
         String path = name.replace('.', '/') + ".dex";
         for (String kind : new String[]{"class", "interface"}) {
             final boolean originalInterface = kind.equals("interface");
-            String original = "self-array-" + kind;
-            String changed = "self-array-" + (originalInterface ? "class" : "interface");
+            String original = "self-array-" + (parents ? "parents-" : "") + kind;
+            String changed = "self-array-" + (parents ? "parents-" : "") + (originalInterface ? "class" : "interface");
             byte[] bytes = readAsset(original + "/" + path);
             for (boolean warm : new boolean[]{false, true}) {
                 ClassLoader loader = new dalvik.system.InMemoryDexClassLoader(java.nio.ByteBuffer.wrap(bytes),
@@ -512,14 +524,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                         context.getClassLoader().getParent());
                 Class<?> type = Class.forName(name, true, loader);
                 Class<?> twin = Class.forName(name, true, otherLoader);
-                SelfArrayProbe other = new SelfArrayProbe(twin);
-                SelfArrayProbe[] probe = {warm ? new SelfArrayProbe(type) : null};
-                String prefix = "self-array-" + kind + "-" + (warm ? "warm" : "cold");
+                SelfArrayProbe other = new SelfArrayProbe(twin, parents);
+                SelfArrayProbe[] probe = {warm ? new SelfArrayProbe(type, parents) : null};
+                String prefix = "self-array-" + (parents ? "parents-" : "") + kind + "-" + (warm ? "warm" : "cold");
                 for (int round = 0; round < 2; ++round) {
                     String cell = prefix + "-" + round;
                     runScenario(cell + "-apply", 0, scenario -> {
                         scenario.redefine(new Class<?>[]{type}, changed);
-                        if (probe[0] == null) probe[0] = new SelfArrayProbe(type);
+                        if (probe[0] == null) probe[0] = new SelfArrayProbe(type, parents);
                         checkSelfArrays(scenario, "", probe[0], other, !originalInterface);
                         checkSelfArrays(scenario, "twin.", other, probe[0], originalInterface);
                         System.gc();
@@ -532,6 +544,15 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                         checkSelfArrays(scenario, "gc.", probe[0], other, originalInterface);
                     });
                 }
+                if (parents) runScenario(prefix + "-parent-verify-abort", 62, scenario -> {
+                    byte[] invalid = InterfaceAbortInstrumentation.invalidParentView(readAsset(changed + "/" + path),
+                            originalInterface ? "cloneableCubeView" : "serializableCubeView");
+                    scenario.redefineBytes(new Class<?>[]{type}, new byte[][]{invalid}, new String[]{changed});
+                    checkSelfArrays(scenario, "", probe[0], other, originalInterface);
+                    checkSelfArrays(scenario, "twin.", other, probe[0], originalInterface);
+                    System.gc();
+                    checkSelfArrays(scenario, "gc.", probe[0], other, originalInterface);
+                });
                 runScenario(prefix + "-verify-abort", 62, scenario -> {
                     byte[] invalid = InterfaceAbortInstrumentation.invalidReturn(readAsset(changed + "/" + path));
                     scenario.expectRejectionBy(type, twin);

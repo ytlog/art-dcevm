@@ -17,8 +17,15 @@ public final class SelfArrayProbe {
     private final Method pack, first, put, matrix, cube, cast, store;
     private final MethodHandle handle;
     private final Field field;
+    private final Method[][] parentViews = new Method[2][3];
+    private final MethodHandle[][] parentHandles = new MethodHandle[2][3];
+    private final Class<?>[][] parentArrays = new Class<?>[2][3];
 
     public SelfArrayProbe(Class<?> type) throws Exception {
+        this(type, false);
+    }
+
+    public SelfArrayProbe(Class<?> type, boolean parents) throws Exception {
         this.type = type;
         for (int i = 0; i < 3; ++i) {
             retained[i] = Array.newInstance(i == 0 ? type : arrays[i - 1], 1);
@@ -34,6 +41,18 @@ public final class SelfArrayProbe {
         store = type.getMethod("unsafeStore", Object[].class, Object.class);
         handle = MethodHandles.publicLookup().unreflect(pack);
         field = type.getField("FIELD");
+        if (parents) {
+            Class<?>[] types = {java.io.Serializable.class, Cloneable.class};
+            String[] names = {"serializableView", "cloneableView"};
+            for (int p = 0; p < types.length; ++p) {
+                for (int rank = 0; rank < 3; ++rank) {
+                    parentArrays[p][rank] = Array.newInstance(rank == 0 ? types[p] : parentArrays[p][rank - 1], 0).getClass();
+                    String name = names[p].replace("View", rank == 0 ? "View" : rank == 1 ? "MatrixView" : "CubeView");
+                    parentViews[p][rank] = type.getMethod(name, arrays[rank]);
+                    parentHandles[p][rank] = MethodHandles.publicLookup().unreflect(parentViews[p][rank]);
+                }
+            }
+        }
     }
 
     private interface Op { Object run() throws Throwable; }
@@ -50,6 +69,37 @@ public final class SelfArrayProbe {
     }
     private static Object error(Op op) {
         return result(() -> { op.run(); return "returned"; });
+    }
+
+    /** Parent and covariant-array identities captured before or after conversion. */
+    public Map<String, Object> observeParents() throws Exception {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("interface", type.isInterface());
+        out.put("superclass", type.getSuperclass() == (type.isInterface() ? null : Object.class));
+        Class<?>[] parents = {java.io.Serializable.class, Cloneable.class};
+        String[] names = {"serializable", "cloneable"};
+        out.put("directParents", type.getInterfaces().length);
+        for (int p = 0; p < parents.length; ++p) {
+            final int index = p;
+            String prefix = names[p] + ".";
+            out.put(prefix + "direct", type.getInterfaces().length == 1 && type.getInterfaces()[0] == parents[p]);
+            out.put(prefix + "assignable", parents[p].isAssignableFrom(type));
+            for (int rank = 0; rank < 3; ++rank) {
+                final int r = rank;
+                out.put(prefix + "assignable" + (rank + 1), parentArrays[p][rank].isAssignableFrom(arrays[rank]));
+                out.put(prefix + "instance" + (rank + 1), parentArrays[p][rank].isInstance(retained[rank]));
+                out.put(prefix + "cast" + (rank + 1), result(() -> parentArrays[index][r].cast(retained[r]) == retained[r]));
+                String suffix = rank == 0 ? "" : Integer.toString(rank + 1);
+                String method = names[p] + (rank == 0 ? "View" : rank == 1 ? "MatrixView" : "CubeView");
+                out.put(prefix + "cachedOwner" + suffix, parentViews[p][rank].getDeclaringClass() == type
+                        && parentViews[p][rank].getReturnType() == parentArrays[p][rank]
+                        && parentViews[p][rank].getParameterTypes()[0] == arrays[rank]);
+                out.put(prefix + "cachedView" + suffix, result(() -> parentViews[index][r].invoke(null, retained[r]) == retained[r]));
+                out.put(prefix + "freshView" + suffix, result(() -> type.getMethod(method, arrays[r]).invoke(null, retained[r]) == retained[r]));
+                out.put(prefix + "handleView" + suffix, result(() -> parentHandles[index][r].invokeWithArguments(new Object[]{retained[r]}) == retained[r]));
+            }
+        }
+        return out;
     }
 
     public Map<String, Object> observe(SelfArrayProbe other) throws Exception {
@@ -92,6 +142,9 @@ public final class SelfArrayProbe {
         out.put("otherCast", error(() -> cast.invoke(null, other.retained[0])));
         out.put("otherArgument", error(() -> matrix.invoke(null, other.retained[0])));
         out.put("stable", type.getMethod("stable").invoke(null));
+        if (parentViews[0][0] != null)
+            for (Map.Entry<String, Object> entry : observeParents().entrySet())
+                out.put("parents." + entry.getKey(), entry.getValue());
         return out;
     }
 }

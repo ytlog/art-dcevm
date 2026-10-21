@@ -46,6 +46,18 @@ _runner.loader.exec_module(_tests)
 safe_console, safe_report, find_adb = _tests.safe_console, _tests.safe_report, _tests.find_adb
 
 
+def affinity_matches(report, cpu):
+    if cpu is None:
+        if "cpuAffinity" not in report:
+            return True
+        cpu = -1
+    workloads = report.get("workloads")
+    return (type(report.get("cpuAffinity")) is int and report["cpuAffinity"] == cpu
+            and isinstance(workloads, dict) and bool(workloads)
+            and all(isinstance(metric, dict) and type(metric.get("cpuAffinity")) is int
+                    and metric["cpuAffinity"] == cpu for metric in workloads.values()))
+
+
 def summarize(reports):
     """Median over processes of each process's median batch, per mode/state/metric.
 
@@ -121,12 +133,15 @@ def main(argv=None):
     parser.add_argument("--checkjni", choices=("true", "false"), default="false",
                         help="JNI checking mode selected before any agent (Debug apps default to true)")
     parser.add_argument("--timeout", type=int, default=600)
+    parser.add_argument("--cpu-affinity", type=int, help="Bind only the benchmark thread to this CPU; verify each metric")
     parser.add_argument("--probe-unwind", action="store_true",
                         help="Probe states only: let the original instrumentation thread exit before redefining")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/hook-overhead/runs")
     parser.add_argument("--summarize", type=Path, nargs="+", metavar="DIR",
                         help="Only recompute the summary from the reports in these evidence directories")
     args = parser.parse_args(argv)
+    if args.cpu_affinity is not None and not 0 <= args.cpu_affinity < 1024:
+        parser.error("CPU affinity must be in 0..1023")
     if args.summarize:
         reports = []
         for directory in args.summarize:
@@ -155,7 +170,8 @@ def main(argv=None):
 
     meta = {"deviceId": args.device_id, "apkSha256": hashlib.sha256(args.apk.read_bytes()).hexdigest(),
             "startedUtc": timestamp, "rounds": args.rounds, "modes": modes, "states": states,
-            "checkJni": args.checkjni, "probeUnwind": args.probe_unwind, "runs": []}
+            "checkJni": args.checkjni, "probeUnwind": args.probe_unwind,
+            "cpuAffinity": args.cpu_affinity, "runs": []}
     installed = adb("install", "-r", str(args.apk))
     require_install_success(installed.returncode, installed.stdout, installed.stderr)
     path = base_apk_path(adb("shell", "pm", "path", PACKAGE).stdout)
@@ -170,6 +186,7 @@ def main(argv=None):
                 adb("shell", "run-as", PACKAGE, "rm", "-f", REPORT_PATH)
                 test = adb("shell", "am", "instrument", "-w", "-r", "-e", "state", state, "-e", "mode", mode,
                            "-e", "probeunwind", str(args.probe_unwind).lower(),
+                           "-e", "cpu", "none" if args.cpu_affinity is None else str(args.cpu_affinity),
                            "-e", "checkjni", args.checkjni, COMPONENT, timeout=args.timeout)
                 (out / (label + ".txt")).write_text(safe_console(test.stdout + test.stderr, args.serial))
                 raw = adb("exec-out", "run-as", PACKAGE, "cat", REPORT_PATH).stdout
@@ -181,9 +198,13 @@ def main(argv=None):
                 if report is not None:
                     (out / (label + ".json")).write_text(json.dumps(report, indent=2))
                     run["completed"] = report.get("completed") is True
+                    if not affinity_matches(report, args.cpu_affinity):
+                        run["completed"] = False
                     if state == "selected" and report.get("setup", {}).get("interfaceSelectionActive") is not True:
                         run["completed"] = False
                     if report.get("schemaVersion", 1) >= 2 and report.get("setup", {}).get("methodHandleChecks") is not True:
+                        run["completed"] = False
+                    if report.get("schemaVersion", 1) >= 3 and report.get("setup", {}).get("arrayAssignabilityChecks") is not True:
                         run["completed"] = False
                     if run["completed"] and run["instrumentationOk"]: reports.append({**report, "round": round_index})
                     else: run["error"] = report.get("fatalError")
