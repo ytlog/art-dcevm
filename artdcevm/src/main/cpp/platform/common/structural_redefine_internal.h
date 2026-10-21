@@ -88,6 +88,8 @@ inline interface_redefinition::Backend* InterfaceBackend() {
   return process->interface_backend.load(std::memory_order_acquire);
 }
 struct Snapshot : hierarchy_snapshot::Snapshot {
+  // Includes obsolete declarations with the same descriptor and defining loader.
+  bool active_frame = false;
   // Methods retired earlier, and declarations this transaction retires.
   structural_policy::RetiredMethods retired;
   std::vector<evolution::Member> retiring;

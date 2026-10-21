@@ -938,6 +938,25 @@ REQUIRED_CHECKS = {
                                    "indirectProxyNull", "childProxyKept", "childProxyBaseKept", "childIndirectProxyNull")}},
 }
 
+PRIVATE_BATCH_SCENARIOS = []
+for _round in range(2):
+    for _phase, _label in enumerate(("abort", "apply", "restore-abort", "restore")):
+        _changed = _phase in (1, 2)
+        _restoring, _fail = _phase >= 2, _phase % 2 == 0
+        _variants = ["method-private-original"] * 2 if _restoring else ["method-private-caller-rebuild", "method-private"]
+        if _round: _variants = _variants[::-1]
+        _name = f"method-private-batch-{_label}-{_round}"
+        PRIVATE_BATCH_SCENARIOS.append((_name, _variants, 110 if _fail else 0))
+        REQUIRED_CHECKS[_name] = {"joined": True,
+            "oldPeer": "java.lang.IllegalAccessError" if _changed else 107 if _phase == 3 else 7,
+            "privateKind": _changed, "ownCall": 25 if _changed else 7,
+            "freshPeer": 107 if _changed else 7, "peerField": 11, "targetField": 5,
+            **({"armed": 0, "failureHits": 1} if _fail else {})}
+        if not _fail: MAPPED_SCENARIOS.add(_name)
+
+_private_start = next(i for i, row in enumerate(SCENARIOS) if row[0] == "method-private-active-target")
+SCENARIOS = SCENARIOS[:_private_start] + tuple(PRIVATE_BATCH_SCENARIOS) + SCENARIOS[_private_start:]
+
 for suffix in ("", "-again"):
     REQUIRED_CHECKS["method-private" + suffix] = {
         "activeCompleted": True, "activeError": "java.lang.IllegalAccessError", "privateKind": True,

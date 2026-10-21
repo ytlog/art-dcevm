@@ -4876,7 +4876,51 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
+    private void runPrivateBatchScenarios() throws Exception {
+        AccessSubject subject = new AccessSubject();
+        AccessCallerBase peer = new AccessCallerBase();
+        for (int round = 0; round < 2; round++) for (int phase = 0; phase < 4; phase++) {
+            boolean restoring = phase >= 2, fail = phase % 2 == 0;
+            boolean changed = phase == 1 || phase == 2;
+            String name = "method-private-batch-" + new String[]{"abort", "apply", "restore-abort", "restore"}[phase] + "-" + round;
+            Class<?>[] targets = round == 0 ? new Class<?>[]{AccessCallerBase.class, AccessSubject.class}
+                    : new Class<?>[]{AccessSubject.class, AccessCallerBase.class};
+            String[] variants = round == 0 ? new String[]{restoring ? "method-private-original" : "method-private-caller-rebuild",
+                    restoring ? "method-private-original" : "method-private"}
+                    : new String[]{restoring ? "method-private-original" : "method-private",
+                    restoring ? "method-private-original" : "method-private-caller-rebuild"};
+            runScenario(name, fail ? 110 : 0, scenario -> {
+                CountDownLatch ready = new CountDownLatch(1), resume = new CountDownLatch(1);
+                Object[] result = new Object[1];
+                Thread active = new Thread(() -> {
+                    try { result[0] = AccessCallerBase.await(() -> AccessCaller.callTarget(subject), ready, resume); }
+                    catch (Throwable error) { result[0] = error.getClass().getName(); }
+                });
+                active.start();
+                try {
+                    if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("batch peer not ready");
+                    if (fail) scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(targets, variants);
+                    if (fail) scenario.check("failureHits", 1, InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                    System.gc();
+                    resume.countDown(); active.join(10000);
+                    scenario.check("joined", true, !active.isAlive());
+                    // A restoring old peer frame still executes the +100 body.
+                    scenario.check("oldPeer", changed ? "java.lang.IllegalAccessError" : restoring && !fail ? 107 : 7, result[0]);
+                    scenario.check("privateKind", changed, Modifier.isPrivate(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
+                    scenario.check("ownCall", changed ? 25 : 7, subject.callTarget());
+                    scenario.check("freshPeer", changed ? 107 : 7,
+                            AccessCallerBase.await(() -> 7, new CountDownLatch(0), new CountDownLatch(0)));
+                    scenario.check("peerField", 11, peer.kept);
+                    scenario.check("targetField", 5, subject.value);
+                    AccessSubject.entered = 0;
+                } finally { resume.countDown(); active.join(10000); }
+            });
+        }
+    }
+
     private void runPrivateCallScenarios() throws Exception {
+        runPrivateBatchScenarios();
         AccessSubject subject = new AccessSubject();
         AccessCaller.Child child = new AccessCaller.Child();
         AccessCaller.Override override = new AccessCaller.Override();

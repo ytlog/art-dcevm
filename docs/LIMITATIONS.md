@@ -67,7 +67,7 @@
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到批次类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。按目标种类安装命名 `FindMethodToCall<kVirtual/kInterface>` 入口并通过 Class/Thread/HandleScope 探测后支持此行为，分别以 `privateSelfSelectionClass`／`privateSelfSelectionInterface` 报告，旧键为交集。API 36 已经真机验证；部分 API 34/37 仅保留 interface 模板的模块按固定源码支持接口目标，尚未上机。API 30–33 和缺少对应命名服务或源码依据的目标仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
+| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到该目标类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。按目标种类安装命名 `FindMethodToCall<kVirtual/kInterface>` 入口并通过 Class/Thread/HandleScope 探测后支持此行为，分别以 `privateSelfSelectionClass`／`privateSelfSelectionInterface` 报告，旧键为交集。API 36 已经真机验证；部分 API 34/37 仅保留 interface 模板的模块按固定源码支持接口目标，尚未上机。API 30–33 和缺少对应命名服务或源码依据的目标仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
 | 种类变化不满足实例、子类型、分配或分派前提 | 62／66／70 | 见[类种类演进](CLASS_KIND_EVOLUTION.md) |
 | 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 | 移除接口时成员映射或分派保护不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |

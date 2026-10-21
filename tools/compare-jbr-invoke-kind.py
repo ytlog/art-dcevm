@@ -91,6 +91,42 @@ public class InvokeKindOracle {
       }
     }
   }
+  static void privateBatch() throws Exception {
+    AccessSubject subject = new AccessSubject(); AccessCallerBase peer = new AccessCallerBase();
+    CountDownLatch open = new CountDownLatch(0);
+    for (int i = 0; i < 30000; i++)
+      if (AccessCallerBase.await(() -> 7, open, open) != 7) throw new AssertionError("peer warmup");
+    for (int round = 0; round < 2; round++) for (int phase = 0; phase < 4; phase++) {
+      boolean restoring = phase >= 2, fail = phase % 2 == 0, changed = phase == 1 || phase == 2;
+      CountDownLatch ready = new CountDownLatch(1), resume = new CountDownLatch(1);
+      Object[] result = new Object[1];
+      Thread active = new Thread(() -> {
+        try { result[0] = AccessCallerBase.await(() -> AccessCaller.callTarget(subject), ready, resume); }
+        catch (Throwable error) { result[0] = error.getClass().getName(); }
+      }); active.start();
+      Class<?>[] targets = round == 0 ? new Class<?>[]{AccessCallerBase.class, AccessSubject.class}
+          : new Class<?>[]{AccessSubject.class, AccessCallerBase.class};
+      ClassDefinition[] definitions = new ClassDefinition[2];
+      for (int i = 0; i < 2; i++) {
+        String variant = restoring ? "method-private-original" : targets[i] == AccessSubject.class ? "method-private" : "method-private-caller-rebuild";
+        definitions[i] = new ClassDefinition(targets[i], fail && i == 1 ? new byte[]{0,1} :
+            Files.readAllBytes(patches.resolve(variant).resolve(targets[i].getName().replace('.', '/') + ".class")));
+      }
+      try {
+        if (!ready.await(10, TimeUnit.SECONDS)) throw new AssertionError("peer not ready");
+        try { agent.redefineClasses(definitions); if (fail) throw new AssertionError("batch accepted"); }
+        catch (InternalError expected) { if (!fail || expected.getClass() != InternalError.class) throw expected; checks++; }
+        System.gc();
+      } finally { resume.countDown(); active.join(10000); }
+      eq("batch joined", false, active.isAlive());
+      eq("batch old peer", changed ? "java.lang.IllegalAccessError" : phase == 3 ? 107 : 7, result[0]);
+      eq("batch private", changed, java.lang.reflect.Modifier.isPrivate(AccessSubject.class.getDeclaredMethod("target").getModifiers()));
+      eq("batch own", changed ? 25 : 7, subject.callTarget());
+      eq("batch fresh peer", changed ? 107 : 7, AccessCallerBase.await(() -> 7, new CountDownLatch(0), new CountDownLatch(0)));
+      eq("batch peer field", 11, peer.kept); eq("batch target field", 5, subject.value);
+      AccessSubject.entered = 0;
+    }
+  }
   static void privateCalls() throws Exception {
     AccessSubject subject = new AccessSubject();
     AccessCaller.Child child = new AccessCaller.Child();
@@ -219,6 +255,7 @@ public class InvokeKindOracle {
   }
   public static void main(String[] args) throws Exception {
     patches = Path.of(args[0]);
+    if (args.length > 1 && args[1].equals("batch")) { privateBatch(); System.out.println("JBR invoke kind oracle PASS checks=" + checks); return; }
     if (args.length > 1) { privateSelf(); System.out.println("JBR invoke kind oracle PASS checks=" + checks); return; }
     Subject subject = new Subject(); Child child = new Child();
     try {
@@ -296,7 +333,7 @@ public class InvokeKindOracle {
     change("interface-kind-static-restore", InterfaceInvokeKindFixture.Caller.class);
     eq("interface restored virtual", 13, InterfaceInvokeKindFixture.Caller.call(impl));
     eq("interface restored", 13, InterfaceInvokeKindFixture.Caller.interfaceCall(impl));
-    privateCalls(); privateSelf();
+    privateBatch(); privateCalls(); privateSelf();
     System.out.println("JBR invoke kind oracle PASS checks=" + checks);
   }
 }
@@ -362,15 +399,21 @@ def main():
         mf.write_text('Premain-Class: InvokeKindOracle\nCan-Redefine-Classes: true\n\n')
         agent = work / 'agent.jar'
         run('agent', [str(jbr / 'bin/jar'), 'cfm', str(agent), str(mf), '-C', str(harness), 'InvokeKindOracle.class'])
-        for mode, flags in (('default', []), ('self-interpreter', ['-Xint']),
+        for mode, flags in (('default', []), ('batch-interpreter', ['-Xint']),
+                            ('batch-compiled', ['-Xbatch', '-XX:-TieredCompilation', '-XX:+PrintCompilation',
+                             '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.AccessCallerBase::await']),
+                            ('self-interpreter', ['-Xint']),
                             ('self-compiled', ['-Xbatch', '-XX:-TieredCompilation', '-XX:+PrintCompilation',
                              '-XX:CompileCommand=compileonly,com.github.ytlog.artdcevm.fixture.PrivateSelfFixture*::*'])):
             output = run('oracle-' + mode, [str(jbr / 'bin/java'), *flags, '-XX:+AllowEnhancedClassRedefinition',
                          '-javaagent:' + str(agent), '-cp', str(harness) + ':' + str(old),
-                         'InvokeKindOracle', str(patches), *([] if mode == 'default' else ['self'])])
+                         'InvokeKindOracle', str(patches), *([] if mode == 'default' else ['batch' if mode.startswith('batch-') else 'self'])])
             if mode == 'self-compiled' and not any(re.match(r'^\s*\d+\s+\d+\s+.*PrivateSelfFixture.*::await', line)
                                                   and 'made not compilable' not in line for line in output.splitlines()):
                 raise RuntimeError('No compiled self caller observed; inspect ignored evidence')
+            if mode == 'batch-compiled' and not any(re.match(r'^\s*\d+\s+\d+\s+.*AccessCallerBase::await', line)
+                                                   and 'made not compilable' not in line for line in output.splitlines()):
+                raise RuntimeError('No compiled peer caller observed; inspect ignored evidence')
             checks = int(output.split('PASS checks=')[-1].splitlines()[0].strip())
             manifest['runs'].append({'mode': mode, 'checks': checks, 'passed': True})
         manifest['passed'] = True

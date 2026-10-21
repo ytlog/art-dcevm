@@ -409,7 +409,7 @@ virtual 改 private 后，无访问权的外部旧 virtual/super/interface 调�
 
 JBR 还允许自身 obsolete 帧直接调用新 private 方法体，并忽略子类覆写。固定源码中的 `FindMethodToCall<kVirtual/kInterface>` 是 switch 解释器读取 vtable/IMT 前的调用选择点。两个入口独立安装，事务按目标的类／接口种类选择服务；接口 default 副本属于接口目标。旧帧先解析方法，按声明描述符和定义加载器确认自身访问权，再直接选择新 private 声明。解析失败保持原异常；合法自身调用的 null 接收者抛 NPE，外部无访问权的旧调用抛 IAE。`runtime_roots` 复用接口准入的命名根访问器和 Class/Thread/HandleScope 探测，在解析可能挂起时保护并更新 ART 的接收者局部变量。Android 16–17 经 `ClassLinker::ResolveMethodId` 解析；Android 14–15 经固定的 `ResolveMethod<kNoChecks>(Thread*, …)`，并在其嵌套 cache 重载中保留自身解析上下文。
 
-`privateSelfSelectionClass`／`privateSelfSelectionInterface` 分别报告已安装的选择服务，旧键 `privateSelfSelection` 保持两者交集；对应的 `…Reason` 在服务可用时为空，否则说明缺少的服务或依赖。这些诊断不代替事务准入的运行时布局探测。活动帧扫描除引用身份外，还以 JVMTI 声明描述符和定义加载器匹配先前重定义保留的旧 Class；查询失败使事务失败，不能遗漏 obsolete 自身帧后接受不受保护的变化。
+`privateSelfSelectionClass`／`privateSelfSelectionInterface` 分别报告已安装的选择服务，旧键 `privateSelfSelection` 保持两者交集；对应的 `…Reason` 在服务可用时为空，否则说明缺少的服务或依赖。这些诊断不代替事务准入的运行时布局探测。活动帧扫描除引用身份外，还以 JVMTI 声明描述符和定义加载器匹配先前重定义保留的旧 Class；查询失败使事务失败，不能遗漏 obsolete 自身帧后接受不受保护的变化。扫描记录每个目标的活动状态，不能在发现首个批次帧后停止。virtual 改 private 的自身选择前提仅检查该目标；同批其他类的旧外部调用仍由调用守卫抛 IAE，不因它们有活动帧拒绝目标修改。缺少通用调用守卫、接口父方法碰撞和类／接口种类变化继续使用各自的批次级保护。
 
 对已存 37 套运行库进行命名表审计，结果如下。此表仅证明精确符号名称存在，不证明 ABI、实际调用边界或真机通过；API 36 的单入口安装在 Debug 进程中分别屏蔽另一入口验证，不等同于 API 34/37 上机验证。
 

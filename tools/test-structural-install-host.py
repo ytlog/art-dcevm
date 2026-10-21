@@ -471,6 +471,11 @@ jvmtiError JNICALL Modifiable(jvmtiEnv*, jclass klass, jboolean* value) {
   *value = klass != nested_type; return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
+  if (mode >= 49) {
+    *value = reinterpret_cast<jobject>(klass == first_type ? 0x4900 :
+        klass == second_type || mode == 49 ? 0x4800 : 0x4a00);
+    frame_locals.insert(*value); return JVMTI_ERROR_NONE;
+  }
   if (mode >= 32 && mode <= 37) {
     if (mode == 36) return JVMTI_ERROR_INTERNAL;
     *value = reinterpret_cast<jobject>(mode == 33 && klass != first_type ? 0x4800 : 0x4900);
@@ -489,7 +494,7 @@ jvmtiError JNICALL Loader(jvmtiEnv*, jclass klass, jobject* value) {
 jvmtiError JNICALL Signature(jvmtiEnv*, jclass klass, char** value, char**) {
   if (mode == 21 && klass == reinterpret_cast<jclass>(0x4100)) return JVMTI_ERROR_INTERNAL;
   if (mode == 35) return JVMTI_ERROR_INTERNAL;
-  if (mode >= 32 && mode <= 37) klass = first_type;
+  if ((mode >= 32 && mode <= 37) || mode >= 49) klass = first_type;
   const std::string text = klass == root_type ? "Ljava/lang/Object;" :
       "Lfixture/Type" + std::to_string(reinterpret_cast<uintptr_t>(klass)) + ";";
   *value = static_cast<char*>(std::malloc(text.size() + 1));
@@ -533,17 +538,28 @@ jvmtiError JNICALL Events(jvmtiEnv*, jvmtiEventMode value, jvmtiEvent event, jth
   }
   return JVMTI_ERROR_NONE;
 }
-jvmtiError JNICALL StackDeclaring(jvmtiEnv*, jmethodID, jclass* value) {
+jvmtiError JNICALL StackDeclaring(jvmtiEnv*, jmethodID method, jclass* value) {
+  if (mode >= 49) {
+    *value = method == reinterpret_cast<jmethodID>(0x4500) ? first_type : reinterpret_cast<jclass>(0x4700);
+    frame_locals.insert(*value); return JVMTI_ERROR_NONE;
+  }
+  if (mode >= 46) {
+    if (mode == 48 && method == reinterpret_cast<jmethodID>(0x4501)) return JVMTI_ERROR_INTERNAL;
+    *value = method == reinterpret_cast<jmethodID>(0x4500) ? second_type : first_type;
+    frame_locals.insert(*value); return JVMTI_ERROR_NONE;
+  }
   if (mode == 34) return JVMTI_ERROR_INTERNAL;
   *value = mode == 37 ? first_type : reinterpret_cast<jclass>(0x4700);
   frame_locals.insert(*value); return JVMTI_ERROR_NONE;
 }
 jvmtiError JNICALL AllStacks(jvmtiEnv*, jint, jvmtiStackInfo** value, jint* count) {
-  struct Stack { jvmtiStackInfo info; jvmtiFrameInfo frame; };
+  struct Stack { jvmtiStackInfo info; jvmtiFrameInfo frame[2]; };
   auto* stack = static_cast<Stack*>(std::calloc(1, sizeof(Stack)));
   stack->info.thread = reinterpret_cast<jthread>(0x4600);
-  stack->info.frame_count = 1; stack->info.frame_buffer = &stack->frame;
-  stack->frame.method = reinterpret_cast<jmethodID>(0x4500);
+  stack->info.frame_count = mode >= 46 ? (mode == 46 ? 1 : 2) : 1;
+  stack->info.frame_buffer = stack->frame;
+  stack->frame[0].method = reinterpret_cast<jmethodID>(0x4500);
+  stack->frame[1].method = reinterpret_cast<jmethodID>(0x4501);
   frame_locals.insert(stack->info.thread);
   *value = &stack->info; *count = 1; return JVMTI_ERROR_NONE;
 }
@@ -639,15 +655,19 @@ int main(int argc, char** argv) {
       Require(transaction::Current() == &outer.context() && outer.context().verification.get() == verification,
               "Nested transaction did not restore its enclosing module Parts");
     }
-    if (mode >= 32 && mode <= 37) {
+    if ((mode >= 32 && mode <= 37) || mode >= 46) {
       tooling.GetAllStackTraces = AllStacks; tooling.GetMethodDeclaringClass = StackDeclaring;
       structural_redefine::detail::Batch batch;
       batch.classes[first_type].live.descriptor = "Lfixture/Type12800;";
+      if (mode >= 46) batch.classes[second_type].live.descriptor = mode >= 49 ? "Lfixture/Type12800;" : "Lfixture/Type13056;";
       const auto error = structural_redefine::detail::FindActiveBatchFrame(&env, &jni, batch);
-      Require(error == (mode >= 34 && mode <= 36 ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE),
+      Require(error == (((mode >= 34 && mode <= 36) || mode == 48) ? JVMTI_ERROR_INTERNAL : JVMTI_ERROR_NONE),
               "Frame snapshot hid a JVMTI failure");
-      Require(bool(batch.active_frame) == (mode == 32 || mode == 37),
+      Require(bool(batch.active_frame) == (mode == 32 || mode == 37 || mode >= 46),
               "Frame identity ignored obsolete descriptor/loader identity");
+      Require(batch.classes[first_type].active_frame == (mode == 32 || mode == 37 || mode == 47 || mode >= 49),
+              "Target activity was inferred from another batch class or lost after a prior match");
+      if (mode >= 46) Require(batch.classes[second_type].active_frame == (mode != 50), "Peer activity lost or foreign loader mistaken for target");
       Require(frame_locals.empty(), "Frame snapshot leaked a local root");
       std::cout << "CAPABILITIES " << structural_redefine::Capabilities() << '\n';
       std::cout << "Installer case " << mode << " PASS\n";
@@ -1109,7 +1129,7 @@ def main():
         if result.returncode:
             raise RuntimeError('Installer compilation failed; see build/evidence/host/structural-install/compile.log')
         contracts = json.loads((ROOT / "tools/fixtures/structural-install-contract.json").read_text())
-        cases = [(case, None, False) for case in range(46)]
+        cases = [(case, None, False) for case in range(51)]
         cases += [(case, api, False) for api in (30, 31, 32) for case in range(23, 29)]
         cases += [(23, api, True) for api in (30, 31, 32, 33)]
         for case, api, missing in cases:
