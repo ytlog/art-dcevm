@@ -238,6 +238,18 @@ ART 私有能力只通过命名 ELF 符号访问，运行时由 Hook 库按目�
 
 HookOverheadBenchmark schema 2 新增实际接口 `invokeExact` 和精确绑定调用，独立核对每项返回值校验和。`setup.boundHandleEntryMode` 记录当前实现：0 为公开 JVMTI，1 为 Runnable 事件检查，2 为无自身逐指令通知的帧入口检查，3 为清除自身断点后的检查策略／原生事件路径；基线旧包可无此字段。`setup.unwindFrames`／`unwindEngineFrames`／`unwindAfterEngine` 记录实际 DWARF 回溯计数；现代解释模式必须经过增强库包装帧并继续回溯，禁止在入口处截断。设备驱动拒绝缺少 `methodHandleChecks` 的报告。比较应包含 `engine-client,added,removed,art-added,engine-body,selected`，每状态／模式至少三次新进程。`jit` 表示启用 JIT 并预热，不能单凭模式名声称每个 lambda 都已编译。
 
+跨提交比较先保留原始整包结果。测试类或 DEX 有变化时，即使基准 Java 源码相同，整包差值也不能直接归因于增强库。可用兼容的 Debug 测试引擎构造同一测试包的库替换对照：
+
+```sh
+python3 tools/prepare-hook-benchmark-control.py \
+  --harness-apk <frozen-current-debug.apk> --engine-apk <frozen-baseline-debug.apk>
+python3 tools/test-hook-benchmark-control.py
+```
+
+工具只替换 `lib/arm64-v8a/libartdcevm.so`，保留原测试包的 DEX、fixture、其他原生库及 `wrap.sh`（JNI ID 模式）。它移除旧签名、按 16 KB 要求对齐、用 Android Debug 密钥重新签名并核对签名证书，逐项核对除签名外的全部 payload；重复 ZIP 项、相同引擎或额外字节变化均拒绝。APK 与包含输入／输出哈希、相同 payload 哈希的 `report.json` 写入忽略的 `build/evidence/hook-benchmark-control/`，工具不操作设备。这是性能诊断包；引擎与测试 JNI 的兼容性仍须由实际运行证明。
+
+用 `run-hook-overhead-benchmark.py` 比较原测试包和生成的 `control.apk`，事先固定轮数并平衡执行顺序。必要时反向保留旧测试包、放入新库，形成两种测试包 × 两种库的交叉对照。核对安装哈希和原始样本，分别报告整包差值、相同测试包下的库差值及仍未解释的变化。同测试包对照通过不能覆盖原整包超限记录，也不能仅由计时推导具体的代码布局、编译状态或缓存原因。
+
 
 ## 接收者失去接口后的保留 JNI ID
 
