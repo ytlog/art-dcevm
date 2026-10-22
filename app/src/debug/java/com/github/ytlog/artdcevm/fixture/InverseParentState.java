@@ -54,6 +54,9 @@ public final class InverseParentState {
             resume.countDown();for(Thread thread:threads)if(thread!=null)thread.join(5000);
         }
         public Object observation(int i) { return results[i]; }
+        public void verifyWaiting(Check check) throws Exception {
+            for(int i=first;i<4;i++) {check.eq("waiting"+i,true,threads[i].isAlive());check.eq("pending"+i,true,results[i]==null);}
+        }
         public void verify(Check check) throws Exception { verify(check,false); }
         public void verify(Check check,boolean changed) throws Exception {
             for(int i=first;i<4;i++) {check.eq("active"+i,changed&&i<2?13:11,results[i]);check.eq("joined"+i,true,!threads[i].isAlive());}

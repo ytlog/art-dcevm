@@ -18,7 +18,8 @@ bool Enable();
 bool Protecting();
 // Installed obsolete-copy DEX ownership guard with verified Class/collector declarations.
 bool CopiedFrames();
-// Retained private invoke-direct frames require the named modern cache-fill service.
+// Retained private invoke-direct frames require modern cache fill or legacy
+// checked-access services tied to ART's retained Class history.
 bool DirectSelectionServices();
 bool PrivateDirectFrames();
 // Caller supplies Native-probed Thread declarations and ART's existing admission root.

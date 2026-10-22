@@ -19,6 +19,7 @@ SOURCE = r'''
 #include "platform/common/runtime_roots.h"
 #include "platform/abi/arm64/common/redefinition.h"
 #include <cstring>
+#include <map>
 #include <sys/mman.h>
 #include <cstddef>
 #include <iostream>
@@ -81,6 +82,20 @@ void Visit(void* thread, abi::arm64::RootVisitor* visitor, uint32_t tid) {
 }
 const char* Descriptor(void* m) { return m == referrer && other_class ? "LOther;" : "LSubject;"; }
 uintptr_t Loader(void* m) { return m == referrer && other_loader ? 2 : 1; }
+using MethodAccess = bool (*)(void*,uintptr_t,void*,uintptr_t,uint32_t,int);
+std::map<uintptr_t,uintptr_t> history;
+int access_calls=0,history_calls=0;
+bool access_result=false;
+void* access_referrer=nullptr;uintptr_t access_owner=0,access_cache=0;
+void* access_method=nullptr;uint32_t access_index=0;int access_type=0;
+bool Access(void* from,uintptr_t owner,void* method,uintptr_t cache,uint32_t index,int type) {
+  access_calls++;access_referrer=from;access_owner=owner;access_method=method;
+  access_cache=cache;access_index=index;access_type=type;return access_result;
+}
+uintptr_t ObsoleteClass(void* klass) {
+  history_calls++;auto it=history.find(reinterpret_cast<uintptr_t>(klass));
+  return it==history.end()?0:it->second;
+}
 void* Selection(void*, void*, uintptr_t*, const uint16_t*, bool, bool*) { selections++; return &own_caller; }
 const char* expected_type = "Ljava/lang/IncompatibleClassChangeError;";
 void Require(bool ok, const char* reason) { if (!ok) throw std::runtime_error(reason); }
@@ -123,6 +138,18 @@ extern "C" void shadowhook_dlclose(void*) {}
 extern "C" void* shadowhook_dlsym(void*, const char* name) {
   using namespace symbols::invoke_kind;
   if (mode == 0) return nullptr;
+  if (mode >= 21) {
+    if (name == std::string(symbols::runtime_thread::kCurrentThread.name)) return HookAddress(Current);
+    if (name == std::string(symbols::structural::kThrowNewException.name)) return HookAddress(Throw);
+    if (name == std::string(kResolveCaller.name)) return HookAddress(Caller);
+    if (name == std::string(kResolveCache.name)) return HookAddress(Cache);
+    if (name == std::string(kNterpGetMethod.name)) return HookAddress(Nterp);
+    if (mode != 24 && name == std::string(kObsoleteCacheLegacy.name)) return HookAddress(CacheRead);
+    if (mode != 25 && name == std::string(symbols::runtime_thread::kReadBarrierMark.name)) return HookAddress(Mark);
+    if (mode != 22 && name == std::string(kGetObsoleteClass.name)) return HookAddress(ObsoleteClass);
+    if (mode != 23 && name == std::string(kResolvedMethodAccess.name)) return HookAddress(Access);
+    return nullptr;
+  }
   if (mode >= 17) {
     if (name == std::string(symbols::structural::kFindInstanceField.name)) return HookAddress(FindField);
     if (name == std::string(kClassDescriptorEquals.name)) return mode==20?nullptr:HookAddress(DescriptorEquals);
@@ -192,6 +219,59 @@ int main(int argc, char** argv) {
       Require(!invoke_kind::Enable(), "enabled without observed ClassLinker");
       invoke_kind::ObserveClassLinker(linker);
       Require(invoke_kind::Enable(), "could not enable complete guards");
+      if (mode >= 21) {
+        self=&fake_thread;fake_thread.marking=1;
+        MethodAccess call=nullptr;
+        for(const auto& hook:hooks)
+          if(std::string(hook.name)==symbols::invoke_kind::kResolvedMethodAccess.name)
+            call=reinterpret_cast<MethodAccess>(hook.replacement);
+        const bool available=mode==21||mode==26||mode==27;
+        Require((call!=nullptr)==available,"legacy access hook ignored missing dependencies");
+        Require(invoke_kind::DirectSelectionServices()==available,"wrong legacy direct service capability");
+        Require(!invoke_kind::PrivateDirectFrames(),"unprobed Class admitted legacy private frames");
+        if(call) Require(!call(reinterpret_cast<void*>(0x3000),0x4000,&method,0x5000,9,1)&&access_calls==1,
+                         "unprobed legacy hook read a Class");
+        if(mode==27) invoke_kind::ObserveClassLayout(0,4,8,8);
+        else if(mode!=26) invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking));
+        if(mode==27) Require(!call(reinterpret_cast<void*>(0x3000),0x4000,&method,0x5000,9,1),"unprobed collector allowed a Class read");
+        Require(invoke_kind::PrivateDirectFrames()==(mode==21),"legacy private admission ignored ownership/probes");
+        if(mode==21) {
+          void* page=mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
+          Require(page!=MAP_FAILED,"cannot map legacy Class history");
+          uintptr_t owner=0x10000000,latest=0x10000100,prior=0x10000200,old=0x10000300,alias=0x10000400;
+          auto flags=[](uintptr_t klass)->uint32_t& {return *reinterpret_cast<uint32_t*>(klass);};
+          flags(owner)=0x0200;flags(latest)=flags(prior)=flags(old)=flags(alias)=0x00200200;
+          history={{owner,latest},{latest,prior},{prior,old}};
+          method.declaring_class=owner;method.access_flags.store(2);
+          const int before=access_calls;
+          Require(call(reinterpret_cast<void*>(old),owner,&method,0x5000,~uint32_t{0},1),"deep retained self history rejected");
+          Require(access_calls==before&&history_calls==3,"self identity did not use the exact historical chain");
+          auto fallback=[&](void* from,uintptr_t target,void* member,int type) {
+            const int calls=access_calls;access_result=false;
+            Require(!call(from,target,member,0x6000,17,type)&&access_calls==calls+1,"non-self access bypassed ART");
+            Require(access_referrer==from&&access_owner==target&&access_method==member&&access_cache==0x6000&&access_index==17&&access_type==type,"original access ABI changed");
+          };
+          // Identical Class field bytes are insufficient; only actual history identity grants access.
+          fallback(reinterpret_cast<void*>(alias),owner,&method,1);
+          history.clear();fallback(reinterpret_cast<void*>(old),owner,&method,1);
+          history={{owner,latest},{latest,prior},{prior,old}};
+          for(int type:{0,2,3,4}) fallback(reinterpret_cast<void*>(old),owner,&method,type);
+          for(uint32_t bits:{0u,1u,4u,8u,10u}) {method.access_flags.store(bits);fallback(reinterpret_cast<void*>(old),owner,&method,1);}
+          method.access_flags.store(2);flags(old)=0x0200;fallback(reinterpret_cast<void*>(old),owner,&method,1);flags(old)=0x00200200;
+          flags(owner)|=0x00200000;fallback(reinterpret_cast<void*>(old),owner,&method,1);flags(owner)&=~0x00200000;
+          method.declaring_class=latest;fallback(reinterpret_cast<void*>(old),owner,&method,1);method.declaring_class=owner;
+          fallback(nullptr,owner,&method,1);fallback(reinterpret_cast<void*>(old),0,&method,1);fallback(reinterpret_cast<void*>(old),owner,nullptr,1);
+          method.access_flags.store(1);access_result=true;
+          Require(call(reinterpret_cast<void*>(old),owner,&method,0x5000,9,1),"original successful result lost");
+          method.access_flags.store(2);access_result=false;invoke_kind::Installed(false);
+          fallback(reinterpret_cast<void*>(old),owner,&method,1);
+          Require(!invoke_kind::PrivateDirectFrames()&&!invoke_kind::DirectSelectionServices(),"legacy capability survived rollback");
+          munmap(page,4096);
+        }
+        invoke_kind::Installed(false);
+        Require(!invoke_kind::DirectSelectionServices(),"legacy services survived rollback");
+        std::cout<<"Invocation guard case "<<mode<<" PASS\n";return 0;
+      }
       if (mode >= 17) {
         Require(hook_attempts == 0 && !invoke_kind::InterfaceSymbols() && !invoke_kind::EnableInterfaceSymbols(),
                 "MethodHandle guard installed before verified declarations");
@@ -590,7 +670,7 @@ def main():
         result = subprocess.run(command, capture_output=True, text=True)
         (evidence / 'compile.log').write_text(result.stdout + result.stderr)
         if result.returncode: raise RuntimeError('Guard compilation failed; inspect ignored evidence')
-        for case in range(21):
+        for case in range(28):
             result = subprocess.run([str(binary), str(case)], capture_output=True, text=True)
             (evidence / ('case-' + str(case) + '.log')).write_text(result.stdout + result.stderr)
             if result.returncode: raise RuntimeError('Guard case failed; inspect ignored evidence')

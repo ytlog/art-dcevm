@@ -500,6 +500,13 @@ for _round in range(2):
         INVERSE_STATIC_SCENARIOS.append((f"inverse-static-{_phase}-{_round}",[_variant]*4,_code))
 SCENARIOS += tuple(INVERSE_STATIC_SCENARIOS)
 
+INVERSE_HISTORY_SCENARIOS=[]
+for _round in range(2):
+    for _phase,_code in (("abort",110),("apply",0),("restore-abort",110),("restore",0),("reapply-abort",110),("reapply",0),("cleanup",0)):
+        _variant="inverse-parent-"+("original" if _phase.startswith("restore") or _phase=="cleanup" else "added")
+        INVERSE_HISTORY_SCENARIOS.append((f"inverse-parent-history-{_phase}-{_round}",[_variant]*6,_code))
+SCENARIOS+=tuple(INVERSE_HISTORY_SCENARIOS)
+
 
 
 MAPPED_SCENARIOS = {"interface-method-bodies","interface-pointer-recovery","multi-interface-unrelated", "multi-interface-recovery",
@@ -982,7 +989,7 @@ for suffix in ("", "-again"):
     REQUIRED_CHECKS["method-private-readd" + suffix] = {"oldVirtual": "java.lang.IllegalAccessError", "hotFailures": 30000, "entered": 0}
     REQUIRED_CHECKS["method-private-restore" + suffix] = {"virtual": 7, "range": 11, "super": 7}
 
-REQUIRED_CHECKS["invoke-kind-abort"] = {"before": 8, "after": 8, "range": 13, "instanceKind": False, "entered": 0}
+REQUIRED_CHECKS["invoke-kind-abort"] = {"rejectionWitness":True,"before": 8, "after": 8, "range": 13, "instanceKind": False, "entered": 0}
 for suffix in ("", "-again"):
     for kind, new_call, new_range in (("static", 101, 106), ("instance", 8, 13)):
         REQUIRED_CHECKS["invoke-kind-" + kind + suffix] = {
@@ -996,7 +1003,7 @@ for suffix in ("", "-again"):
     for caller in ("caller-rebuild", "static-caller-rebuild"):
         REQUIRED_CHECKS["invoke-kind-" + caller + suffix] = {"hotFailures": 30000, "oldCaller": "java.lang.IncompatibleClassChangeError", "entered": 2}
     REQUIRED_CHECKS["invoke-kind-static-callers" + suffix] = {"call": 101, "range": 106, "inherited": 101, "childCall": 101}
-    REQUIRED_CHECKS["invoke-kind-instance-abort" + suffix] = {"staticKind": True, "call": 101, "range": 106}
+    REQUIRED_CHECKS["invoke-kind-instance-abort" + suffix] = {"rejectionWitness":True,"staticKind": True, "call": 101, "range": 106}
     REQUIRED_CHECKS["invoke-kind-restore" + suffix] = {"virtual": 8, "range": 13, "inherited": 8, "super": 8, "marker": 7}
 
 # Interface direct targets retain exact old reflection objects, handles and
@@ -1615,6 +1622,21 @@ for _name, _, _code in INVERSE_STATIC_SCENARIOS:
         **{"active"+str(k):11 for k in (2,3)},**{"joined"+str(k):True for k in (2,3)}}
     if _code==110: REQUIRED_CHECKS[_name].update(armed=0,failureHits=1)
 
+for _name,_,_code in INVERSE_HISTORY_SCENARIOS:
+    _phase,_round=_name.removeprefix("inverse-parent-history-").rsplit("-",1)
+    _base={"reapply-abort":"abort","reapply":"apply","cleanup":"restore"}.get(_phase,_phase)
+    _changed=_phase in ("apply","restore-abort","reapply")
+    _checks=dict(REQUIRED_CHECKS[f"inverse-parent-{_base}-{_round}"])
+    if _phase!="reapply":
+        _checks={key:value for key,value in _checks.items() if not key.startswith(("active","joined"))}
+    for _key in ("lateLocal","lateParent","gclateLocal","gclateParent"): _checks.pop(_key,None)
+    if _phase!="abort":
+        _checks.update(lateLocal=13 if _changed else 11,lateParent=9 if _changed else "java.lang.ClassCastException",
+                       gclateLocal=13 if _changed else 11,gclateParent=9 if _changed else "java.lang.ClassCastException")
+    if _phase!="cleanup":
+        _checks.update(**{"waiting"+str(k):True for k in range(4)},**{"pending"+str(k):True for k in range(4)})
+    REQUIRED_CHECKS[_name]=_checks
+
 RECEIVER_LOSS_SCENARIOS = []
 for _round in range(2):
     for _phase, _code in (("abort",110),("apply",0),("restore-abort",110),("restore",0)):
@@ -1661,9 +1683,11 @@ def _base_scenario_sequence(scenario_group, api=None, self_selection=None):
     if scenario_group in ("receiver-loss", "receiver-loss-bound"):
         return tuple(RECEIVER_LOSS_SCENARIOS)
     if scenario_group == "inverse-parents":
-        return tuple(INVERSE_PARENT_SCENARIOS) + tuple(INVERSE_STATIC_SCENARIOS)
+        return tuple(INVERSE_PARENT_SCENARIOS) + tuple(INVERSE_STATIC_SCENARIOS) + tuple(INVERSE_HISTORY_SCENARIOS)
     if scenario_group == "inverse-static":
         return tuple(INVERSE_STATIC_SCENARIOS)
+    if scenario_group == "inverse-history":
+        return tuple(INVERSE_HISTORY_SCENARIOS)
     if scenario_group == "batch-combinations":
         return [(name, variants, code) for name, variants, code in SCENARIOS if name.startswith("batch-combination-s")]
     if self_selection is not None:
@@ -1730,7 +1754,8 @@ def _base_scenario_sequence(scenario_group, api=None, self_selection=None):
 def scenario_sequence(scenario_group, api=None, self_selection=None, direct_selection=None):
     if direct_selection is None: direct_selection = api is None or api >= 36
     return tuple(item for item in _base_scenario_sequence(scenario_group, api, self_selection)
-                 if not direct_selection or not item[0].startswith("inverse-parent-active-"))
+                 if (not direct_selection or not item[0].startswith("inverse-parent-active-")) and
+                    (direct_selection or not item[0].startswith("inverse-parent-history-")))
 
 def validate_report(report, scenario_group="full", private_self_mode=None):
     """Require every requested return code and an actual behavior observation."""
@@ -1960,7 +1985,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "inverse-static", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays", "self-array-parents"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "inverse-static", "inverse-history", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays", "self-array-parents"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

@@ -189,6 +189,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
             else if ("inverse-parents".equals(isolated)) runInverseParentScenarios();
             else if ("inverse-static".equals(isolated)) runInverseStaticScenarios();
+            else if ("inverse-history".equals(isolated)) runInverseHistoryScenarios();
             else if ("receiver-loss".equals(isolated) || "receiver-loss-bound".equals(isolated)) runReceiverLossScenarios();
             else if ("interface-symbols".equals(isolated)) runInterfaceSymbolScenarios();
             else if ("member-descriptors".equals(isolated)) runMemberDescriptorScenarios();
@@ -1695,6 +1696,9 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void runInvokeKindScenarios() throws Exception {
+        // This group also runs in isolation, without the ordinary suite's live instance.
+        final ClassFinalSubject rejectionWitness = new ClassFinalSubject();
+        final int witnessIdentity = System.identityHashCode(rejectionWitness);
         InvokeKindFixture.Subject subject = new InvokeKindFixture.Subject();
         InvokeKindFixture.Child child = new InvokeKindFixture.Child();
         runScenario("invoke-kind-abort", 70, scenario -> {
@@ -1702,6 +1706,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             scenario.check("before", 8, InvokeKindFixture.Caller.call(subject));
             scenario.redefine(new Class<?>[]{InvokeKindFixture.Subject.class, ClassFinalSubject.class},
                     "invoke-kind-static", "class-interface");
+            scenario.check("rejectionWitness",true,System.identityHashCode(rejectionWitness)==witnessIdentity);
             scenario.check("after", 8, InvokeKindFixture.Caller.call(subject));
             scenario.check("range", 13, InvokeKindFixture.Caller.range(subject));
             scenario.check("instanceKind", false, Modifier.isStatic(
@@ -1746,6 +1751,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 scenario.expectRejectionBy(ClassFinalSubject.class);
                 scenario.redefine(new Class<?>[]{InvokeKindFixture.Subject.class, ClassFinalSubject.class},
                         "invoke-kind-instance", "class-interface");
+                scenario.check("rejectionWitness",true,System.identityHashCode(rejectionWitness)==witnessIdentity);
                 scenario.check("staticKind", true, Modifier.isStatic(
                         InvokeKindFixture.Subject.class.getMethod("convert", int.class).getModifiers()));
                 scenario.check("call", 101, InvokeKindFixture.Caller.call(subject));
@@ -4053,6 +4059,51 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
     }
 
+    private void runInverseHistoryScenarios() throws Exception {
+        if(!DcevmRuntime.capabilities().getBoolean("privateDirectSelection")) return;
+        for(int round=0;round<2;round++) {
+            final boolean reverse=round!=0;
+            InverseParentState state=new InverseParentState();
+            for(int k=0;k<4;k++) StandardJvmtiClient.cacheInterfaceDispatch(k,state.own[k]);
+            InverseParentState.Active active=state.startActive();
+            try {
+                for(int phase=0;phase<6;phase++) {
+                    final boolean fail=phase%2==0,restoring=phase==2||phase==3;
+                    final boolean changed=phase==1||phase==2||phase==5;
+                    final boolean release=phase==5;
+                    String name="inverse-parent-history-"+new String[]{"abort","apply","restore-abort","restore","reapply-abort","reapply"}[phase]+"-"+round;
+                    Class<?>[] targets=state.targets(reverse);
+                    String[] variants=new String[targets.length];
+                    java.util.Arrays.fill(variants,"inverse-parent-"+(restoring?"original":"added"));
+                    runScenario(name,fail?110:0,scenario->{
+                        try {
+                            if(fail) scenario.check("armed",0,InterfaceAbortInstrumentation.armMappingPlanFailure());
+                            scenario.redefine(targets,variants);
+                            if(fail) scenario.check("failureHits",1,InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                            active.verifyWaiting(scenario::check);
+                            Runtime.getRuntime().gc();
+                        } finally {if(release) active.close();}
+                        if(release) active.verify(scenario::check,true);
+                        state.verify(scenario::check,"",changed);
+                        for(int k=0;k<4;k++) scenario.check("jni"+k,changed&&k<2?13:11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+                        Runtime.getRuntime().gc();
+                        state.verify(scenario::check,"gc",changed);
+                        for(int k=0;k<4;k++) scenario.check("gcJni"+k,changed&&k<2?13:11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+                    });
+                }
+            } finally {active.close();}
+            runScenario("inverse-parent-history-cleanup-"+round,0,scenario->{
+                Class<?>[] targets=state.targets(reverse);
+                String[] variants=new String[targets.length];java.util.Arrays.fill(variants,"inverse-parent-original");
+                scenario.redefine(targets,variants);
+                state.verify(scenario::check,"",false);
+                for(int k=0;k<4;k++) scenario.check("jni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+                Runtime.getRuntime().gc();state.verify(scenario::check,"gc",false);
+                for(int k=0;k<4;k++) scenario.check("gcJni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+            });
+        }
+    }
+
     private void runInverseParentScenarios() throws Exception {
         final boolean directFrames=DcevmRuntime.capabilities().getBoolean("privateDirectSelection");
         InverseParentState state = new InverseParentState();
@@ -4091,6 +4142,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             });
         }
         runInverseStaticScenarios();
+        runInverseHistoryScenarios();
     }
 
     private void runReceiverLossScenarios() throws Exception {

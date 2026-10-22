@@ -26,6 +26,9 @@ Caller original_caller = nullptr;
 Cache original_cache = nullptr;
 using MethodId = void* (*)(void*, uint32_t, void*);
 MethodId resolve_method_id = nullptr;
+using MethodAccess = bool (*)(void*, uintptr_t, void*, uintptr_t, uint32_t, int);
+MethodAccess original_method_access = nullptr;
+uintptr_t (*obsolete_class)(void*) = nullptr;
 void* (*current_thread)() = nullptr;
 void (*throw_exception)(void*, const char*, const char*) = nullptr;
 Nterp original_nterp = nullptr;
@@ -197,6 +200,30 @@ bool OwnClass(void* caller, void* resolved) {
   // deliberately survive reference replacement, so pointer equality is insufficient.
   return method_loader(caller) == method_loader(resolved) &&
       std::strcmp(method_descriptor(caller), method_descriptor(resolved)) == 0;
+}
+
+// Fixed Class::IsObsoleteVersionOf identity follows ART's retained history.
+// Classes are nonmoving; the named getter owns ClassExt/read-barrier access.
+bool MethodAccessCheck(void* referring, uintptr_t owner, void* method, uintptr_t cache,
+                       uint32_t index, int type) noexcept {
+  constexpr uint32_t kAccObsoleteObject = 0x00200000;  // modifiers.h.
+  if (type == 1 && referring && owner && method && enabled.load(std::memory_order_acquire) &&
+      CopiedFrames() && obsolete_class &&
+      (runtime_roots::Field<uint32_t>(referring, class_access) & kAccObsoleteObject) &&
+      !(runtime_roots::Field<uint32_t>(reinterpret_cast<void*>(owner), class_access) & kAccObsoleteObject)) {
+    const auto* prefix = static_cast<abi::arm64::ArtMethodPrefix*>(method);
+    if ((prefix->access_flags.load(std::memory_order_relaxed) &
+         (evolution::kAccPrivate | evolution::kAccStatic)) == evolution::kAccPrivate &&
+        Reference<true>(prefix->declaring_class) == owner) {
+      for (uintptr_t current = obsolete_class(reinterpret_cast<void*>(owner)); current;
+           current = obsolete_class(reinterpret_cast<void*>(current))) {
+        if (current == reinterpret_cast<uintptr_t>(referring)) {
+          return true;
+        }
+      }
+    }
+  }
+  return original_method_access(referring, owner, method, cache, index, type);
 }
 
 // ResolveMethod has already resolved the symbolic owner, so this lookup never
@@ -440,6 +467,13 @@ bool Prepare(std::vector<Hook>* hooks) {
     if (select_interface)
       prepared.push_back({select_interface, HookAddress(SelectMethod<4>), HookSlot(&original_interface), kSelectInterface.name});
   }
+  // Legacy checked resolution still compares obsolete and live Class objects.
+  // Intercept only the named throwing access test, before it creates IAE.
+  if (!resolve_method_id && caller && cache && cache_legacy && mark) {
+    obsolete_class = reinterpret_cast<decltype(obsolete_class)>(symbols::Find(kGetObsoleteClass));
+    if (void* access = obsolete_class ? symbols::Find(kResolvedMethodAccess) : nullptr)
+      prepared.push_back({access, HookAddress(MethodAccessCheck), HookSlot(&original_method_access), kResolvedMethodAccess.name});
+  }
   hooks->insert(hooks->end(), prepared.begin(), prepared.end());
   return true;
 }
@@ -503,8 +537,9 @@ bool CopiedFrames() {
       original_cache_read && mark && (use_read_barrier || gc_marking_offset != ~size_t{0});
 }
 bool DirectSelectionServices() {
-  return installed.load(std::memory_order_acquire) && resolve_method_id && original_nterp &&
-      method_descriptor && method_loader;
+  return installed.load(std::memory_order_acquire) &&
+      ((resolve_method_id && original_nterp && method_descriptor && method_loader) ||
+       (!resolve_method_id && original_caller && original_cache && original_method_access && obsolete_class));
 }
 bool PrivateDirectFrames() {
   return CopiedFrames() && DirectSelectionServices();

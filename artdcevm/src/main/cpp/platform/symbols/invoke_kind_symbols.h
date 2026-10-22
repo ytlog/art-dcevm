@@ -8,6 +8,10 @@ inline constexpr NamedSymbol kResolveCaller{Library::kArt, "_ZN3art11ClassLinker
 inline constexpr NamedSymbol kResolveCache{Library::kArt, "_ZN3art11ClassLinker13ResolveMethodILNS0_11ResolveModeE0EEEPNS_9ArtMethodEjNS_6HandleINS_6mirror8DexCacheEEENS5_INS6_11ClassLoaderEEES4_NS_10InvokeTypeE", SymbolTable::kAnyNamed};
 // Android 16--17: unchecked ID resolution no longer receives an invoke type.
 inline constexpr NamedSymbol kResolveMethodId{Library::kArt, "_ZN3art11ClassLinker15ResolveMethodIdEjPNS_9ArtMethodE", SymbolTable::kAnyNamed};
+// mirror/class-inl.h, Android 11--13: throwing resolved method access and
+// the exact retained-class chain used by Class::IsObsoleteVersionOf.
+inline constexpr NamedSymbol kResolvedMethodAccess{Library::kArt, "_ZN3art6mirror5Class24ResolvedMethodAccessTestILb1EEEbNS_6ObjPtrIS1_EEPNS_9ArtMethodENS3_INS0_8DexCacheEEEjNS_10InvokeTypeE", SymbolTable::kAnyNamed};
+inline constexpr NamedSymbol kGetObsoleteClass{Library::kArt, "_ZN3art6mirror5Class16GetObsoleteClassEv", SymbolTable::kAnyNamed};
 // nterp.cc. Android 14+ also uses this cache-fill entry in the switch interpreter.
 inline constexpr NamedSymbol kNterpGetMethod{Library::kArt, "NterpGetMethod", SymbolTable::kAnyNamed};
 // entrypoint_utils-inl.h, Android 14--17: switch interpreter invocation selection.

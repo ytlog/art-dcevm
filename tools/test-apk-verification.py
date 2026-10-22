@@ -465,6 +465,19 @@ class ApkVerificationTests(unittest.TestCase):
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report, scenario_group=group)
 
+    def test_isolated_invoke_kind_aborts_require_live_witness(self):
+        report=complete_report()
+        names={item[0] for item in runner.scenario_sequence("invoke-kind")}
+        report["scenarios"]=[item for item in report["scenarios"] if item["name"] in names]
+        runner.validate_report(report,scenario_group="invoke-kind")
+        for name in ("invoke-kind-abort","invoke-kind-instance-abort","invoke-kind-instance-abort-again"):
+            item=next(item for item in report["scenarios"] if item["name"]==name)
+            original=item["checks"]
+            item["checks"]=[check for check in original if check["name"]!="rejectionWitness"]
+            with self.subTest(name=name),self.assertRaises(runner.RunFailure):
+                runner.validate_report(report,scenario_group="invoke-kind")
+            item["checks"]=original
+
     def test_active_static_parent_changes_require_calls_gc_and_rollback(self):
         for api in (33,36):
             with self.subTest(api=api):
@@ -517,10 +530,29 @@ class ApkVerificationTests(unittest.TestCase):
             names={item[0] for item in runner.scenario_sequence("inverse-parents",36,direct_selection=selected)}
             report["scenarios"]=[item for item in report["scenarios"] if item["name"] in names]
             runner.validate_report(report,scenario_group="inverse-parents")
-            self.assertEqual(len(report["scenarios"]),16 if selected else 20)
+            self.assertEqual(len(report["scenarios"]),30 if selected else 20)
             del report["initialization"]["capabilities"]["privateDirectSelection"]
             with self.assertRaises(runner.RunFailure):
                 runner.validate_report(report,scenario_group="inverse-parents")
+
+    def test_held_private_frames_require_pending_history_and_latest_body(self):
+        for api in (33,36):
+            report=complete_report(api=api,direct_selection=True)
+            names={item[0] for item in runner.scenario_sequence("inverse-history",api,direct_selection=True)}
+            report["scenarios"]=[item for item in report["scenarios"] if item["name"] in names]
+            runner.validate_report(report,scenario_group="inverse-history")
+            self.assertEqual(len(report["scenarios"]),14)
+            final=next(item for item in report["scenarios"] if item["name"]=="inverse-parent-history-reapply-0")
+            for key in ("waiting0","pending1","gc0.cachedOwn","gcJni1","active0","joined1"):
+                saved=final["checks"]
+                final["checks"]=[check for check in saved if check["name"]!=key]
+                with self.subTest(api=api,missing=key),self.assertRaises(runner.RunFailure):
+                    runner.validate_report(report,scenario_group="inverse-history")
+                final["checks"]=saved
+            active=next(check for check in final["checks"] if check["name"]=="active0")
+            active.update(expected=11,actual=11,passed=True)
+            with self.assertRaises(runner.RunFailure):
+                runner.validate_report(report,scenario_group="inverse-history")
 
     def test_obsolete_self_calls_follow_reported_selection_services(self):
         names = {item[0] for item in runner.scenario_sequence("method-private")}
