@@ -313,6 +313,20 @@ uintptr_t GetMethod(void* self, void* caller, const uint16_t* instruction) noexc
     }
     void* resolved = ResolveUnchecked(self, instruction[1], caller, type);
     if (resolved && !CheckClassKind(self, caller, instruction[1], type)) return 0;
+    if (resolved && type == 1 && resolve_method_id && method_descriptor && method_loader &&
+        class_verified.load(std::memory_order_acquire) &&
+        (static_cast<abi::arm64::ArtMethodPrefix*>(caller)->access_flags.load(std::memory_order_relaxed) &
+         abi::arm64::kAccObsoleteMethod) &&
+        (static_cast<abi::arm64::ArtMethodPrefix*>(resolved)->access_flags.load(std::memory_order_relaxed) &
+         (evolution::kAccPrivate | evolution::kAccStatic)) == evolution::kAccPrivate && OwnClass(caller, resolved)) {
+      // Fixed Android 16--17 NterpGetMethod encodes invoke-direct as the
+      // ArtMethod pointer (low bit only marks String construction). Returning
+      // the self target avoids obsolete-Class private access checks. ART's
+      // caller already roots the receiver across this suspending entry and
+      // performs its normal null check after decoding the result. Leave the
+      // TLS cache empty rather than duplicating its private implementation.
+      return reinterpret_cast<uintptr_t>(resolved);
+    }
     resolved = Check(self, resolved, type);
     // Resolution or Check has installed the exception. Do not let
     // nterp cache a direct method's index as a virtual dispatch slot.
@@ -487,6 +501,13 @@ bool Protecting() { return enabled.load(std::memory_order_acquire); }
 bool CopiedFrames() {
   return installed.load(std::memory_order_acquire) && class_verified.load(std::memory_order_acquire) &&
       original_cache_read && mark && (use_read_barrier || gc_marking_offset != ~size_t{0});
+}
+bool DirectSelectionServices() {
+  return installed.load(std::memory_order_acquire) && resolve_method_id && original_nterp &&
+      method_descriptor && method_loader;
+}
+bool PrivateDirectFrames() {
+  return CopiedFrames() && DirectSelectionServices();
 }
 bool ClassKinds() {
   return ClassKindUnavailable() == nullptr;

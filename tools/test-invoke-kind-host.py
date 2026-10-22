@@ -357,6 +357,7 @@ int main(int argc, char** argv) {
         invoke_kind::ObserveScope(&fake_thread,&thread_layout,&layout,{&admission.root});
         Require(!invoke_kind::SelfCalls(), "unprobed Class enabled self calls");
         Require(!invoke_kind::CopiedFrames(), "unprobed Class enabled copied-frame admission");
+        Require(!invoke_kind::PrivateDirectFrames(), "unprobed Class enabled direct-frame admission");
         if (mode == 11 || mode == 16) {
           for (const auto& hook : hooks)
             if (std::string(hook.name) == symbols::invoke_kind::kObsoleteCacheLegacy.name)
@@ -372,6 +373,48 @@ int main(int argc, char** argv) {
         }
         invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8);
         Require(invoke_kind::CopiedFrames() == (mode != 13), "copied-frame admission ignored missing ownership hook or required self selector");
+        const bool direct = mode == 6 || mode == 7 || mode == 9 || mode == 12 || mode == 14 || mode == 15 || mode == 16;
+        Require(invoke_kind::PrivateDirectFrames() == direct, "direct-frame admission ignored modern cache-fill services");
+        if (direct) {
+          decltype(&Nterp) call = nullptr;
+          for (const auto& hook : hooks)
+            if (std::string(hook.name) == symbols::invoke_kind::kNterpGetMethod.name)
+              call = reinterpret_cast<decltype(call)>(hook.replacement);
+          Require(call != nullptr, "missing modern direct cache-fill hook");
+          void* saved_referrer = referrer; referrer = &own_caller;
+          const int calls = original_calls;
+          own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);
+          method.access_flags.store(2); uint16_t direct_inst[]{0x70,9,0};
+          for (uint16_t opcode : {0x70,0x76}) {
+            direct_inst[0]=opcode;
+            Require(call(self,referrer,direct_inst)==reinterpret_cast<uintptr_t>(&method), "obsolete direct self target encoded incorrectly");
+            Require(original_calls==calls, "obsolete direct self call reached old-Class access checks");
+          }
+          own_caller.access_flags.store(0);
+          Require(call(self,referrer,direct_inst)==42, "ordinary direct caller bypassed ART");
+          own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);
+          other_loader=true;
+          Require(call(self,referrer,direct_inst)==42, "loader alias gained private self access");
+          other_loader=false; other_class=true;
+          Require(call(self,referrer,direct_inst)==42, "another class gained private self access");
+          other_class=false; method.access_flags.store(1);
+          Require(call(self,referrer,direct_inst)==42, "non-private direct target bypassed ART");
+          method.access_flags.store(10); expected_type="Ljava/lang/IncompatibleClassChangeError;";
+          Require(call(self,referrer,direct_inst)==0, "static target encoded as direct");
+          missing_method=true;
+          Require(call(self,referrer,direct_inst)==0, "failed direct resolution reached ART cache fill");
+          missing_method=false; original_calls=calls; referrer=saved_referrer;
+        }
+        if (mode == 8 || mode == 10 || mode == 11 || mode == 13) {
+          for (const auto& hook : hooks) if (std::string(hook.name) == symbols::invoke_kind::kNterpGetMethod.name) {
+            auto call=reinterpret_cast<decltype(&Nterp)>(hook.replacement);
+            void* saved_referrer=referrer;referrer=&own_caller;
+            own_caller.access_flags.store(abi::arm64::kAccObsoleteMethod);method.access_flags.store(2);
+            uint16_t direct_inst[]{0x70,9,0};const int calls=original_calls;
+            Require(call(self,referrer,direct_inst)==42, "incomplete direct service bypassed ART");
+            original_calls=calls;referrer=saved_referrer;
+          }
+        }
         const bool complete = mode == 6 || mode == 10 || mode == 12;
         Require(invoke_kind::SelfCalls() == complete && invoke_kind::SelectionServices() == complete,
                 "combined selection capability is not the conjunction");
@@ -516,6 +559,7 @@ int main(int argc, char** argv) {
       invoke_kind::Installed(false);
       Require(!invoke_kind::Enable(), "enabled after installer rollback");
       Require(!invoke_kind::CopiedFrames(), "copied-frame admission survived rollback");
+      Require(!invoke_kind::PrivateDirectFrames(), "direct-frame admission survived rollback");
       Require(!invoke_kind::SelfCalls(false) && !invoke_kind::SelfCalls(true), "self admission survived rollback");
     }
     std::cout << "Invocation guard case " << mode << " PASS\n";

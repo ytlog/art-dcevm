@@ -54,8 +54,9 @@ public final class InverseParentState {
             resume.countDown();for(Thread thread:threads)if(thread!=null)thread.join(5000);
         }
         public Object observation(int i) { return results[i]; }
-        public void verify(Check check) throws Exception {
-            for(int i=first;i<4;i++) {check.eq("active"+i,11,results[i]);check.eq("joined"+i,true,!threads[i].isAlive());}
+        public void verify(Check check) throws Exception { verify(check,false); }
+        public void verify(Check check,boolean changed) throws Exception {
+            for(int i=first;i<4;i++) {check.eq("active"+i,changed&&i<2?13:11,results[i]);check.eq("joined"+i,true,!threads[i].isAlive());}
         }
     }
     public Active startActive() throws Exception { return new Active(); }
@@ -83,12 +84,13 @@ public final class InverseParentState {
         for(int i=staticsOnly?2:0;i<4;i++) {
             final int k=i; final Object receiver=receivers[i]; final Class<?> child=children[i],parent=parents[i%2];
             String key=prefix+i+".";
+            int ownValue=changed&&i<2?13:11;
             Object expected=changed?(i%2==0?9:"java.lang.AbstractMethodError"):"java.lang.ClassCastException";
-            check.eq(key+"local",11,InverseParentFixture.local(receiver,i));
-            if(checkCachedReflection) check.eq(key+"cachedOwn",11,result(()->own[k].invoke(receiver)));
-            if(checkCachedReflection) check.eq(key+"cachedHandle",11,result(()->k<2?handles[k].invokeWithArguments(receiver):handles[k].invokeWithArguments()));
+            check.eq(key+"local",ownValue,InverseParentFixture.local(receiver,i));
+            if(checkCachedReflection) check.eq(key+"cachedOwn",ownValue,result(()->own[k].invoke(receiver)));
+            if(checkCachedReflection) check.eq(key+"cachedHandle",ownValue,result(()->k<2?handles[k].invokeWithArguments(receiver):handles[k].invokeWithArguments()));
             Method fresh=child.getDeclaredMethod("valueX");fresh.setAccessible(true);
-            check.eq(key+"freshOwn",11,result(()->fresh.invoke(receiver)));
+            check.eq(key+"freshOwn",ownValue,result(()->fresh.invoke(receiver)));
             check.eq(key+"parent",expected,result(()->InverseParentFixture.parent(receiver,k)));
             check.eq(key+"parentHandle",expected,result(()->parentHandles[k%2].invokeWithArguments(receiver)));
             check.eq(key+"parentInstance",changed,parent.isInstance(receiver));
@@ -102,11 +104,11 @@ public final class InverseParentState {
         }
         if(!staticsOnly&&late==null&&changed)late=Class.forName("com.github.ytlog.artdcevm.fixture.InverseParentFixture$Late").getConstructor().newInstance();
         if(late!=null) {
-            check.eq(prefix+"lateLocal",11,InverseParentFixture.local(late,0));
+            check.eq(prefix+"lateLocal",changed?13:11,InverseParentFixture.local(late,0));
             check.eq(prefix+"lateParent",changed?9:"java.lang.ClassCastException",result(()->InverseParentFixture.parent(late,0)));
         }
         check.eq(prefix+"sharedParent",changed?9:7,InverseParentFixture.parent(shared,0));
-        check.eq(prefix+"sharedLocal",11,shared.local());
+        check.eq(prefix+"sharedLocal",changed&&!staticsOnly?13:11,shared.local());
         check.eq(prefix+"peer",changed?5:3,peer.value());
     }
 }

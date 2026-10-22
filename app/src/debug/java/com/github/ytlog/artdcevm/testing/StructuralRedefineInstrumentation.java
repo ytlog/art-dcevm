@@ -4054,6 +4054,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     }
 
     private void runInverseParentScenarios() throws Exception {
+        final boolean directFrames=DcevmRuntime.capabilities().getBoolean("privateDirectSelection");
         InverseParentState state = new InverseParentState();
         for (int i=0;i<4;i++) StandardJvmtiClient.cacheInterfaceDispatch(i,state.own[i]);
         for (int i=0;i<DISPATCH_CALLS;i++) for(int k=0;k<4;k++)
@@ -4066,22 +4067,27 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             Class<?>[] targets=state.targets(round!=0);
             String[] variants=new String[targets.length]; java.util.Arrays.fill(variants,variant);
             final int rejectedIndex=round==0?0:1;
-            if(!fail) runScenario("inverse-parent-active-"+(restoring?"restore-":"apply-")+round,71,scenario->{
+            if(!directFrames&&!fail) runScenario("inverse-parent-active-"+(restoring?"restore-":"apply-")+round,71,scenario->{
                 scenario.expectRejectionBy(state.children[rejectedIndex]);
                 InverseParentState.Active active=state.startActive();
                 try {scenario.redefine(targets,variants);} finally {active.close();}
-                active.verify(scenario::check);
+                active.verify(scenario::check,!changed);
                 state.verify(scenario::check,"",!changed);
             });
             runScenario(name,fail?110:0,scenario->{
-                if(fail) scenario.check("armed",0,InterfaceAbortInstrumentation.armMappingPlanFailure());
-                scenario.redefine(targets,variants);
-                if(fail) scenario.check("failureHits",1,InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                InverseParentState.Active active=directFrames?state.startActive():null;
+                try {
+                    if(fail) scenario.check("armed",0,InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(targets,variants);
+                    if(fail) scenario.check("failureHits",1,InterfaceAbortInstrumentation.mappingPlanFailureHits());
+                    Runtime.getRuntime().gc();
+                } finally {if(active!=null) active.close();}
+                if(active!=null) active.verify(scenario::check,changed);
                 state.verify(scenario::check,"",changed);
-                for(int k=0;k<4;k++) scenario.check("jni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+                for(int k=0;k<4;k++) scenario.check("jni"+k,changed&&k<2?13:11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
                 Runtime.getRuntime().gc();
                 state.verify(scenario::check,"gc",changed);
-                for(int k=0;k<4;k++) scenario.check("gcJni"+k,11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
+                for(int k=0;k<4;k++) scenario.check("gcJni"+k,changed&&k<2?13:11,StandardJvmtiClient.callInterfaceDispatchInt(state.receivers[k],k));
             });
         }
         runInverseStaticScenarios();

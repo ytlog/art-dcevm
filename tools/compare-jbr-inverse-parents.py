@@ -118,9 +118,9 @@ def main():
         for round in range(2):
             for phase in range(4):
                 for slot in range(2 if statics else 0,4):
-                    expected[f'active{round}/{phase}/{slot}']='java.lang.IncompatibleClassChangeError' if phase%2 and slot<2 else '11'
+                    expected[f'active{round}/{phase}/{slot}']='java.lang.IncompatibleClassChangeError' if phase%2 and slot<2 else ('13' if phase==2 and slot<2 else '11')
                     for prefix in ('cachedReflection','cachedHandle'):
-                        expected[f'{prefix}{round}/{phase}/{slot}']='java.lang.AbstractMethodError' if phase in (1,2) and slot%2 else '11'
+                        expected[f'{prefix}{round}/{phase}/{slot}']='java.lang.AbstractMethodError' if phase in (1,2) and slot%2 else ('13' if phase in (1,2) and slot<2 else '11')
         if observations != expected:raise RuntimeError('Pinned active-frame or cached-slot observations changed')
         manifest['runs'].append(dict(mode=name,staticsOnly=statics,states=8,checks=int(re.search(r'^PASS checks=(\d+)$',output,re.M)[1]),
             observations=observations,referenceDefects=['cached reflection/handle aliases inherited abstract']+([] if statics else ['obsolete private self call throws ICCE']),passed=True))

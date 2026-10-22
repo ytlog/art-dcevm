@@ -539,8 +539,11 @@ MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith((
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if name.startswith("proxy-interface-") and code == 0)
 MAPPED_SCENARIOS.update(name for name, _, code in SCENARIOS if code == 0 and name.startswith(("invoke-kind-", "method-private", "interface-descriptor-", "interface-symbol-", "interface-hide-parent-", "inverse-parent-", "inverse-static-")))
 VAR_HANDLE_API = 33
-def release_expectation(name, code, required, api, self_selection):
-    """Expected code and checks given the reported per-kind selection services."""
+def release_expectation(name, code, required, api, self_selection, direct_selection=None):
+    """Expected code and checks given the reported selection services."""
+    if direct_selection is None: direct_selection = api >= 36
+    if name.startswith("inverse-parent-") and "-active-" not in name and not direct_selection:
+        required={key:value for key,value in required.items() if not key.startswith(("active","joined"))}
     selected = self_selection["interface" if "interface" in name else "class"]
     if name.startswith("method-private-self-") and not name.endswith(("-restore", "-retain")) and selected:
         iface = "interface" in name
@@ -1571,28 +1574,31 @@ for _name, _, _code in INTERFACE_SYMBOL_SCENARIOS:
 
 for _name, _, _code in INVERSE_PARENT_SCENARIOS:
     _changed=any(_phase in _name for _phase in ("-apply-","-restore-abort-"))
-    _checks={"sharedParent":9 if _changed else 7,"sharedLocal":11,"peer":5 if _changed else 3}
+    _checks={"sharedParent":9 if _changed else 7,"sharedLocal":13 if _changed else 11,"peer":5 if _changed else 3}
     for _k in range(4):
         _parent=(9 if _k%2==0 else "java.lang.AbstractMethodError") if _changed else "java.lang.ClassCastException"
-        _checks.update({f"{_k}."+key:value for key,value in dict(local=11,cachedOwn=11,cachedHandle=11,freshOwn=11,
+        _checks.update({f"{_k}."+key:value for key,value in dict(local=13 if _changed and _k<2 else 11,cachedOwn=13 if _changed and _k<2 else 11,cachedHandle=13 if _changed and _k<2 else 11,freshOwn=13 if _changed and _k<2 else 11,
             parent=_parent,parentHandle=_parent,parentInstance=_changed,marker=31,
             freshVirtual="java.lang.IllegalAccessException",freshStatic="java.lang.IllegalAccessException" if _k<2 else 11,
             proxyParent=_parent,proxyLocal=23,nullLocal="java.lang.NullPointerException").items()})
     REQUIRED_CHECKS[_name]={**_checks,**{"gc"+key:value for key,value in _checks.items()},
-                            **{"jni"+str(k):11 for k in range(4)},**{"gcJni"+str(k):11 for k in range(4)}}
+                            **{"jni"+str(k):13 if _changed and k<2 else 11 for k in range(4)},**{"gcJni"+str(k):13 if _changed and k<2 else 11 for k in range(4)}}
     if "-active-" in _name:
         _changed="-restore-" in _name
-        _checks={"sharedParent":9 if _changed else 7,"sharedLocal":11,"peer":5 if _changed else 3}
+        _checks={"sharedParent":9 if _changed else 7,"sharedLocal":13 if _changed else 11,"peer":5 if _changed else 3}
         for _k in range(4):
             _parent=(9 if _k%2==0 else "java.lang.AbstractMethodError") if _changed else "java.lang.ClassCastException"
-            _checks.update({f"{_k}."+key:value for key,value in dict(local=11,cachedOwn=11,cachedHandle=11,freshOwn=11,
+            _checks.update({f"{_k}."+key:value for key,value in dict(local=13 if _changed and _k<2 else 11,cachedOwn=13 if _changed and _k<2 else 11,cachedHandle=13 if _changed and _k<2 else 11,freshOwn=13 if _changed and _k<2 else 11,
                 parent=_parent,parentHandle=_parent,parentInstance=_changed,marker=31,
                 freshVirtual="java.lang.IllegalAccessException",freshStatic="java.lang.IllegalAccessException" if _k<2 else 11,
                 proxyParent=_parent,proxyLocal=23,nullLocal="java.lang.NullPointerException").items()})
-        REQUIRED_CHECKS[_name]={**_checks,**{"active"+str(k):11 for k in range(4)},**{"joined"+str(k):True for k in range(4)}}
+        REQUIRED_CHECKS[_name]={**_checks,**{"active"+str(k):13 if _changed and k<2 else 11 for k in range(4)},**{"joined"+str(k):True for k in range(4)}}
     if _name not in ("inverse-parent-abort-0","inverse-parent-active-apply-0"):
-        REQUIRED_CHECKS[_name].update(lateLocal=11,lateParent=9 if _changed else "java.lang.ClassCastException",
-                                     **({} if "-active-" in _name else dict(gclateLocal=11,gclateParent=9 if _changed else "java.lang.ClassCastException")))
+        REQUIRED_CHECKS[_name].update(lateLocal=13 if _changed else 11,lateParent=9 if _changed else "java.lang.ClassCastException",
+                                     **({} if "-active-" in _name else dict(gclateLocal=13 if _changed else 11,gclateParent=9 if _changed else "java.lang.ClassCastException")))
+    if "-active-" not in _name:
+        REQUIRED_CHECKS[_name].update(**{"active"+str(k):13 if _changed and k<2 else 11 for k in range(4)},
+                                     **{"joined"+str(k):True for k in range(4)})
     if _code == 110: REQUIRED_CHECKS[_name].update(armed=0,failureHits=1)
 
 for _name, _, _code in INVERSE_STATIC_SCENARIOS:
@@ -1651,7 +1657,7 @@ for _round in range(2):
         REQUIRED_CHECKS[_name] = _checks
 SCENARIOS += tuple(RECEIVER_LOSS_SCENARIOS)
 
-def scenario_sequence(scenario_group, api=None, self_selection=None):
+def _base_scenario_sequence(scenario_group, api=None, self_selection=None):
     if scenario_group in ("receiver-loss", "receiver-loss-bound"):
         return tuple(RECEIVER_LOSS_SCENARIOS)
     if scenario_group == "inverse-parents":
@@ -1661,7 +1667,7 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
     if scenario_group == "batch-combinations":
         return [(name, variants, code) for name, variants, code in SCENARIOS if name.startswith("batch-combination-s")]
     if self_selection is not None:
-        return tuple(item for item in scenario_sequence(scenario_group, api)
+        return tuple(item for item in _base_scenario_sequence(scenario_group, api)
                      if not item[0].endswith("-retain") or
                      any(self_selection.values()))
     if scenario_group == "interface-symbols":
@@ -1721,6 +1727,11 @@ def scenario_sequence(scenario_group, api=None, self_selection=None):
     raise RunFailure("Unsupported scenario group")
 
 
+def scenario_sequence(scenario_group, api=None, self_selection=None, direct_selection=None):
+    if direct_selection is None: direct_selection = api is None or api >= 36
+    return tuple(item for item in _base_scenario_sequence(scenario_group, api, self_selection)
+                 if not direct_selection or not item[0].startswith("inverse-parent-active-"))
+
 def validate_report(report, scenario_group="full", private_self_mode=None):
     """Require every requested return code and an actual behavior observation."""
     if (not isinstance(report, dict) or type(report.get("schemaVersion")) is not int
@@ -1778,12 +1789,15 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
         raise RunFailure("The debug private self mask did not disable the selected service")
     if type(capabilities.get("interfaceMethodSelection")) is not bool:
         raise RunFailure("The initialization report is missing interfaceMethodSelection")
-    expected_scenarios = scenario_sequence(scenario_group, device["api"], self_selection)
+    direct_selection=capabilities.get("privateDirectSelection")
+    if type(direct_selection) is not bool:
+        raise RunFailure("The initialization report is missing privateDirectSelection")
+    expected_scenarios = scenario_sequence(scenario_group, device["api"], self_selection, direct_selection)
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
         raise RunFailure("The device report does not contain the complete scenario sequence")
     for scenario, (name, variants, code) in zip(scenarios, expected_scenarios):
-        code, required = release_expectation(name, code, REQUIRED_CHECKS[name], device["api"], self_selection)
+        code, required = release_expectation(name, code, REQUIRED_CHECKS[name], device["api"], self_selection, direct_selection)
         if not isinstance(scenario, dict) or scenario.get("name") != name:
             raise RunFailure("The device report has an unexpected scenario order")
         if scenario.get("variants") != variants:

@@ -24,7 +24,8 @@ isolation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(isolation)
 
 
-def complete_report(api=36, self_selection=None):
+def complete_report(api=36, self_selection=None, direct_selection=None):
+    if direct_selection is None: direct_selection=api>=36
     if self_selection is None:
         self_selection = api >= 36
     if type(self_selection) is bool:
@@ -49,6 +50,7 @@ def complete_report(api=36, self_selection=None):
             "fieldDeletion": True, "fieldTypeChange": True,
             "memberDeletion": True, "memberTypeChange": True,
             "hierarchyChange": False, "fullDcevmComplete": False,
+            "privateDirectSelection": direct_selection,
             "privateSelfSelection": all(self_selection.values()),
             **{"privateSelfSelection" + kind.title(): value for kind, value in self_selection.items()},
             **{"privateSelfSelection" + kind.title() + "Reason": "" if value else "named selector unavailable"
@@ -68,9 +70,9 @@ def complete_report(api=36, self_selection=None):
                                   *[{"name": key, "expected": "captured baseline", "actual": "captured baseline",
                                      "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())],
                                   rejection_check(name, code)]}
-                      for name, variants, base_code in runner.scenario_sequence("full", api, self_selection)
+                      for name, variants, base_code in runner.scenario_sequence("full", api, self_selection, direct_selection)
                       for code, required in [runner.release_expectation(
-                          name, base_code, runner.REQUIRED_CHECKS[name], api, self_selection)]],
+                          name, base_code, runner.REQUIRED_CHECKS[name], api, self_selection, direct_selection)]],
     }
 
 
@@ -492,6 +494,34 @@ class ApkVerificationTests(unittest.TestCase):
                 with self.assertRaises(runner.RunFailure):
                     runner.validate_report(report,scenario_group="inverse-static")
 
+    def test_private_parent_frames_require_real_success_and_rollback(self):
+        names={item[0] for item in runner.scenario_sequence("inverse-parents")}
+        report=complete_report(api=36)
+        report["scenarios"]=[item for item in report["scenarios"] if item["name"] in names]
+        runner.validate_report(report,scenario_group="inverse-parents")
+        apply=next(item for item in report["scenarios"] if item["name"]=="inverse-parent-apply-0")
+        for key in ("active0","active1","joined0","joined1","jni0","gc1.parent","1.cachedOwn"):
+            original=apply["checks"]
+            apply["checks"]=[check for check in original if check["name"]!=key]
+            with self.subTest(missing=key),self.assertRaises(runner.RunFailure):
+                runner.validate_report(report,scenario_group="inverse-parents")
+            apply["checks"]=original
+        check=next(check for check in apply["checks"] if check["name"]=="active0")
+        check.update(expected="java.lang.IllegalAccessError",actual="java.lang.IllegalAccessError",passed=True)
+        with self.assertRaises(runner.RunFailure):
+            runner.validate_report(report,scenario_group="inverse-parents")
+
+    def test_private_parent_frames_follow_direct_service_not_virtual_services(self):
+        for selected in (False,True):
+            report=complete_report(api=36,self_selection=False,direct_selection=selected)
+            names={item[0] for item in runner.scenario_sequence("inverse-parents",36,direct_selection=selected)}
+            report["scenarios"]=[item for item in report["scenarios"] if item["name"] in names]
+            runner.validate_report(report,scenario_group="inverse-parents")
+            self.assertEqual(len(report["scenarios"]),16 if selected else 20)
+            del report["initialization"]["capabilities"]["privateDirectSelection"]
+            with self.assertRaises(runner.RunFailure):
+                runner.validate_report(report,scenario_group="inverse-parents")
+
     def test_obsolete_self_calls_follow_reported_selection_services(self):
         names = {item[0] for item in runner.scenario_sequence("method-private")}
         for api, selection in ((33, False), (35, True), (35, False), (36, True),
@@ -838,7 +868,7 @@ class ApkVerificationTests(unittest.TestCase):
                     if positive:
                         self.assertEqual(metadata["installedApkSha256"], digest)
                         self.assertEqual(metadata["apkSha256"], digest)
-                        self.assertEqual(metadata["scenarioCount"], len(runner.SCENARIOS))
+                        self.assertEqual(metadata["scenarioCount"], len(report["scenarios"]))
                         self.assertTrue(any(runner.COMPONENT in call for call in calls))
                         self.assertTrue(any(call[-1] == runner.REPORT_PATH and "cat" in call for call in calls))
                     if mode in guarded_modes[:9]:

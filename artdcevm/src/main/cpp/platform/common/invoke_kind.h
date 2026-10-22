@@ -18,6 +18,9 @@ bool Enable();
 bool Protecting();
 // Installed obsolete-copy DEX ownership guard with verified Class/collector declarations.
 bool CopiedFrames();
+// Retained private invoke-direct frames require the named modern cache-fill service.
+bool DirectSelectionServices();
+bool PrivateDirectFrames();
 // Caller supplies Native-probed Thread declarations and ART's existing admission root.
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, abi::arm64::Handle target);

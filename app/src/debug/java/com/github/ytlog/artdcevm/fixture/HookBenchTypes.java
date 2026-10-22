@@ -77,5 +77,13 @@ public final class HookBenchTypes {
         return sum;
     }
 
+    private int directValue(int x) { return x + 1; }
+    public static long privateDirect(int n) {
+        HookBenchTypes target = new HookBenchTypes();
+        long sum = 0;
+        for (int i = 0; i < n; i++) sum += target.directValue(i);
+        return sum;
+    }
+
     private HookBenchTypes() {}
 }

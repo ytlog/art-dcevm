@@ -40,6 +40,7 @@ std::string Capabilities() {
       ",\"interfaceDispatchSealing\":" + QuoteJsonMutf8(imt_sealing::State()) +
       ",\"interfaceMethodSelection\":" + (methods && interface_method_selection::Available() ? "true" : "false") +
       ",\"retransformRouted\":" + (state.installed && state.capabilities.retransform ? "true" : "false") +
+      ",\"privateDirectSelection\":" + (methods && invoke_kind::DirectSelectionServices() ? "true" : "false") +
       ",\"privateSelfSelection\":" + (methods && invoke_kind::SelectionServices() ? "true" : "false") +
       ",\"privateSelfSelectionClass\":" + (methods && invoke_kind::SelectionServices(false) ? "true" : "false") +
       ",\"privateSelfSelectionInterface\":" + (methods && invoke_kind::SelectionServices(true) ? "true" : "false") +

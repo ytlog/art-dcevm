@@ -198,15 +198,25 @@ bool CheckClass(ClassRedefinitionPrefix* self) noexcept try {
       const auto old = std::find_if(snapshot.live.methods.begin(), snapshot.live.methods.end(),
           [&](const auto& method) { return method.name == next.name && method.descriptor == next.descriptor; });
       const bool declared = old != snapshot.live.methods.end();
+      // Removing an inherited symbol does not turn a retained direct
+      // declaration into a virtual-to-private change. Caller protection must
+      // compare with the declaration's actual old invoke kind.
+      if (declared) {
+        auto symbol = symbols.find(key);
+        if (symbol != symbols.end()) symbol->second = old->access;
+      }
       const bool kept_public_static = (incoming.access & evolution::kAccInterface) &&
           declared && old->IsStatic() && next.IsStatic() &&
           (old->access & evolution::kAccPublic) && (next.access & evolution::kAccPublic);
+      const bool kept_private_direct = (incoming.access & evolution::kAccInterface) &&
+          declared && !old->IsStatic() && !next.IsStatic() &&
+          (old->access & evolution::kAccPrivate) && (next.access & evolution::kAccPrivate);
       if (snapshot.live.interfaces != incoming.interfaces && batch->active_frame &&
-          (!kept_public_static || !invoke_kind::CopiedFrames())) {
-        // Public static self calls do not perform virtual selection or need
-        // obsolete caller private access. Their copied default frames still
-        // require installed DEX ownership and member-map normalization guards.
-        // Private declarations retain the unresolved direct-frame boundary.
+          !(kept_public_static ? invoke_kind::CopiedFrames() :
+            kept_private_direct && invoke_kind::PrivateDirectFrames() && invoke_kind::Enable())) {
+        // Retained declarations keep their invoke kind. Copied frames require
+        // the DEX ownership guard; modern direct calls additionally need a
+        // rooted selector because obsolete Class identity fails private access.
         decision.error = JVMTI_ERROR_UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED;
         decision.reason = kept_public_static
             ? "active public static parent collision requires obsolete copied-frame ownership services"

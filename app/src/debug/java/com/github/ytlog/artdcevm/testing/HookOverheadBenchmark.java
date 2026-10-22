@@ -306,6 +306,11 @@ public final class HookOverheadBenchmark extends Instrumentation {
         boolean compiled = mode.equals("jit");
         JSONObject workloads = new JSONObject();
         report.put("workloads", workloads);
+        measure(workloads, "privateDirect", compiled, HookBenchTypes::privateDirect);
+        JSONObject direct = workloads.getJSONObject("privateDirect");
+        long directCalls = direct.getInt("callsPerBatch");
+        if (direct.getLong("checksum") != directCalls * (directCalls + 1) / 2 * SAMPLES)
+            throw new AssertionError("Invalid private direct benchmark checksum");
         measure(workloads, "virtualMono", compiled, n -> HookBenchTypes.virtualMono(target, n));
         measure(workloads, "virtualMega", compiled, n -> HookBenchTypes.virtualMega(early, n));
         measure(workloads, "interfaceMono", compiled, n -> HookBenchTypes.interfaceMono(shape, n));
