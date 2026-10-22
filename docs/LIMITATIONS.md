@@ -179,3 +179,7 @@ API 33 在真实运行时续接自证明通过后，另行开放普通类和接�
 服务缺失或自证明失败时，应用事务仍以 71 拒绝。API 30–32 不开放这条路径；API 36 继续使用命名选择入口。内部或应用事务一旦在续接保护下成功提交，监听在进程存续期间常驻，后续失败不撤销，覆盖提交前扫描之后新进入的旧帧。其他调试代理仍收到 invoke 事件，但被续接调用之后的 move-result 事件会跳过。局部变量、引用根、异常与非尾调用后续计算均留在原帧，应用 DEX 与访问标志不变。
 
 其他调试代理强制 pop／retry 和异步异常投递尚无独立设备验收证据；相关分支保留 ART 的处理路径，不据此宣称所有调试代理组合均已对齐。
+
+API 30–32 的续接适配目前仅为关闭准入的候选实现：已核对固定 Android 11／12／12L 源码与已存 ELF 名称，并加入 legacy 异常 ABI、DEX 方法身份和 signed root 服务。三版均没有本功能的设备证据，仍保留 71；内部 Debug 自证明也不能开放应用守卫。缺少 throwing direct access 入口的模块只观察命名 `CanAccessMember` 边界，不改变其结果，观察命中不代表 direct 访问能力。
+
+新增诊断：`privateSelfContinuationDeviceValidated` 表示版本是否列入已验收的续接准入范围（当前仅 API 33），不能代替本进程 `…Proven`；`…ExceptionAbi` 为 `legacy-instrumentation`、`skip-flags` 或 `unavailable`；`…IdentityService` 为 `unverified`、`named-method-and-fixed-source` 或 `fixed-source`；`…DirectAccessProofs` 的位值 1／2 分别表示内部类／接口旧 private direct 帧真实通过，位值 4 仅表示观察到 direct 解析中的拒绝，不授权访问。

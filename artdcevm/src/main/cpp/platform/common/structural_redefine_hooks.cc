@@ -57,7 +57,7 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
         (private_change && !invoke_kind::SelfCalls(interface_target) &&
          (snapshot.active_frame || (android_get_device_api_level() == 33 && !invoke_kind::SelectionServices(interface_target))) &&
          !private_continuation::ProbeTransaction(snapshot.live.descriptor) &&
-         !(private_continuation::Proven() && private_continuation::Active() && invoke_kind::CopiedFrames())))
+         !(private_continuation::Admitted() && invoke_kind::CopiedFrames())))
       return "an active frame of " + (protected_change ? snapshot.live.descriptor : *batch.active_frame) +
           " may still invoke the old kind of " + method;
     transaction::Current()->protect_invocations |= protected_change;

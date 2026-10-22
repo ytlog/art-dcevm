@@ -24,12 +24,14 @@ isolation = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(isolation)
 
 
-def complete_report(api=36, self_selection=None, direct_selection=None):
-    if direct_selection is None: direct_selection=api>=36
+def complete_report(api=36, self_selection=None, direct_selection=None, continuation=None):
+    if continuation is None: continuation = api == 33
+    if direct_selection is None: direct_selection=api == 33 or api>=36
     if self_selection is None:
         self_selection = api >= 36
     if type(self_selection) is bool:
         self_selection = {"class": self_selection, "interface": self_selection}
+    effective_selection = {"class": True, "interface": True} if continuation else self_selection
     def rejection_check(name, code):
         if name == "tool-retransform-invalid-batch":
             return {"name": "nativeFallbackReason", "expected": True, "actual": True, "passed": True}
@@ -37,7 +39,7 @@ def complete_report(api=36, self_selection=None, direct_selection=None):
             return {"name": "lastRejection", "expected": "", "actual": "", "passed": True}
         prefix = "Lcom/github/ytlog/artdcevm/fixture/Evolving;: "
         return {"name": "rejectedByPolicy", "expected": prefix, "actual": prefix, "passed": True}
-    return {
+    report = {
         "schemaVersion": 1, "completed": True, "failures": 0, "uid": 10123,
         "device": {"model": "Mock Android", "api": api, "release": str(api - 20)},
         "initialization": {"passed": True, "runtimeInitialized": True, "clientAttached": True,
@@ -70,10 +72,20 @@ def complete_report(api=36, self_selection=None, direct_selection=None):
                                   *[{"name": key, "expected": "captured baseline", "actual": "captured baseline",
                                      "passed": True} for key in runner.UNCHANGED_CHECKS.get(name, ())],
                                   rejection_check(name, code)]}
-                      for name, variants, base_code in runner.scenario_sequence("full", api, self_selection, direct_selection)
+                      for name, variants, base_code in runner.scenario_sequence("full", api, effective_selection, direct_selection)
                       for code, required in [runner.release_expectation(
-                          name, base_code, runner.REQUIRED_CHECKS[name], api, self_selection, direct_selection)]],
+                          name, base_code, runner.REQUIRED_CHECKS[name], api, effective_selection, direct_selection)]],
     }
+
+    if continuation:
+        report["continuationPreparation"] = {
+            "privateSelfContinuationPrepared": True, "privateSelfContinuationProven": True,
+            "privateSelfContinuationActive": True, "privateSelfContinuationKinds": ["class", "interface"],
+            "privateSelfContinuationFailure": "", "privateSelfContinuationEventPolicy": "skip-move-result",
+            "privateSelfContinuationDeviceValidated": True, "privateSelfContinuationExceptionAbi": "skip-flags",
+            "privateSelfContinuationIdentityService": "named-method-and-fixed-source",
+            "privateSelfContinuationDirectAccessProofs": 3}
+    return report
 
 
 FAKE_ADB = r'''#!/usr/bin/env python3
@@ -134,6 +146,38 @@ else:
 
 
 class ApkVerificationTests(unittest.TestCase):
+    def test_continuation_requires_independent_identity_direct_and_device_proofs(self):
+        report = complete_report(33, True, True)
+        capabilities = report["initialization"]["capabilities"]
+        capabilities.update(privateSelfSelection=False, privateSelfSelectionClass=False,
+                            privateSelfSelectionInterface=False,
+                            privateSelfSelectionClassReason="named selector unavailable",
+                            privateSelfSelectionInterfaceReason="named selector unavailable")
+        proof = {"privateSelfContinuationPrepared": True, "privateSelfContinuationProven": True,
+                 "privateSelfContinuationActive": True, "privateSelfContinuationKinds": ["class", "interface"],
+                 "privateSelfContinuationFailure": "", "privateSelfContinuationEventPolicy": "skip-move-result",
+                 "privateSelfContinuationDeviceValidated": True,
+                 "privateSelfContinuationExceptionAbi": "skip-flags",
+                 "privateSelfContinuationIdentityService": "named-method-and-fixed-source",
+                 "privateSelfContinuationDirectAccessProofs": 3}
+        report["continuationPreparation"] = proof
+        names = {name for name, _, _ in runner.scenario_sequence("method-private-self", 33, {"class": True, "interface": True}, True)}
+        report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
+        runner.validate_report(report, scenario_group="method-private-self")
+        for key, wrong in (("privateSelfContinuationDeviceValidated", False),
+                           ("privateSelfContinuationExceptionAbi", "legacy-instrumentation"),
+                           ("privateSelfContinuationIdentityService", "unverified"),
+                           *[("privateSelfContinuationDirectAccessProofs", bits) for bits in (0, 1, 2, 4)]):
+            broken = copy.deepcopy(report)
+            broken["continuationPreparation"][key] = wrong
+            with self.subTest(key=key, wrong=wrong), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group="method-private-self")
+        for key in proof:
+            broken = copy.deepcopy(report)
+            del broken["continuationPreparation"][key]
+            with self.subTest(missing=key), self.assertRaises(runner.RunFailure):
+                runner.validate_report(broken, scenario_group="method-private-self")
+
     def test_interface_selection_requires_transport_access_and_loader_evidence(self):
         report = complete_report(36)
         report['scenarios'] = [s for s in report['scenarios'] if s['name'].startswith('interface-selection-')]
@@ -556,7 +600,7 @@ class ApkVerificationTests(unittest.TestCase):
 
     def test_obsolete_self_calls_follow_reported_selection_services(self):
         names = {item[0] for item in runner.scenario_sequence("method-private")}
-        for api, selection in ((33, False), (35, True), (35, False), (36, True),
+        for api, selection in ((32, False), (35, True), (35, False), (36, True),
                                (34, {"class": False, "interface": True}),
                                (37, {"class": True, "interface": False})):
             per_kind = {"class": selection, "interface": selection} if type(selection) is bool else selection
@@ -597,6 +641,9 @@ class ApkVerificationTests(unittest.TestCase):
         report = complete_report()
         report["initialization"]["capabilities"]["privateSelfSelectionClassReason"] = "unavailable"
         with self.assertRaises(runner.RunFailure): runner.validate_report(report)
+
+        masked = complete_report(33, False, continuation=False)
+        runner.validate_report(masked, private_self_mode="disabled")
 
     def test_self_selection_capability_is_required(self):
         report = complete_report(35, True)

@@ -25,6 +25,8 @@ struct Services {
   void** (*exception)(void*);
   void (*throw_exception)(void*, const char*, const char*);
   bool (*ready)();
+  bool (*identity_proof)(void*, void*, const char*, uintptr_t) = nullptr;
+  bool (*direct_proof)() = nullptr;
 };
 void Configure(Services services);
 // Borrow the engine environment without replacing any callbacks.
@@ -32,6 +34,13 @@ void ConfigureEnvironment(jvmtiEnv* env, bool callbacks_ready);
 bool Prepare(JavaVM* vm, JNIEnv* jni);
 bool Prove(JNIEnv* jni);
 bool Proven();
+bool DeviceValidated();
+bool Admitted();
+bool ProofActive();
+#if defined(ARTDCEVM_INTERFACE_ABORT_TESTS)
+// An unvalidated device may exercise only engine-owned proof transactions.
+bool PrepareForProof(JavaVM* vm, JNIEnv* jni);
+#endif
 bool Prepared();
 // Invalidate only enhancement decisions, at ART publication and ClassPrepare.
 void Invalidate();

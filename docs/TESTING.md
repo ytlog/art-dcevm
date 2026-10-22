@@ -26,7 +26,7 @@ done
 
 `--scenario-group retransform` 独立运行 11 个增强场景，`tool` 和完整组也包含它们，准入 arm64 API 30–37（含 12L）。独立 agent 经公开 JVMTI 表调用 RetransformClasses，只在 ClassFileLoadHook 中提供 DEX。核对字段／方法新增、删除与恢复、旧实例兼容值、旧缓存引用持续退役、GC、同内容输出、无替换输出、混合批次的不变类、两目标整批提交、回调内嵌套 retransform、准确的回调／替换次数及失败后的下一事务。无效第二个 DEX 必须回退并返回 60；有效双目标批次在映射计划故障点精确命中一次、返回 110，两个定义及 GC 后行为都须保持，再完成后续退役事务。成功结构变化必须返回 0、无 lastRejection 并观察到真实新成员；原生拒绝或安装能力字段不能代替通过。
 
-`test-structural-install-host.py` 以 60 组测试覆盖三种旧 API 的实际声明步长、公开表匹配、缺少懒展开服务、Hook 顺序／回滚、嵌套成功与异常恢复、整批不变、共享与等内容缓冲的混合批次。不可读保护页验证不读未变化的懒输入、transformer 未读当前映射时的早返回，以及需要时只调用一次命名展开服务；同时核对三次尝试上限、相同完整向量、transformer 和展开不重跑、之后请求恢复。`check-interface-abi-preparation.py` 交叉编译两种布局；`check-structural-symbols.py` 单独报告两个路由入口和仅旧版需要的展开入口。宿主替身、arm64 编译和真实名称均不代替旧设备执行：API 30–32 当前缺少对应设备证据，API 33/36 可用设备承担公共路径回归。
+`test-structural-install-host.py` 以 73 组测试覆盖三种旧 API 的实际声明步长、公开表匹配、缺少懒展开服务、Hook 顺序／回滚、嵌套成功与异常恢复、整批不变、共享与等内容缓冲的混合批次。不可读保护页验证不读未变化的懒输入、transformer 未读当前映射时的早返回，以及需要时只调用一次命名展开服务；同时核对三次尝试上限、相同完整向量、transformer 和展开不重跑、之后请求恢复。`check-interface-abi-preparation.py` 交叉编译两种布局；`check-structural-symbols.py` 单独报告两个路由入口和仅旧版需要的展开入口。宿主替身、arm64 编译和真实名称均不代替旧设备执行：API 30–32 当前缺少对应设备证据，API 33/36 可用设备承担公共路径回归。
 
 测试 APK 的 app 自有引擎使用 `-O2`，保留 Debug 符号、断言和故障注入；独立 AAR 的构建配置不受影响。`check-interface-abort-isolation.py` 同时核对这些编译条件。已完成场景保存为 UTF-8 JSON 后释放原对象树，避免后续 ART 整堆引用遍历反复扫描报告对象；报告仍包含全部场景与检查，保留原子 `fsync`／rename 发布。
 
@@ -291,3 +291,11 @@ python3 tools/run-jni-receiver-tests.py --serial DEVICE_SELECTOR --device-id and
 `test-retirement-filter-host.py` 验证精确集合对照、饱和及并发发布；`test-interpreter-notifications-host.py` 验证合并租约、部分失败、重入与成功后常驻。`-PcontinuationProfile=true` 开启可选 Debug 阶段计时及命名 DoCall 计数，默认 app 和生产 AAR 不含该 profiler。稀疏嵌套计时有重叠，只作诊断，不能相加或代替性能验收。
 
 运行前固定协议：绑定单 CPU 的一对预检，再按 control/candidate 交替顺序运行六对，不追加轮次。监听期间以真实非尾旧帧自身调用的 ns/call 为指标，预热 10,000 次、测量 100,000 次，成对相对增幅中位数不超过 10%。监听关闭的稳态指标仅在成对增量中位数同时超过 5 ns 与 3% 时失败。前后核对 CPU 绑定，保留无效与越线运行，同设备功能／GC／性能串行。冻结代码后再执行 API 33／API 36 普通／CheckJNI 完整矩阵，定向结果不能替代。
+
+`test-interpreter-events-host.py` 编译生产共享 Hook 所有者，用精确类型替身验证 API 30／31／32 的 instrumentation 指针及 API 33／36 的双 bool 转发、marker 消费、真实异常回放、缺服务／Hook 失败和 ICF 去重，共 30 项。`test-invoke-kind-host.py` 增至 31 项，新增 direct 调用边界仅观察、缺服务／安装失败及类／接口独立证明；`test-dex-code-host.py` 对真实 D8 DEX 核对 MethodId 所有者、同描述符不同加载器及越界拒绝；signed／unsigned root 原型由 `test-interface-scope-visitors-host.py` 分别调用。主机结果不证明旧设备 ABI 可执行。
+
+续接性能基准增加 `-e continuationKind interface`，独立测 copied-default；省略或使用 `class` 测普通类。两种目标各按上述一对预检、六对交替和 10% 门槛验收，不能混合平均。当前先对 API 33／36 完整普通／CheckJNI 回归；API 30–32 没有本功能设备证据，仍保留 71，后续取得设备后须先运行内部证明与缺服务负例，再执行该版本适用的完整验收和同一性能协议。
+
+JIT 稳态基准在预热后再次校准每批调用数，使实际测量批次仍约为 5 ms。只在预热前校准会使编译后的批次缩至约 1 ms 或更短，21 批分配采样易落入不同 GC 阶段。该修正不增加进程轮次、不剔除 GC 样本，也不改变成对门槛；校准修正前的越线与独立诊断必须保留。
+
+旧设备就绪后，可用 `--scenario-group method-private-self --continuation-proof` 显式请求内部候选证明，并核对随后应用场景仍返回 71。该 Debug 选项不改变设备准入；证明失败、direct 边界未证实或缺服务须保留失败报告，不得记为旧版功能通过。

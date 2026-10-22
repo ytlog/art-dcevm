@@ -208,8 +208,8 @@ Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_boundHandlePreparat
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_provePrivateContinuation(JNIEnv* jni, jclass) {
-  if (android_get_device_api_level() != 33) return JNI_FALSE;
+  if (android_get_device_api_level() < 30 || android_get_device_api_level() > 33) return JNI_FALSE;
   JavaVM* vm = nullptr;
   if (jni->GetJavaVM(&vm) != JNI_OK) return JNI_FALSE;
-  return artdcevm::private_continuation::Prepare(vm, jni) && artdcevm::private_continuation::Prove(jni);
+  return artdcevm::private_continuation::PrepareForProof(vm, jni) && artdcevm::private_continuation::Prove(jni);
 }

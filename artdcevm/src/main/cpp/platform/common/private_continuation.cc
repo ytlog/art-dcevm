@@ -4,6 +4,7 @@
 #include "platform/common/continuation_profile.h"
 #include "platform/common/runtime_roots.h"
 #include "platform/common/fault_injection.h"
+#include "platform/common/invoke_kind.h"
 #include "platform/abi/arm64/android13/continuation.h"
 #include "platform/abi/arm64/shadow_frame_table.h"
 #include "platform/symbols/private_continuation_symbols.h"
@@ -32,7 +33,10 @@ std::atomic<uint64_t> epoch{1};
 std::atomic<const char*> failure{"not prepared"};
 thread_local bool proving = false, probe_transaction = false;
 thread_local uint32_t proof_hits = 0, proof_throws = 0;
-struct Pending { void* frame; uint32_t at, next; bool rethrow; };
+thread_local uint32_t identity_hits = 0;
+thread_local std::string expected_descriptor;
+thread_local jobject expected_loader = nullptr;
+struct Pending { void* frame; uint32_t at, next; bool rethrow; const void* instrumentation; };
 // A nested callee consumes its continuation before returning to the outer
 // event. Keep a bounded stack nevertheless: no allocation in interpreter hooks.
 thread_local Pending pending[64];
@@ -41,13 +45,13 @@ struct Decision { uint64_t epoch = 0; void* caller = nullptr; uint32_t index = 0
 thread_local Decision decisions[8];
 
 void*& ExceptionSlot(void* self) { return *services.exception(self); }
-bool Push(void* self, void* frame, uint32_t at, uint32_t next, bool rethrow) {
+bool Push(void* self, void* frame, uint32_t at, uint32_t next, bool rethrow, const void* instrumentation) {
   continuation_profile::MarkerStart();
   if (depth == 64) {
     services.throw_exception(self, "Ljava/lang/InternalError;", "private continuation nesting limit");
     return false;
   }
-  pending[depth++] = {frame, at, next, rethrow};
+  pending[depth++] = {frame, at, next, rethrow, instrumentation};
   if (!rethrow) ExceptionSlot(self) = reinterpret_cast<void*>(decode(self, marker));
   return false;
 }
@@ -57,6 +61,9 @@ void ConfigureEnvironment(jvmtiEnv* value, bool callbacks_ready) { if (!Prepared
 void Invalidate() { epoch.fetch_add(1, std::memory_order_release); }
 bool Prepared() { return prepared.load(std::memory_order_acquire); }
 bool Proven() { return proven.load(std::memory_order_acquire); }
+bool DeviceValidated() { return android_get_device_api_level() == 33; }
+bool Admitted() { return DeviceValidated() && Proven() && Active(); }
+bool ProofActive() { return proving; }
 bool Active() { return active.load(std::memory_order_acquire); }
 const char* Failure() { return failure.load(std::memory_order_acquire); }
 bool ProbeTransaction(const std::string& descriptor) {
@@ -64,10 +71,13 @@ bool ProbeTransaction(const std::string& descriptor) {
       (descriptor == "Lcom/github/ytlog/artdcevm/internal/PrivateContinuationProbe$Subject;" ||
        descriptor == "Lcom/github/ytlog/artdcevm/internal/PrivateContinuationProbe$Contract;");
 }
-bool Prepare(JavaVM*, JNIEnv* jni) {
+namespace {
+bool PrepareImpl(JNIEnv* jni, bool proof_only) {
   if (Prepared()) return true;
   if (ARTDCEVM_PRIVATE_SELF_MASK()) { failure = "disabled by debug admission mask"; return false; }
-  if (android_get_device_api_level() != 33) { failure = "requires API 33"; return false; }
+  const int api = android_get_device_api_level();
+  if (api < 30 || api > 33) { failure = "requires API 30-33 continuation ABI"; return false; }
+  if (!DeviceValidated() && !proof_only) { failure = "legacy continuation device acceptance pending"; return false; }
   if (!services.ready || !interpreter_events::Prepare() || !interpreter_events::ExceptionService() || interpreter_events::Modern()) {
     failure = "shared interpreter services unavailable"; return false;
   }
@@ -79,6 +89,9 @@ bool Prepare(JavaVM*, JNIEnv* jni) {
     failure = "named continuation services unavailable"; return false;
   }
   if (!env) { failure = "engine event callbacks unavailable"; return false; }
+  if (!invoke_kind::PrepareDirectBoundaryProbe()) {
+    failure = "direct method access boundary unavailable"; return false;
+  }
   jvmtiCapabilities caps{};
   caps.can_generate_breakpoint_events = 1;
   caps.can_redefine_classes = 1;
@@ -95,6 +108,11 @@ bool Prepare(JavaVM*, JNIEnv* jni) {
   failure = "runtime self-proof pending";
   return true;
 }
+}
+bool Prepare(JavaVM*, JNIEnv* jni) { return PrepareImpl(jni, false); }
+#if defined(ARTDCEVM_INTERFACE_ABORT_TESTS)
+bool PrepareForProof(JavaVM*, JNIEnv* jni) { return PrepareImpl(jni, true); }
+#endif
 bool Prove(JNIEnv* jni) {
   if (Proven()) return true;
   if (!Prepared() || proving || attempted.exchange(true, std::memory_order_acq_rel)) return false;
@@ -105,11 +123,14 @@ bool Prove(JNIEnv* jni) {
     failure = "continuation listener activation failed"; jni->DeleteLocalRef(type); return false;
   }
   active.store(true, std::memory_order_release);
-  proof_hits = proof_throws = 0;
+  proof_hits = proof_throws = identity_hits = 0;
   proving = true;
   jni->CallStaticVoidMethod(type, run);
   proving = false;
-  const bool ok = !jni->ExceptionCheck() && proof_hits >= 12 && proof_throws >= 2 && services.ready();
+  const bool ok = !jni->ExceptionCheck() && proof_hits >= 12 && proof_throws >= 2 && identity_hits >= 12 &&
+      services.ready() && services.direct_proof && services.direct_proof();
+  if (expected_loader) jni->DeleteGlobalRef(expected_loader);
+  expected_loader = nullptr; expected_descriptor.clear();
   if (!ok) {
     if (jni->ExceptionCheck()) jni->ExceptionClear();
     failure = "runtime continuation self-proof failed";
@@ -127,7 +148,8 @@ bool Prove(JNIEnv* jni) {
 namespace {
 // Keep emulated TLS and proof services out of unrelated PC events.
 __attribute__((noinline)) bool Continue(void* self, const Accessor* accessor, Frame* frame, uint32_t pc,
-                                      const uint16_t* insn, uint8_t opcode, int kind, uint32_t flags) {
+                                      const uint16_t* insn, uint8_t opcode, int kind, uint32_t flags,
+                                      const void* instrumentation) {
   if ((!Proven() && !proving) || !services.ready() || (frame->frame_flags & 2)) return true;
   const uint64_t generation = epoch.load(std::memory_order_acquire);
   Decision& decision = decisions[(insn[1] ^ (reinterpret_cast<uintptr_t>(frame->method) >> 4)) & 7];
@@ -144,18 +166,24 @@ __attribute__((noinline)) bool Continue(void* self, const Accessor* accessor, Fr
       return true;
     }
     const auto target_flags = static_cast<abi::arm64::ArtMethodPrefix*>(target)->access_flags.load(std::memory_order_relaxed);
-    if ((target_flags & (evolution::kAccPrivate | evolution::kAccStatic | abi::arm64::kAccObsoleteMethod)) != evolution::kAccPrivate ||
-        !services.own(frame->method, target)) return true;
+    if ((target_flags & (evolution::kAccPrivate | evolution::kAccStatic | abi::arm64::kAccObsoleteMethod)) != evolution::kAccPrivate) return true;
+    if (proving) {
+      if (expected_descriptor.empty() || !services.identity_proof ||
+          !services.identity_proof(frame->method, target, expected_descriptor.c_str(),
+              expected_loader ? decode(self, expected_loader) : 0)) return true;
+      ++identity_hits;
+    }
+    if (!services.own(frame->method, target)) return true;
     if (generation == epoch.load(std::memory_order_acquire))
       decision = {generation, frame->method, insn[1], kind, target};
   }
-  if (observe_async(self)) return Push(self, frame, pc, pc, true);
+  if (observe_async(self)) return Push(self, frame, pc, pc, true, instrumentation);
   const bool range = opcode == 0x74 || opcode == 0x78;
   const uint32_t receiver = range ? insn[2] : insn[2] & 15;
   if (!abi::arm64::ReadFrameReference<Frame>(frame, receiver)) {
     services.throw_exception(self, "Ljava/lang/NullPointerException;", "null obsolete private self receiver");
     if (proving) ++proof_throws;
-    return Push(self, frame, pc, pc, true);
+    return Push(self, frame, pc, pc, true, instrumentation);
   }
   uint64_t result = 0;
   constexpr uint32_t kAccSkipAccessChecks = 0x00080000;  // dex/modifiers.h, android-13.0.0_r1.
@@ -165,11 +193,11 @@ __attribute__((noinline)) bool Continue(void* self, const Accessor* accessor, Fr
   if (frame->frame_flags & 4) {
     frame->frame_flags &= ~4u;
     ExceptionSlot(self) = nullptr;
-    return Push(self, frame, pc, pc, false);
+    return Push(self, frame, pc, pc, false, instrumentation);
   }
   if (!ok) {
     if (proving) ++proof_throws;
-    return Push(self, frame, pc, pc, true);
+    return Push(self, frame, pc, pc, true, instrumentation);
   }
   uint32_t next = pc + 3;
   if (next < accessor->size) {
@@ -179,7 +207,7 @@ __attribute__((noinline)) bool Continue(void* self, const Accessor* accessor, Fr
       const uint32_t reg = move >> 8;
       if (reg >= frame->number_of_vregs || (op == 0x0b && reg + 1 >= frame->number_of_vregs)) {
         services.throw_exception(self, "Ljava/lang/InternalError;", "invalid continuation destination");
-        return Push(self, frame, pc, pc, true);
+        return Push(self, frame, pc, pc, true, instrumentation);
       }
       auto* slots = reinterpret_cast<uint32_t*>(reinterpret_cast<uint8_t*>(frame) + offsetof(Frame, vregs));
       auto* roots = slots + frame->number_of_vregs;
@@ -190,11 +218,11 @@ __attribute__((noinline)) bool Continue(void* self, const Accessor* accessor, Fr
     }
   }
   if (proving) ++proof_hits;
-  return Push(self, frame, pc, next, false);
+  return Push(self, frame, pc, next, false, instrumentation);
 }
 }
 bool Event(void* self, const void* raw_accessor, const void* raw_frame, uint32_t pc,
-           const void*, void*, bool passed) {
+           const void* instrumentation, void*, bool passed) {
   if (!passed || !Active()) return passed;
   auto* frame = static_cast<Frame*>(const_cast<void*>(raw_frame));
   const auto flags = static_cast<abi::arm64::ArtMethodPrefix*>(frame->method)->access_flags.load(std::memory_order_relaxed);
@@ -205,7 +233,8 @@ bool Event(void* self, const void* raw_accessor, const void* raw_frame, uint32_t
   const uint8_t opcode = insn[0] & 0xff;
   const int kind = opcode == 0x6e || opcode == 0x74 ? 2 : opcode == 0x72 || opcode == 0x78 ? 4 : -1;
   if (kind < 0) return true;
-  return Continue(self, accessor, frame, pc, insn, opcode, kind, flags);
+  if (!instrumentation) return true;
+  return Continue(self, accessor, frame, pc, insn, opcode, kind, flags, instrumentation);
 }
 
 bool Exception(void* self, void* raw_frame, bool, bool, bool* handled) {
@@ -215,9 +244,9 @@ bool Exception(void* self, void* raw_frame, bool, bool, bool* handled) {
   const uint32_t pc = frame->dex_pc_ptr ? frame->dex_pc_ptr - frame->dex_instructions : frame->dex_pc;
   if (pc != current.at) return false;
   *handled = true;
-  if (current.rethrow) return interpreter_events::MoveException(self, raw_frame, false, false);
+  if (current.rethrow) return interpreter_events::ReplayException(self, raw_frame, current.instrumentation);
   if (ExceptionSlot(self) != reinterpret_cast<void*>(decode(self, marker))) {
-    return interpreter_events::MoveException(self, raw_frame, false, false);
+    return interpreter_events::ReplayException(self, raw_frame, current.instrumentation);
   }
   ExceptionSlot(self) = nullptr;
   frame->dex_pc = current.next; frame->dex_pc_ptr = nullptr;
@@ -230,6 +259,16 @@ Java_com_github_ytlog_artdcevm_internal_PrivateContinuationProbe_checkpoint(
     JNIEnv* jni, jclass, jclass klass, jbyteArray bytes) {
   using namespace artdcevm::private_continuation;
   if (!proving || !bytes) return JVMTI_ERROR_NOT_AVAILABLE;
+  char* signature = nullptr;
+  jobject loader = nullptr;
+  if (env->GetClassSignature(klass, &signature, nullptr) || !signature) return JVMTI_ERROR_INTERNAL;
+  expected_descriptor = signature;
+  env->Deallocate(reinterpret_cast<unsigned char*>(signature));
+  if (env->GetClassLoader(klass, &loader)) return JVMTI_ERROR_INTERNAL;
+  if (expected_loader) jni->DeleteGlobalRef(expected_loader);
+  expected_loader = loader ? jni->NewGlobalRef(loader) : nullptr;
+  jni->DeleteLocalRef(loader);
+  if (jni->ExceptionCheck()) return JVMTI_ERROR_INTERNAL;
   const jsize size = jni->GetArrayLength(bytes);
   std::vector<unsigned char> dex(size);
   jni->GetByteArrayRegion(bytes, 0, size, reinterpret_cast<jbyte*>(dex.data()));

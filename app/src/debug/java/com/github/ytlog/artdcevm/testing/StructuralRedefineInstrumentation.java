@@ -159,7 +159,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             initialization.put("clientAttached", true).put("passed", true)
                     .put("capabilities", DcevmRuntime.capabilities());
             writeReport(false);
-            if (Build.VERSION.SDK_INT == 33 && (arguments == null || (!arguments.containsKey("privateSelf") && !"private-continuation-benchmark".equals(arguments.getString("scenario"))))) {
+            final boolean candidateProof = arguments != null && "true".equals(arguments.getString("continuationProof"));
+            if (candidateProof && (Build.VERSION.SDK_INT < 30 || Build.VERSION.SDK_INT > 33))
+                throw new AssertionError("continuation candidate proof requires API 30-33");
+            if (candidateProof || (Build.VERSION.SDK_INT == 33 && (arguments == null || (!arguments.containsKey("privateSelf") && !"private-continuation-benchmark".equals(arguments.getString("scenario")))))) {
                 boolean proof = InterfaceAbortInstrumentation.provePrivateContinuation();
                 report.put("continuationPreparation", DcevmRuntime.capabilities());
                 writeReport(false);
@@ -4895,7 +4898,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     private static boolean privateSelfSelection(boolean iface) throws Exception {
         JSONObject caps = DcevmRuntime.capabilities();
         return caps.optBoolean("privateSelfSelection" + (iface ? "Interface" : "Class"), false) ||
-                caps.optBoolean("privateSelfContinuationProven", false);
+                (caps.optBoolean("privateSelfContinuationDeviceValidated", false) && caps.optBoolean("privateSelfContinuationProven", false));
     }
 
     private void runContinuationBenchmark() throws Exception {
@@ -4912,7 +4915,10 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             if (StandardJvmtiClient.globalBreakpointNotification(false) != 0) throw new AssertionError("notification rollback");
         }
         final boolean candidate = "private".equals(arguments.getString("continuationVariant"));
+        final boolean iface = "interface".equals(arguments.getString("continuationKind"));
         final com.github.ytlog.artdcevm.fixture.ContinuationBenchmark value = new com.github.ytlog.artdcevm.fixture.ContinuationBenchmark();
+        final com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.Contract contract = new com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.Impl();
+        final Class<?> target = iface ? com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.Contract.class : value.getClass();
         CountDownLatch ready = new CountDownLatch(1), resume = new CountDownLatch(1);
         Object[] result = new Object[1];
         long[][] profile = new long[1][];
@@ -4922,7 +4928,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 affinity[0] = HookOverheadBenchmark.pinCpu(2);
                 if (affinity[0] != 2) throw new AssertionError("CPU binding failed");
                 if (profileRequested) com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.profileEnable();
-                result[0] = value.await(ready, resume, count);
+                result[0] = iface ? contract.await(ready, resume, count) : value.await(ready, resume, count);
                 profile[0] = profileRequested ? InterfaceAbortInstrumentation.readContinuationProfile() : new long[0];
                 affinity[1] = HookOverheadBenchmark.pinnedCpu();
             } catch (Throwable error) { result[0] = error; }
@@ -4931,8 +4937,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         try {
             if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("benchmark frame");
             runScenario("continuation-benchmark", 0, scenario -> {
-                scenario.redefine(new Class<?>[]{value.getClass()}, "continuation-bench-" + (candidate ? "private" : "public"));
-                scenario.check("privateKind", candidate, Modifier.isPrivate(value.getClass().getDeclaredMethod("target").getModifiers()));
+                scenario.redefine(new Class<?>[]{target}, "continuation-bench-" + (candidate ? "private" : "public"));
+                scenario.check("privateKind", candidate, Modifier.isPrivate(target.getDeclaredMethod("target").getModifiers()));
                 if (candidate && StandardJvmtiClient.globalBreakpointNotification(false) != 0) throw new AssertionError("test listener rollback");
                 resume.countDown(); worker.join(120000);
                 scenario.check("joined", true, !worker.isAlive());
@@ -4940,7 +4946,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 long[] times = (long[]) result[0];
                 scenario.check("sum", (count + 10000) * 7L, times[1]);
                 scenario.check("cpuBefore", 2, affinity[0]); scenario.check("cpuAfter", 2, affinity[1]);
-                report.put("continuationBenchmark", new JSONObject().put("iterations", count).put("nanos", times[0]).put("variant", candidate ? "private" : "public").put("profileMode", profileMode).put("profile", new JSONArray(profile[0])));
+                report.put("continuationBenchmark", new JSONObject().put("iterations", count).put("nanos", times[0]).put("variant", candidate ? "private" : "public").put("profileMode", profileMode).put("kind", iface ? "interface" : "class").put("profile", new JSONArray(profile[0])));
             });
         } finally { resume.countDown(); worker.join(120000); }
     }

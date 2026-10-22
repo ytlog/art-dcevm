@@ -553,3 +553,11 @@ JIT 模式下，本轮 JNI／反射配对增量分别约为 +5.5%／+13.2%（API
 受保护 obsolete invoke 先验证声明描述符与加载器、选择当前 private 声明，再调用 ART 命名 `DoCall`。返回值及引用根写入原 ShadowFrame 中紧随的 move-result 目标，由私有 marker 经 ART 异常处理入口继续下一条指令；真实异常仍交给 ART 正常处理，原帧不重启。提交及 ClassPrepare 使小型 TLS 决策缓存失效。迁移、去优化和缓存职责仍全部由 ART 原事务承担。
 
 成本拆分定位出 DoCall／marker 之外的两项开销：内部证明退休虚方法身份，使每条 obsolete 指令事件编码方法 ID 时都锁定退休集合；额外 JVMTI 环境即使未启用事件也增加 ART 分发锁与解码。单调原子负向过滤器只跳过能够证明不存在的退休身份，可能命中仍查询加锁精确集合，过滤器不清空且不授予退休身份访问权限；复用引擎环境则消除额外分发迭代。
+
+### 旧版续接候选与独立证明
+
+Android 11–12L 的命名 `MoveToExceptionHandler` 接收 `const Instrumentation*`，API 33 接收两个独立 skip bool。共享 Hook 所有者按固定签名安装不同 thunk，不跨 ABI 强转；无续接 pending 的调用逐参数转发。旧版真实异常回放使用对应 PC 事件保存的非空 instrumentation 指针，不能将其换成会同时屏蔽 throw／handled／unwind 的 nullptr。marker 仍在原异常通知前消费，API 36 的现代 BindTo 路径保留双 bool ABI。
+
+方法身份按方法自身 DEX 的 MethodId 声明描述符与 DexCache 定义加载器比较；obsolete copied default 使用既有保留缓存服务，不以镜像 Class 描述符或指针代替。固定布局由现有 Class／Thread 探测提供，root 服务在实际 HandleScope 访问中独立验证，并同时绑定 Android 11 的 signed 与后续 unsigned thread-id 声明。内部自证明用公开 JVMTI 签名／加载器交叉核对 DEX 身份；有 named getter 时再交叉核对，且拒绝描述符或加载器不一致。
+
+内部类和接口探针还在 private 方法执行中再次提交结构变化，要求旧 direct 帧调用当前 private 方法并完成带保留局部变量的后续计算。类／接口 direct 证明都通过后才发布 continuation proven。缺少 throwing method-access 入口时，单独安装观察用 `CanAccessMember` Hook，在 checked direct resolution 的 TLS 作用域记录调用边界，保留原结果；该观察不能授权 private 字段、外部 virtual 调用或应用续接。缺服务、安装或证明失败仍为 71。API 30–32 的候选证明与设备准入相互独立，当前均未开放，等待后续设备验证。

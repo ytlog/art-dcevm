@@ -18,23 +18,23 @@ RootVisitor* roots = reinterpret_cast<RootVisitor*>(0x2000);
 int signed_calls = 0, unsigned_calls = 0;
 void Require(bool condition) { if (!condition) throw std::runtime_error("Scope visitor ABI mismatch"); }
 void Signed(void* self, RootVisitor* visitor, int32_t tid) {
-  Require(self == thread && visitor == roots && tid == 42); ++signed_calls;
+  Require(self == thread && visitor == roots && tid == -2); ++signed_calls;
 }
 void Unsigned(void* self, RootVisitor* visitor, uint32_t tid) {
-  Require(self == thread && visitor == roots && tid == 42u); ++unsigned_calls;
+  Require(self == thread && visitor == roots && tid == 0xfffffffeu); ++unsigned_calls;
 }
 int main() {
   try {
     HandleScopeVisitors service;
-    Require(!service.Available() && !service.Visit(true, thread, roots, 42) &&
-            !service.Visit(false, thread, roots, 42));
+    Require(!service.Available() && !service.Visit(true, thread, roots, 0xfffffffeu) &&
+            !service.Visit(false, thread, roots, 0xfffffffeu));
     service.signed_ids = Signed;
-    Require(service.Available() && service.Visit(true, thread, roots, 42) &&
-            !service.Visit(false, thread, roots, 42));
+    Require(service.Available() && service.Visit(true, thread, roots, 0xfffffffeu) &&
+            !service.Visit(false, thread, roots, 0xfffffffeu));
     service.unsigned_ids = Unsigned;
-    Require(service.Visit(false, thread, roots, 42));
+    Require(service.Visit(false, thread, roots, 0xfffffffeu));
     service.signed_ids = nullptr;
-    Require(!service.Visit(true, thread, roots, 42) && signed_calls == 1 && unsigned_calls == 1);
+    Require(!service.Visit(true, thread, roots, 0xfffffffeu) && signed_calls == 1 && unsigned_calls == 1);
     std::cout << "Exact signed/unsigned scope visitors PASS\n";
   } catch (const std::exception& e) { std::cerr << e.what() << '\n'; return 1; }
 }

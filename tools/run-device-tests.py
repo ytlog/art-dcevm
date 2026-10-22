@@ -1876,7 +1876,11 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
                 continuation.get("privateSelfContinuationActive") is True and
                 continuation.get("privateSelfContinuationKinds") == ["class", "interface"] and
                 continuation.get("privateSelfContinuationFailure") == "" and
-                continuation.get("privateSelfContinuationEventPolicy") == "skip-move-result"):
+                continuation.get("privateSelfContinuationEventPolicy") == "skip-move-result" and
+                continuation.get("privateSelfContinuationDeviceValidated") is True and
+                continuation.get("privateSelfContinuationExceptionAbi") == "skip-flags" and
+                continuation.get("privateSelfContinuationIdentityService") in ("named-method-and-fixed-source", "fixed-source") and
+                (continuation.get("privateSelfContinuationDirectAccessProofs", 0) & 3) == 3):
             raise RunFailure("API 33 continuation runtime self-proof is missing")
         self_selection = {"class": True, "interface": True}
     expected_scenarios = scenario_sequence(scenario_group, device["api"], self_selection, direct_selection)
@@ -2049,6 +2053,8 @@ def main(argv=None):
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
     parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "inverse-static", "inverse-history", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "private-continuation", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays", "self-array-parents"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
+    parser.add_argument("--continuation-proof", action="store_true",
+                        help="Run the internal API 30-33 candidate proof without widening device admission")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
@@ -2123,6 +2129,7 @@ def main(argv=None):
         try:
             mode_args = ["-e", "checkjni", "true" if args.checkjni_mode == "checkjni" else "false"] if args.checkjni_mode else []
             if args.scenario_group != "full": mode_args += ["-e", "scenario", args.scenario_group]
+            if args.continuation_proof: mode_args += ["-e", "continuationProof", "true"]
             if args.private_self_mode: mode_args += ["-e", "privateSelf", args.private_self_mode]
             if args.imt_fallback_mode: mode_args += ["-e", "imtFallback", args.imt_fallback_mode]
             test = adb("instrumentation", "shell", "am", "instrument", "-w", "-r", *mode_args, COMPONENT,
@@ -2164,6 +2171,16 @@ def main(argv=None):
                 raise RunFailure("The selected named IMT capture callback did not run")
             meta["imtFallbackMode"] = args.imt_fallback_mode
             meta["imtFallbackState"] = sealing
+        if args.continuation_proof:
+            proof = result.get("continuationPreparation", {})
+            api = result["device"]["api"]
+            if not (30 <= api <= 33 and proof.get("privateSelfContinuationProven") is True and
+                    proof.get("privateSelfContinuationDeviceValidated") is (api == 33) and
+                    proof.get("privateSelfContinuationExceptionAbi") == ("skip-flags" if api == 33 else "legacy-instrumentation") and
+                    proof.get("privateSelfContinuationIdentityService") in ("named-method-and-fixed-source", "fixed-source") and
+                    (proof.get("privateSelfContinuationDirectAccessProofs", 0) & 3) == 3):
+                raise RunFailure("Candidate continuation proof is missing or widened device admission")
+            meta["continuationProof"] = True
         if args.private_self_mode: meta["privateSelfMode"] = args.private_self_mode
         meta["device"] = result["device"]
         meta["scenarioCount"] = len(result["scenarios"])

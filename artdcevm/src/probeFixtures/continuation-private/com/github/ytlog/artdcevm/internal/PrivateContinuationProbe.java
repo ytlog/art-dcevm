@@ -19,6 +19,7 @@ public final class PrivateContinuationProbe {
         }
     }
     public static class Subject {
+        private int direct() throws Exception { int saved = 19; change(Subject.class, "continuation-next"); return number() + saved; }
         private int number() { return 13; }
         private long wide(long value) { return value + 13; }
         private double real(double value) { return value + 13; }
@@ -35,13 +36,15 @@ public final class PrivateContinuationProbe {
             System.gc();
             int[] box = {1}; effect(box);
             int r = range(1L, 2L, 3L);
+            int resumed = direct();
             int caught = 0;
             try { fail(); } catch (ArithmeticException expected) { caught++; }
             try { Subject receiver = null; receiver.number(); } catch (NullPointerException expected) { caught++; }
-            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && caught == 2 ? 1 : 0;
+            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && caught == 2 ? 1 : 0;
         }
     }
     public interface Contract {
+        private int direct() throws Exception { int saved = 19; change(Contract.class, "continuation-next"); return number() + saved; }
         private int number() { return 13; }
         private long wide(long value) { return value + 13; }
         private double real(double value) { return value + 13; }
@@ -58,10 +61,11 @@ public final class PrivateContinuationProbe {
             System.gc();
             int[] box = {1}; effect(box);
             int r = range(1L, 2L, 3L);
+            int resumed = direct();
             int caught = 0;
             try { fail(); } catch (ArithmeticException expected) { caught++; }
             try { Contract receiver = null; receiver.number(); } catch (NullPointerException expected) { caught++; }
-            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && caught == 2 ? 1 : 0;
+            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && caught == 2 ? 1 : 0;
         }
     }
     public static final class Impl implements Contract {}

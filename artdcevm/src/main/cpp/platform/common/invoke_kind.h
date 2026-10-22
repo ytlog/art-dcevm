@@ -22,6 +22,9 @@ bool CopiedFrames();
 // checked-access services tied to ART's retained Class history.
 bool DirectSelectionServices();
 bool PrivateDirectFrames();
+const char* ContinuationIdentityService();
+uint32_t DirectAccessProofs();
+bool PrepareDirectBoundaryProbe();
 // Caller supplies Native-probed Thread declarations and ART's existing admission root.
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, abi::arm64::Handle target);

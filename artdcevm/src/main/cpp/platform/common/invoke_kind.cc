@@ -10,6 +10,7 @@
 #include "shadowhook.h"
 #include "platform/common/runtime_roots.h"
 #include "platform/common/art_dex_view.h"
+#include "platform/common/method_identity.h"
 #include "platform/common/fault_injection.h"
 #include "platform/symbols/interface_redefinition_symbols.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
@@ -53,6 +54,21 @@ ObsoleteCache named_cache_read = nullptr;
 void* (*mark)(void*) = nullptr;
 const bool* use_read_barrier = nullptr;
 std::atomic<bool> class_verified{false};
+std::atomic<bool> identity_verified{false};
+std::atomic<uint32_t> direct_access_proofs{0};
+using MemberAccess = bool (*)(void*, uintptr_t, uint32_t);
+MemberAccess original_member_access = nullptr;
+void* member_access_hook = nullptr;
+struct DirectContext { void* caller; int type; };
+thread_local DirectContext direct_context{nullptr, -1};
+struct DirectScope {
+  bool observing;
+  DirectContext previous{};
+  DirectScope(void* caller, int type) : observing(member_access_hook != nullptr) {
+    if (observing) { previous = direct_context; direct_context = {caller, type}; }
+  }
+  ~DirectScope() { if (observing) direct_context = previous; }
+};
 size_t class_access = 0, class_dex_cache = 0, class_ext_data = 0, ext_obsolete_methods = 0;
 size_t gc_marking_offset = ~size_t{0};
 size_t method_index_offset = ~size_t{0};
@@ -196,11 +212,17 @@ void* RefineHandle(void* self, void* frame, const int& kind, Handle type, Handle
   return original_handle_refine(self, frame, kind, type, callsite, reg, target);
 }
 
+bool FixedIdentity(void* method, std::string* descriptor, uintptr_t* loader);
 bool OwnClass(void* caller, void* resolved) {
   // Class identity includes the defining loader. Obsolete ART class objects
   // deliberately survive reference replacement, so pointer equality is insufficient.
-  return method_loader(caller) == method_loader(resolved) &&
-      std::strcmp(method_descriptor(caller), method_descriptor(resolved)) == 0;
+  if (method_loader && method_descriptor)
+    return method_loader(caller) == method_loader(resolved) &&
+        std::strcmp(method_descriptor(caller), method_descriptor(resolved)) == 0;
+  if (!identity_verified.load(std::memory_order_acquire)) return false;
+  std::string first, second; uintptr_t first_loader, second_loader;
+  return FixedIdentity(caller, &first, &first_loader) && FixedIdentity(resolved, &second, &second_loader) &&
+      first_loader == second_loader && first == second;
 }
 
 // Fixed Class::IsObsoleteVersionOf identity follows ART's retained history.
@@ -219,6 +241,10 @@ bool MethodAccessCheck(void* referring, uintptr_t owner, void* method, uintptr_t
       for (uintptr_t current = obsolete_class(reinterpret_cast<void*>(owner)); current;
            current = obsolete_class(reinterpret_cast<void*>(current))) {
         if (current == reinterpret_cast<uintptr_t>(referring)) {
+          if (private_continuation::ProofActive())
+            direct_access_proofs.fetch_or(
+                runtime_roots::Field<uint32_t>(reinterpret_cast<void*>(owner), class_access) & evolution::kAccInterface ? 2 : 1,
+                std::memory_order_release);
           return true;
         }
       }
@@ -237,6 +263,40 @@ void* MethodCache(void* caller) {
     return reinterpret_cast<void*>(CopiedObsoleteCache<true>(caller));
   void* declaring = reinterpret_cast<void*>(Reference<true>(method->declaring_class));
   return reinterpret_cast<void*>(Reference<true>(runtime_roots::Field<uint32_t>(declaring, class_dex_cache)));
+}
+bool FixedIdentity(void* method, std::string* descriptor, uintptr_t* loader) {
+  if (!ClassKinds()) return false;
+  void* cache = MethodCache(method);
+  if (!cache) return false;
+  const auto* dex = reinterpret_cast<const abi::arm64::DexFilePrefix*>(static_cast<abi::arm64::DexCache*>(cache)->dex_file);
+  if (!dex || !method_identity::DeclaringDescriptor(DexViewOf(*dex),
+      runtime_roots::Field<uint32_t>(method, method_index_offset), descriptor)) return false;
+  *loader = Reference<true>(static_cast<abi::arm64::DexCache*>(cache)->class_loader);
+  return true;
+}
+bool ProveIdentity(void* caller, void* target, const char* expected, uintptr_t expected_loader) {
+  if (!scope_verified.load(std::memory_order_acquire)) return false;
+  for (void* method : {caller, target}) {
+    std::string descriptor; uintptr_t loader;
+    if (!FixedIdentity(method, &descriptor, &loader) ||
+        !method_identity::Matches(descriptor, loader, expected, expected_loader) ||
+        method_identity::Matches(descriptor, loader, "Lwrong/Identity;", expected_loader) ||
+        method_identity::Matches(descriptor, loader, expected, expected_loader ^ uintptr_t{1})) return false;
+    if (method_descriptor && descriptor != method_descriptor(method)) return false;
+    if (method_loader && loader != method_loader(method)) return false;
+  }
+  identity_verified.store(true, std::memory_order_release);
+  return true;
+}
+bool ObserveMemberAccess(void* referring, uintptr_t owner, uint32_t flags) {
+  const bool result = original_member_access(referring, owner, flags);
+  // This is deliberately observational. A shared field/member entry is not a
+  // proven replacement for the throwing method-access boundary.
+  if (private_continuation::ProofActive() && direct_context.caller && direct_context.type == 1 &&
+      !result && (flags & evolution::kAccPrivate) && referring && owner &&
+      Reference<true>(static_cast<abi::arm64::ArtMethodPrefix*>(direct_context.caller)->declaring_class) == reinterpret_cast<uintptr_t>(referring))
+    direct_access_proofs.fetch_or(4, std::memory_order_release);
+  return result;
 }
 void* SymbolicOwner(void* cache, uint32_t index, void* loader, bool* valid) {
   *valid = false;
@@ -315,12 +375,14 @@ void* ResolveUnchecked(void* self, uint32_t index, void* caller, int type) {
   return resolved;
 }
 void* ResolveCaller(void* linker, void* self, uint32_t index, void* caller, int type) noexcept {
+  DirectScope direct(caller, type);
   void* resolved = original_caller(linker, self, index, caller, type);
   if (resolved && !unchecked_resolution && !CheckClassKind(self, caller, index, type)) return nullptr;
   return Check(self, resolved, type);
 }
 void* ResolveCache(void* linker, uint32_t index, Handle cache, Handle loader,
                    void* caller, int type) noexcept {
+  DirectScope direct(caller, type);
   void* resolved = original_cache(linker, index, cache, loader, caller, type);
   if (resolved && !unchecked_resolution && !CheckClassKind(nullptr, caller, index, type, cache.Get<void>(), loader.Get<void>())) return nullptr;
   return unchecked_resolution ? resolved : Check(nullptr, resolved, type);
@@ -397,7 +459,7 @@ void* SelectMethod(void* self, void* caller, uintptr_t* receiver,
 
 void** ContinuationException(void* self) { return &runtime_roots::Field<void*>(self, exception_offset); }
 bool ContinuationReady() {
-  return CopiedFrames() && method_descriptor && method_loader && frame_reference && observed_frame_pc &&
+  return CopiedFrames() && frame_reference && observed_frame_pc &&
       exception_offset != ~size_t{0} && ClassKinds();
 }
 bool ContinuationKind(void* self, void* caller, uint32_t index, int type) {
@@ -447,6 +509,8 @@ bool Prepare(std::vector<Hook>* hooks) {
   lookup_type = reinterpret_cast<decltype(lookup_type)>(symbols::Find(symbols::interface_redefinition::kLookupCache));
   scope_visitors.unsigned_ids = reinterpret_cast<abi::arm64::HandleScopeVisitors::Unsigned>(
       symbols::Find(symbols::interface_redefinition::kHandleScopeVisitRoots));
+  scope_visitors.signed_ids = reinterpret_cast<abi::arm64::HandleScopeVisitors::Signed>(
+      symbols::Find(symbols::interface_redefinition::kHandleScopeVisitRootsSigned));
   void* cache_legacy = symbols::Find(kObsoleteCacheLegacy);
   void* cache_read = symbols::Find(kObsoleteCacheRead);
   void* cache_raw = symbols::Find(kObsoleteCacheRaw);
@@ -484,7 +548,8 @@ bool Prepare(std::vector<Hook>* hooks) {
     if (void* access = obsolete_class ? symbols::Find(kResolvedMethodAccess) : nullptr)
       prepared.push_back({access, HookAddress(MethodAccessCheck), HookSlot(&original_method_access), kResolvedMethodAccess.name});
   }
-  private_continuation::Configure({ResolveUnchecked, OwnClass, ContinuationKind, ContinuationException, throw_exception, ContinuationReady});
+  private_continuation::Configure({ResolveUnchecked, OwnClass, ContinuationKind, ContinuationException, throw_exception, ContinuationReady,
+      ProveIdentity, [] { return (direct_access_proofs.load(std::memory_order_acquire) & 3) == 3; }});
   hooks->insert(hooks->end(), prepared.begin(), prepared.end());
   return true;
 }
@@ -498,7 +563,7 @@ void KeepInterpreted(void* method, uint32_t precompiled_flag) {
 }
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,
                   const abi::arm64::InterfaceRuntime* layout, Handle target) {
-  if ((!original_virtual && !original_interface) || scope_verified.load(std::memory_order_acquire)) return;
+  if (scope_verified.load(std::memory_order_acquire)) return;
   if (!runtime_roots::VerifyScopes(*layout, *thread_layout, thread, target, scope_visitors)) return;
   std::lock_guard<std::mutex> lock(scope_mutex);
   if (scope_verified.load(std::memory_order_relaxed)) return;
@@ -554,6 +619,19 @@ bool DirectSelectionServices() {
 }
 bool PrivateDirectFrames() {
   return CopiedFrames() && DirectSelectionServices();
+}
+const char* ContinuationIdentityService() {
+  if (!identity_verified.load(std::memory_order_acquire)) return "unverified";
+  return method_descriptor && method_loader ? "named-method-and-fixed-source" : "fixed-source";
+}
+uint32_t DirectAccessProofs() { return direct_access_proofs.load(std::memory_order_acquire); }
+bool PrepareDirectBoundaryProbe() {
+  if (original_method_access || resolve_method_id) return true;
+  if (member_access_hook) return true;
+  void* entry = symbols::Find(symbols::invoke_kind::kCanAccessMember);
+  if (!entry) return false;
+  member_access_hook = shadowhook_hook_sym_addr(entry, HookAddress(ObserveMemberAccess), HookSlot(&original_member_access));
+  return member_access_hook != nullptr;
 }
 bool ClassKinds() {
   return ClassKindUnavailable() == nullptr;

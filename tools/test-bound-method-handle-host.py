@@ -24,6 +24,7 @@ bool Exception(void*,void*,bool,bool,bool* handled){*handled=false;return false;
 using namespace artdcevm;
 template<class T> T Id(int value) { return reinterpret_cast<T>(static_cast<uintptr_t>(value)); }
 void Need(bool value,const char* message) { if(!value)throw std::runtime_error(message); }
+extern "C" int android_get_device_api_level() { return 36; }
 int mode=0, fail=0, frames=0, events=0, breakpoints=0, clears=0, reflects=0, caps=0;
 bool pending=false, compatible=true, receiver_null=false, obsolete=false, owner_interface=true, declaration_interface=true;
 int kind=4, thrown=0;
@@ -261,6 +262,8 @@ def main():
     with tempfile.TemporaryDirectory(dir=out) as temporary:
         work = Path(temporary)
         (work / "shadowhook.h").write_text('#pragma once\nextern "C" {\nvoid* shadowhook_dlopen(const char*);\nvoid shadowhook_dlclose(void*);\nvoid* shadowhook_dlsym(void*,const char*);\nvoid* shadowhook_dlsym_dynsym(void*,const char*);\nvoid* shadowhook_hook_sym_addr(void*,void*,void**);\n}\n')
+        (work / "android").mkdir()
+        (work / "android/api-level.h").write_text('#pragma once\nextern "C" int android_get_device_api_level();\n')
         source = work / "case.cc"
         source.write_text(SOURCE)
         binary = work / "case"

@@ -19,4 +19,20 @@ public class ContinuationBenchmark {
         if (profiling) profileEnd();
         return new long[]{elapsed, sum};
     }
+    public interface Contract {
+        int ADDED = 1;
+        private int target() { return 7; }
+        default long[] await(CountDownLatch ready, CountDownLatch resume, int count) throws Exception {
+        ready.countDown(); resume.await();
+        int sum = 0;
+        for (int i = 0; i < 10000; ++i) sum += target();
+        if (profiling) profileBegin();
+        long started = System.nanoTime();
+        for (int i = 0; i < count; ++i) sum += target();
+        long elapsed = System.nanoTime() - started;
+        if (profiling) profileEnd();
+        return new long[]{elapsed, sum};
+    }
+    }
+    public static final class Impl implements Contract {}
 }

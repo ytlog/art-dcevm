@@ -396,6 +396,17 @@ public final class HookOverheadBenchmark extends Instrumentation {
         } else {
             for (int i = 0; i < 3; i++) workload.run(count);
         }
+        // JIT warmup can reduce batch time by orders of magnitude. Calibrate
+        // the measured batch after warmup as well, so its intended 5 ms window
+        // does not collapse to a handful of allocation/GC transition samples.
+        if (compiled) {
+            while (count < (1 << 26)) {
+                long begin = System.nanoTime();
+                workload.run(count);
+                if (System.nanoTime() - begin >= 5_000_000L) break;
+                count *= 2;
+            }
+        }
         double[] samples = new double[SAMPLES];
         long checksum = 0;
         for (int i = 0; i < SAMPLES; i++) {

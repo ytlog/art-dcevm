@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/symbols/art_symbol_compat.h"
 namespace artdcevm::symbols::private_continuation {
+inline constexpr NamedSymbol kMoveLegacy{Library::kArt, "_ZN3art11interpreter22MoveToExceptionHandlerEPNS_6ThreadERNS_11ShadowFrameEPKNS_15instrumentation15InstrumentationE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kDecode{Library::kArt, "_ZNK3art6Thread13DecodeJObjectEP8_jobject", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kObserveAsync{Library::kArt, "_ZN3art6Thread21ObserveAsyncExceptionEv", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kCalls[] = {

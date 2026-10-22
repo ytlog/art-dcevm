@@ -50,6 +50,8 @@ public class Bystander {
 
 SOURCE = r'''
 #include "evolution/class_schema.h"
+#include "platform/common/method_identity.h"
+#include <cstring>
 #include <cstdio>
 #include <fstream>
 #include <iterator>
@@ -71,6 +73,28 @@ int main(int argc, char** argv) {
           "virtual method ids of the class and its subclass");
   Require(FindMethodIds(view, callee, "unused", "(I)I", &unused, &error) && unused.size() == 1, "unused id");
   Require(FindMethodIds(view, callee, "twice", "(J)I", &absent, &error) && absent.empty(), "prototype must match");
+  // The DEX symbolic owner can be a subclass rather than the resolved
+  // declaration. Identity must read each method's own MethodId, and the
+  // defining loader remains part of the result.
+  std::set<std::string> owners;
+  for (uint32_t id : value) {
+    std::string owner;
+    Require(artdcevm::method_identity::DeclaringDescriptor(view, id, &owner), "method owner from real D8 DEX");
+    Require(callee.count(owner), "unexpected symbolic owner"); owners.insert(owner);
+    Require(artdcevm::method_identity::Matches(owner, 1, owner.c_str(), 1) &&
+            !artdcevm::method_identity::Matches(owner, 1, owner.c_str(), 2), "same descriptor in different defining loader");
+  }
+  Require(owners == callee, "collapsed distinct symbolic owners");
+  std::string owner;
+  Require(!artdcevm::method_identity::DeclaringDescriptor(view, ~uint32_t{0}, &owner), "invalid method id accepted");
+  auto corrupt = bytes; uint32_t offset = ~uint32_t{0};
+  std::memcpy(corrupt.data()+92, &offset, 4);
+  DexView bad{corrupt.data(),corrupt.size(),corrupt.data(),corrupt.size()};
+  Require(!artdcevm::method_identity::DeclaringDescriptor(bad, 0, &owner), "out of range owner table accepted");
+  corrupt = bytes; bad = {corrupt.data(),corrupt.size(),corrupt.data(),corrupt.size()};
+  std::memcpy(&offset, corrupt.data()+92, 4);
+  uint16_t invalid = 0xffff; std::memcpy(corrupt.data()+offset, &invalid, 2);
+  Require(!artdcevm::method_identity::DeclaringDescriptor(bad, 0, &owner), "invalid owner type accepted");
   uint32_t caller = 0, bystander = 0, callee_def = 0;
   Require(FindClassDef(view, "Lsample/Caller;", &caller, &error), "Caller class def");
   Require(FindClassDef(view, "Lsample/Bystander;", &bystander, &error), "Bystander class def");

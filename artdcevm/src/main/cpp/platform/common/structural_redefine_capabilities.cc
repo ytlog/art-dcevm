@@ -4,6 +4,7 @@
 #include "platform/common/interface_method_selection.h"
 #include "platform/common/invoke_kind.h"
 #include "platform/common/private_continuation.h"
+#include "platform/common/interpreter_events.h"
 #include "platform/common/narrowed_references.h"
 #include "support/json.h"
 #include "platform/common/constructor_history.h"
@@ -53,6 +54,10 @@ std::string Capabilities() {
       ",\"privateSelfContinuationKinds\":" + (methods && private_continuation::Proven() ? "[\"class\",\"interface\"]" : "[]") +
       ",\"privateSelfContinuationFailure\":" + QuoteJsonMutf8(private_continuation::Failure()) +
       ",\"privateSelfContinuationEventPolicy\":\"skip-move-result\"" +
+      ",\"privateSelfContinuationDeviceValidated\":" + (private_continuation::DeviceValidated() ? "true" : "false") +
+      ",\"privateSelfContinuationExceptionAbi\":" + QuoteJsonMutf8(interpreter_events::ExceptionAbi()) +
+      ",\"privateSelfContinuationIdentityService\":" + QuoteJsonMutf8(invoke_kind::ContinuationIdentityService()) +
+      ",\"privateSelfContinuationDirectAccessProofs\":" + std::to_string(invoke_kind::DirectAccessProofs()) +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +

@@ -8,5 +8,9 @@ using Move = bool (*)(void*, void*, bool, bool);
 bool Prepare();
 bool Modern();
 bool ExceptionService();
+const char* ExceptionAbi();
 bool MoveException(void* self, void* frame, bool skip, bool skip_throw);
+// The legacy caller must supply its original PC-event instrumentation. This
+// overload never invents a pointer or maps a partial skip policy to nullptr.
+bool ReplayException(void* self, void* frame, const void* instrumentation);
 }
