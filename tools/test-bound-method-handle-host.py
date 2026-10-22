@@ -9,12 +9,18 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''#include "platform/common/bound_method_handle.h"
 #include "platform/common/captured_method_handle.h"
+#include "platform/common/private_continuation.h"
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
 #include "platform/abi/arm64/common/runtime_objects.h"
+namespace artdcevm::private_continuation {
+std::atomic<bool> pc_active{false};
+bool Event(void*,const void*,const void*,uint32_t,const void*,void*,bool passed){return passed;}
+bool Exception(void*,void*,bool,bool,bool* handled){*handled=false;return false;}
+}
 using namespace artdcevm;
 template<class T> T Id(int value) { return reinterpret_cast<T>(static_cast<uintptr_t>(value)); }
 void Need(bool value,const char* message) { if(!value)throw std::runtime_error(message); }
@@ -261,7 +267,7 @@ def main():
         native = ROOT / "artdcevm/src/main/cpp"
         command = [shutil.which("clang++") or shutil.which("c++"), "-std=c++17", "-pthread", "-Wall", "-Wextra", "-Werror",
             "-I" + str(native), "-I" + str(include), "-I" + str(include / platform), "-I" + str(ROOT / "third_party/jvmti"), "-I" + str(work),
-            str(source), str(native / "platform/common/bound_method_handle.cc"), "-o", str(binary)]
+            str(source), str(native / "platform/common/bound_method_handle.cc"), str(native / "platform/common/interpreter_events.cc"), str(native / "platform/common/interpreter_notifications.cc"), "-o", str(binary)]
         result = subprocess.run(command, capture_output=True, text=True)
         (out / "compile.log").write_text(result.stdout + result.stderr)
         if result.returncode:

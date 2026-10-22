@@ -1,5 +1,6 @@
 #include "platform/common/invoke_kind.h"
 #include "platform/common/bound_method_handle.h"
+#include "platform/common/private_continuation.h"
 #include "platform/common/captured_method_handle.h"
 #include <atomic>
 #include <cstdint>
@@ -394,6 +395,15 @@ void* SelectMethod(void* self, void* caller, uintptr_t* receiver,
   return original(self, caller, receiver, instruction, lookup_only, string_init);
 }
 
+void** ContinuationException(void* self) { return &runtime_roots::Field<void*>(self, exception_offset); }
+bool ContinuationReady() {
+  return CopiedFrames() && method_descriptor && method_loader && frame_reference && observed_frame_pc &&
+      exception_offset != ~size_t{0} && ClassKinds();
+}
+bool ContinuationKind(void* self, void* caller, uint32_t index, int type) {
+  return CheckClassKind(self, caller, index, type);
+}
+
 }  // namespace
 
 bool Prepare(std::vector<Hook>* hooks) {
@@ -474,6 +484,7 @@ bool Prepare(std::vector<Hook>* hooks) {
     if (void* access = obsolete_class ? symbols::Find(kResolvedMethodAccess) : nullptr)
       prepared.push_back({access, HookAddress(MethodAccessCheck), HookSlot(&original_method_access), kResolvedMethodAccess.name});
   }
+  private_continuation::Configure({ResolveUnchecked, OwnClass, ContinuationKind, ContinuationException, throw_exception, ContinuationReady});
   hooks->insert(hooks->end(), prepared.begin(), prepared.end());
   return true;
 }

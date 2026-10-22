@@ -1,5 +1,6 @@
 #include "platform/common/runtime_thread.h"
 #include "platform/common/member_mapping.h"
+#include "platform/common/private_continuation.h"
 #include "platform/common/constructor_history.h"
 #include "platform/common/jni_id_array_scope.h"
 #include "platform/common/art_method_identity.h"
@@ -660,6 +661,7 @@ void Update(ClassRedefinitionPrefix* self, const RedefinitionDataIter& data) noe
   using Function = void (*)(ClassRedefinitionPrefix*, const RedefinitionDataIter&);
   {
     narrowed_references::UpdateScope references(self, data);
+    private_continuation::Invalidate();
     reinterpret_cast<Function>(original_update)(self, data);
   }
   RestoreFieldArrays();

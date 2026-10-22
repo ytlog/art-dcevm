@@ -11,6 +11,7 @@ from evidence_paths import new_evidence_directory
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = r'''
 #include "platform/common/invoke_kind.h"
+#include "platform/common/private_continuation.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 #include "platform/symbols/invoke_kind_symbols.h"
 #include "platform/symbols/structural_redefine_symbols.h"
@@ -51,6 +52,7 @@ void* linker = reinterpret_cast<void*>(0x1000);
 void* self = reinterpret_cast<void*>(0x2000);
 void* referrer = reinterpret_cast<void*>(0x3000);
 void Require(bool ok, const char* reason);
+namespace artdcevm::private_continuation { void Configure(Services) {} }
 namespace artdcevm::captured_method_handle { bool Complete(JNIEnv*,jthread){return true;} }
 namespace artdcevm::bound_method_handle { void Enable() {} void Configure(uint32_t (*)(void*,bool),int (*)(void*,void*),bool (*)(void*,bool)) {} }
 

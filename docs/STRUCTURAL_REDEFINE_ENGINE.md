@@ -421,7 +421,7 @@ JBR 还允许自身 obsolete 帧直接调用新 private 方法体，并忽略子
 | 36 | 7 | 0 | 0 |
 | 37 | 0 | 2 | 1 |
 
-API 30–33 的[固定解释器源码](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/interpreter/interpreter_common.h)把选择内联在 `DoInvoke` 中：已存库虽有 `FindMethodFromCode`，该 switch 路径并不经过它；命名 `DoCall` 位于分派之后，无法防止把新 private 的直接方法索引当成 vtable/IMT 槽。API 34/37 仅缺 virtual 模板的模块现在允许接口目标，类目标仍保留活动帧拒绝 71。[Android 17 固定源码](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/entrypoints/entrypoint_utils-inl.h)仍使用模板；两个模块中的非模板 `FindMethodToCall(…, InvokeType, …)` 尚未找到对应固定源码，不使用它。`NterpGetMethod` 的 virtual 缓存值按 vtable 索引解码，不能表示任意 private 直接目标；interface 的 Object 标记也不能表达这种目标。指令事件入口不提供 callee 选择服务，不能靠强制 single-step 替代它。不改访问标志、不改写 obsolete DEX，也不从反汇编或返回地址定位内联逻辑。
+API 30–33 的[固定解释器源码](https://android.googlesource.com/platform/art/+/refs/tags/android-13.0.0_r1/runtime/interpreter/interpreter_common.h)把选择内联在 `DoInvoke` 中：已存库虽有 `FindMethodFromCode`，该 switch 路径并不经过它；命名 `DoCall` 位于分派之后，无法防止把新 private 的直接方法索引当成 vtable/IMT 槽。API 34/37 仅缺 virtual 模板的模块现在允许接口目标，类目标仍保留活动帧拒绝 71。[Android 17 固定源码](https://android.googlesource.com/platform/art/+/refs/tags/android-17.0.0_r1/runtime/entrypoints/entrypoint_utils-inl.h)仍使用模板；两个模块中的非模板 `FindMethodToCall(…, InvokeType, …)` 尚未找到对应固定源码，不使用它。`NterpGetMethod` 的 virtual 缓存值按 vtable 索引解码，不能表示任意 private 直接目标；interface 的 Object 标记也不能表达这种目标。指令事件入口不提供 callee 选择服务；API 33 的独立续接在事件阶段主动执行命名 DoCall 并跳过原分派，见下文。不能靠强制 single-step 替代选择服务。不改访问标志、不改写 obsolete DEX，也不从反汇编或返回地址定位内联逻辑。
 
 
 接口 default 的旧活动帧可能来自实现类中的方法副本。ART 将副本标为 obsolete 后，原 `GetObsoleteDexCache` 要求它位于声明接口的方法数组中，从而中止事务。obsolete DEX 所属关系的 Hook 独立于选择入口安装，拒绝的请求也需要旧帧安全继续。对应命名入口对结构退役接口的副本选择该接口保留的旧 DEX；若方法已在正常 obsolete map 中，仍交回 ART，以保留更早方法体重定义的 DEX。Class 与 ClassExt 字段经已有声明探测和命名字段表确认；带读屏障路径遵循 CC/CMC 选择，不带屏障的栈访问路径保持原语义。迁移、引用替换、去优化和缓存清理仍由 ART 原事务负责。共享 JBR/设备样例覆盖类与接口自身旧帧、覆盖接收者、range、null、GC、两轮恢复、实际 single-step 回调，以及先更新方法体再改 private 的旧 DEX（选择服务可用的进程）。无选择服务的 API 33 在这项前置 default 方法体更新中仍可能触发 ART obsolete 副本检查，不据此宣称支持复合路径。ClassFile nest 的访问权与外部调用不同；访问对照使用没有 private 访问权的独立顶层调用方。接口目标遵循相同的调用方式规则及既有新增成员校验；缺少 abstract 实现或 default 冲突在调用时抛错。构造器和类初始化器不参与调用方式切换。字段解析本身区分 static 属性，字段存储变化继续按退役处理。
@@ -543,3 +543,13 @@ JIT 模式下，本轮 JNI／反射配对增量分别约为 +5.5%／+13.2%（API
 | API 36，JIT 模式 | 59.128 → 58.482 |
 
 这是两个独立时段的测量；API 36 解释模式修改后范围为 82.191–140.788 µs/类，不能承诺固定提速。缓存命中消除了再次探测，接口选择本身的类链扫描与私有表分配仍有开销。
+
+### API 33 续接与事件入口所有权
+
+固定 Android 13 声明提供指令事件、四组命名 `DoCall` 和异常处理续接入口。公共所有者在 Shadowhook UNIQUE 模式下对 ICF 合并入口只安装一次 Hook，再分发给 BindTo 与 private 续接；API 36 现代入口保持既有 BindTo ABI。续接另行要求异常服务，缺失该服务不移除 BindTo 的 PC 后备路径。
+
+应用准入前，内部 Subject/Contract 事务通过真实旧帧验证宽值、引用、void、range、GC、异常和 null。自证明之前仅证明线程上这两个准确描述符可以进入事务。监听先于证明事务开启；未提交的失败释放通知租约，任何一次提交成功后永久固定。嵌套请求按最新代数协调，BindTo 与子类监听不能关闭另一消费者的通知；复用现有引擎 JVMTI 环境并保留其回调。
+
+受保护 obsolete invoke 先验证声明描述符与加载器、选择当前 private 声明，再调用 ART 命名 `DoCall`。返回值及引用根写入原 ShadowFrame 中紧随的 move-result 目标，由私有 marker 经 ART 异常处理入口继续下一条指令；真实异常仍交给 ART 正常处理，原帧不重启。提交及 ClassPrepare 使小型 TLS 决策缓存失效。迁移、去优化和缓存职责仍全部由 ART 原事务承担。
+
+成本拆分定位出 DoCall／marker 之外的两项开销：内部证明退休虚方法身份，使每条 obsolete 指令事件编码方法 ID 时都锁定退休集合；额外 JVMTI 环境即使未启用事件也增加 ART 分发锁与解码。单调原子负向过滤器只跳过能够证明不存在的退休身份，可能命中仍查询加锁精确集合，过滤器不清空且不授予退休身份访问权限；复用引擎环境则消除额外分发迭代。

@@ -16,3 +16,7 @@
 -keep class com.github.ytlog.artdcevm.internal.BoundMethodHandleProbe { *; }
 -keep interface com.github.ytlog.artdcevm.internal.BoundMethodHandleProbe$Contract { *; }
 -keep class com.github.ytlog.artdcevm.internal.BoundMethodHandleProbe$Target { *; }
+
+# Exact isolated identities and old call sites are part of the runtime proof.
+-keep class com.github.ytlog.artdcevm.internal.PrivateContinuationProbe { *; }
+-keep class com.github.ytlog.artdcevm.internal.PrivateContinuationProbe$* { *; }

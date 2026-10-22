@@ -1,4 +1,5 @@
 plugins { id 'com.android.application' }
+def continuationProfileEnabled = providers.gradleProperty('continuationProfile').getOrElse('false').toBoolean()
 def targetAbi = providers.gradleProperty('targetAbi').orElse('arm64-v8a').get()
 if (targetAbi != 'arm64-v8a') throw new GradleException("Unsupported targetAbi: $targetAbi")
 android {
@@ -19,7 +20,7 @@ android {
     }
     buildTypes { debug {
         debuggable true; jniDebuggable true; minifyEnabled false
-        externalNativeBuild { cmake { arguments '-DARTDCEVM_INTERFACE_ABORT_TESTS=ON' } }
+        externalNativeBuild { cmake { arguments '-DARTDCEVM_INTERFACE_ABORT_TESTS=ON', '-DARTDCEVM_CONTINUATION_PROFILE=' + (continuationProfileEnabled ? 'ON' : 'OFF') } }
     } }
     buildFeatures { prefab true }
     compileOptions { sourceCompatibility JavaVersion.VERSION_11; targetCompatibility JavaVersion.VERSION_11 }

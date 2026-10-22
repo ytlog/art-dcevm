@@ -1,4 +1,6 @@
 #include "platform/common/member_retirement.h"
+#include "platform/common/method_retirement_filter.h"
+#include "platform/common/continuation_profile.h"
 
 #include <android/log.h>
 #include <array>
@@ -47,6 +49,7 @@ struct Process {
   std::atomic<bool> any_retired{false};
   std::atomic<bool> obsolete_flag_trusted{true};
   std::shared_mutex retired_mutex;
+  MethodRetirementFilter retired_filter;
   std::set<const void*> retired_methods;
   std::map<jmethodID, const void*> retired_ids;
   std::mutex roots_mutex;
@@ -91,7 +94,7 @@ thread_local std::map<jfieldID, const void*>* field_capture = nullptr;
 
 bool AnyRetired() { return process && process->any_retired.load(std::memory_order_acquire); }
 bool ContainsMethod(const void* method) {
-  if (!AnyRetired()) return false;
+  if (!AnyRetired() || !process->retired_filter.MayContain(method)) return false;
   std::shared_lock<std::shared_mutex> lock(process->retired_mutex);
   return process->retired_methods.count(method) != 0;
 }
@@ -107,6 +110,7 @@ bool ContainsId(jmethodID id) { return RetiredIdMethod(id) != nullptr; }
 void Retire(const void* method) {
   {
     std::unique_lock<std::shared_mutex> lock(process->retired_mutex);
+    process->retired_filter.Add(method);
     process->retired_methods.insert(method);
   }
   process->any_retired.store(true, std::memory_order_release);
@@ -156,7 +160,7 @@ bool Retired(const void* method) {
   if (process->obsolete_flag_trusted.load(std::memory_order_relaxed) &&
       !(static_cast<const ArtMethodPrefix*>(method)->access_flags.load(std::memory_order_relaxed) &
         kAccObsoleteMethod)) return false;
-  return ContainsMethod(method);
+  return continuation_profile::RetiredLookup(method, ContainsMethod);
 }
 
 // ART services, resolved by name in Prepare.

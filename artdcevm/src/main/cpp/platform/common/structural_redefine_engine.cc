@@ -12,6 +12,7 @@
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/private_continuation.h"
 #include "platform/common/bound_method_handle.h"
 #include "platform/common/jni_interface_dispatch.h"
 #include "platform/common/runtime_thread.h"
@@ -299,6 +300,7 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
   callbacks.ThreadEnd = [](jvmtiEnv*, JNIEnv*, jthread) { runtime_thread::ThreadEnded(); };
   prepared.subclass_watch = prepared.instance_check &&
       env->SetEventCallbacks(&callbacks, sizeof(callbacks)) == JVMTI_ERROR_NONE;
+  private_continuation::ConfigureEnvironment(env, prepared.subclass_watch);
   runtime_thread::CacheProofs(prepared.subclass_watch &&
       env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_THREAD_START, nullptr) == JVMTI_ERROR_NONE &&
       env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_THREAD_END, nullptr) == JVMTI_ERROR_NONE);

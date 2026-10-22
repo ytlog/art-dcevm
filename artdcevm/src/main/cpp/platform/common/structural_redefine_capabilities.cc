@@ -3,6 +3,7 @@
 #include "platform/common/imt_sealing.h"
 #include "platform/common/interface_method_selection.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/private_continuation.h"
 #include "platform/common/narrowed_references.h"
 #include "support/json.h"
 #include "platform/common/constructor_history.h"
@@ -46,6 +47,12 @@ std::string Capabilities() {
       ",\"privateSelfSelectionInterface\":" + (methods && invoke_kind::SelectionServices(true) ? "true" : "false") +
       ",\"privateSelfSelectionClassReason\":" + selection_reason(false) +
       ",\"privateSelfSelectionInterfaceReason\":" + selection_reason(true) +
+      ",\"privateSelfContinuationPrepared\":" + (methods && private_continuation::Prepared() ? "true" : "false") +
+      ",\"privateSelfContinuationProven\":" + (methods && private_continuation::Proven() ? "true" : "false") +
+      ",\"privateSelfContinuationActive\":" + (methods && private_continuation::Active() ? "true" : "false") +
+      ",\"privateSelfContinuationKinds\":" + (methods && private_continuation::Proven() ? "[\"class\",\"interface\"]" : "[]") +
+      ",\"privateSelfContinuationFailure\":" + QuoteJsonMutf8(private_continuation::Failure()) +
+      ",\"privateSelfContinuationEventPolicy\":\"skip-move-result\"" +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +

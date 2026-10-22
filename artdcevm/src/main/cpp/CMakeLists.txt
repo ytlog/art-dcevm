@@ -23,6 +23,9 @@ add_library(artdcevm SHARED
   platform/common/member_mapping.cc
   platform/common/method_handle_lookup.cc
   platform/common/invoke_kind.cc
+  platform/common/private_continuation.cc
+  platform/common/interpreter_notifications.cc
+  platform/common/interpreter_events.cc
   platform/common/bound_method_handle.cc
   platform/common/captured_method_handle.cc
   platform/abi/arm64/common/bound_entry.S

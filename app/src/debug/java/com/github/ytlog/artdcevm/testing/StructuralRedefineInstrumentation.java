@@ -1,5 +1,6 @@
 package com.github.ytlog.artdcevm.testing;
 
+import com.github.ytlog.artdcevm.fixture.PrivateContinuationFixture;
 import android.app.Activity;
 import android.app.Instrumentation;
 import android.content.Context;
@@ -158,6 +159,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             initialization.put("clientAttached", true).put("passed", true)
                     .put("capabilities", DcevmRuntime.capabilities());
             writeReport(false);
+            if (Build.VERSION.SDK_INT == 33 && (arguments == null || (!arguments.containsKey("privateSelf") && !"private-continuation-benchmark".equals(arguments.getString("scenario"))))) {
+                boolean proof = InterfaceAbortInstrumentation.provePrivateContinuation();
+                report.put("continuationPreparation", DcevmRuntime.capabilities());
+                writeReport(false);
+                if (!proof) throw new AssertionError("private continuation runtime self-proof failed");
+            }
             runScenarios();
             completed = true;
         } catch (Throwable error) {
@@ -186,7 +193,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         boolean ordinaryOnly = arguments != null && "ordinary".equals(arguments.getString("scenario"));
         if (!ordinaryOnly && arguments != null && arguments.containsKey("scenario")) {
             String isolated = arguments.getString("scenario");
-            if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
+            if ("private-continuation-benchmark".equals(isolated)) runContinuationBenchmark();
+            else if ("batch-combinations".equals(isolated)) runBatchCombinationScenarios();
             else if ("inverse-parents".equals(isolated)) runInverseParentScenarios();
             else if ("inverse-static".equals(isolated)) runInverseStaticScenarios();
             else if ("inverse-history".equals(isolated)) runInverseHistoryScenarios();
@@ -210,6 +218,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             else if ("field-retype".equals(isolated)) runRetypeScenarios();
             else if ("invoke-kind".equals(isolated)) runInvokeKindScenarios();
             else if ("method-private".equals(isolated)) runPrivateCallScenarios();
+            else if ("private-continuation".equals(isolated)) runContinuationScenarios();
             else if ("method-private-self".equals(isolated)) runPrivateSelfScenarios();
             else if ("tool".equals(isolated)) runToolScenarios();
             else if ("retransform".equals(isolated)) runRetransformScenarios();
@@ -414,6 +423,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         if (!ordinaryOnly) runInterfaceSymbolScenarios();
         if (!ordinaryOnly) runInverseParentScenarios();
         if (!ordinaryOnly) runReceiverLossScenarios();
+        if (!ordinaryOnly) runContinuationScenarios();
     }
 
     // A Proxy implementation of a redefined interface stays: kept methods still
@@ -4883,7 +4893,237 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
     // The runtime reports whether named switch-interpreter selectors are installed;
     // a runtime that inlines them keeps rejection 71 for active self frames.
     private static boolean privateSelfSelection(boolean iface) throws Exception {
-        return DcevmRuntime.capabilities().optBoolean("privateSelfSelection" + (iface ? "Interface" : "Class"), false);
+        JSONObject caps = DcevmRuntime.capabilities();
+        return caps.optBoolean("privateSelfSelection" + (iface ? "Interface" : "Class"), false) ||
+                caps.optBoolean("privateSelfContinuationProven", false);
+    }
+
+    private void runContinuationBenchmark() throws Exception {
+        if (StandardJvmtiClient.globalBreakpointNotification(true) != 0) throw new AssertionError("listener activation");
+        System.loadLibrary("artdcevm_bench");
+        final int count = 100000;
+        final String profileMode = arguments.getString("profileMode", "");
+        final boolean profileRequested = !profileMode.isEmpty();
+        com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.profiling = profileRequested;
+        final boolean prime = profileMode.equals("active-public") || profileMode.equals("private");
+        if (profileRequested && !InterfaceAbortInstrumentation.configureContinuationProfile(prime)) throw new AssertionError("profile setup");
+        if (profileMode.equals("base-extra") && !InterfaceAbortInstrumentation.addEmptyProfileEnvironment()) throw new AssertionError("empty environment setup");
+        if (prime || profileMode.equals("off")) {
+            if (StandardJvmtiClient.globalBreakpointNotification(false) != 0) throw new AssertionError("notification rollback");
+        }
+        final boolean candidate = "private".equals(arguments.getString("continuationVariant"));
+        final com.github.ytlog.artdcevm.fixture.ContinuationBenchmark value = new com.github.ytlog.artdcevm.fixture.ContinuationBenchmark();
+        CountDownLatch ready = new CountDownLatch(1), resume = new CountDownLatch(1);
+        Object[] result = new Object[1];
+        long[][] profile = new long[1][];
+        int[] affinity = {-1, -1};
+        Thread worker = new Thread(() -> {
+            try {
+                affinity[0] = HookOverheadBenchmark.pinCpu(2);
+                if (affinity[0] != 2) throw new AssertionError("CPU binding failed");
+                if (profileRequested) com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.profileEnable();
+                result[0] = value.await(ready, resume, count);
+                profile[0] = profileRequested ? InterfaceAbortInstrumentation.readContinuationProfile() : new long[0];
+                affinity[1] = HookOverheadBenchmark.pinnedCpu();
+            } catch (Throwable error) { result[0] = error; }
+        });
+        worker.start();
+        try {
+            if (!ready.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("benchmark frame");
+            runScenario("continuation-benchmark", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{value.getClass()}, "continuation-bench-" + (candidate ? "private" : "public"));
+                scenario.check("privateKind", candidate, Modifier.isPrivate(value.getClass().getDeclaredMethod("target").getModifiers()));
+                if (candidate && StandardJvmtiClient.globalBreakpointNotification(false) != 0) throw new AssertionError("test listener rollback");
+                resume.countDown(); worker.join(120000);
+                scenario.check("joined", true, !worker.isAlive());
+                if (!(result[0] instanceof long[])) throw new AssertionError(String.valueOf(result[0]));
+                long[] times = (long[]) result[0];
+                scenario.check("sum", (count + 10000) * 7L, times[1]);
+                scenario.check("cpuBefore", 2, affinity[0]); scenario.check("cpuAfter", 2, affinity[1]);
+                report.put("continuationBenchmark", new JSONObject().put("iterations", count).put("nanos", times[0]).put("variant", candidate ? "private" : "public").put("profileMode", profileMode).put("profile", new JSONArray(profile[0])));
+            });
+        } finally { resume.countDown(); worker.join(120000); }
+    }
+
+    private static Object continuationExpected(int mode, int n) {
+        switch (mode) {
+            case 0: return n * 3 + 1;
+            case 1: return "yes";
+            case 2: return 88;
+            case 3: return 30029;
+            case 4: return -2343;
+            case 5: return 0x123456780000L + n + 1L;
+            case 6: return 11f;
+            case 7: return (n + 2.5d) * 100d + 1d;
+            case 8: return "v-new" + n + "!";
+            case 9: return "identity-kept";
+            case 10: return (3 + n) * 10 + 1;
+            case 11: return "java.lang.IllegalArgumentException:41";
+            case 12: return "java.lang.IllegalArgumentException";
+            case 13: return n + 1000;
+            case 14: return n + 100;
+            case 15: return n * 4 + 1;
+            case 16: return n * 1000 + n;
+            case 17: return (6 + n) * 10 + 1;
+            case 18: return "java.lang.NullPointerException";
+            case 19: return n * 4 + 6;
+            default: return n * 3 + 1;
+        }
+    }
+
+    private void runContinuationScenarios() throws Exception {
+        // API 36 keeps its existing native continuation semantics; API 30-32
+        // remain closed. Run this expanded suite only where continuation is proven.
+        if (android.os.Build.VERSION.SDK_INT != 33) return;
+        for (int round = 0; round < 2; round++) for (boolean iface : new boolean[]{false, true}) {
+            final int n = iface ? 31 : 13;
+            final String name = "continuation-" + (iface ? "interface" : "class") + "-" + round;
+            final Class<?> target = iface ? PrivateContinuationFixture.Contract.class : PrivateContinuationFixture.Subject.class;
+            final PrivateContinuationFixture.Subject subject = new PrivateContinuationFixture.Subject();
+            final PrivateContinuationFixture.Child child = new PrivateContinuationFixture.Child();
+            final PrivateContinuationFixture.Impl impl = new PrivateContinuationFixture.Impl();
+            final PrivateContinuationFixture.Override override = new PrivateContinuationFixture.Override();
+            for (int i = 0; i < 30000; i++) { subject.fresh(); impl.fresh(); child.fresh(); override.fresh(); }
+            Thread[] workers = new Thread[21]; Object[] results = new Object[21];
+            PrivateContinuationFixture.Gate[] gates = new PrivateContinuationFixture.Gate[21];
+            for (int i = 0; i < workers.length; i++) {
+                final int slot = i; final PrivateContinuationFixture.Gate gate = gates[i] = new PrivateContinuationFixture.Gate(1);
+                workers[i] = new Thread(() -> {
+                    try {
+                        results[slot] = slot == 19 ? (iface ? impl.oldRecursion(gate, 3) : subject.oldRecursion(gate, 3))
+                            : iface ? (slot == 20 ? override : impl).await(gate, slot == 20 ? 0 : slot)
+                            : (slot == 20 ? child : subject).await(gate, slot == 20 ? 0 : slot);
+                    } catch (Throwable error) { results[slot] = error.getClass().getName(); }
+                }); workers[i].start();
+            }
+            try {
+                for (PrivateContinuationFixture.Gate gate : gates)
+                    if (!gate.entered.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("continuation frame");
+                if (round == 0) runScenario(name + "-abort", 110, scenario -> {
+                    scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                    scenario.redefine(new Class<?>[]{target}, "private-continuation-private");
+                    scenario.check("privateKind", false, Modifier.isPrivate(target.getDeclaredMethod("number").getModifiers()));
+                });
+                else runScenario(name + "-retain", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{target}, "private-continuation-retained");
+                    scenario.check("newBody", iface ? 3034 : 3022, iface ? impl.fresh() : subject.fresh());
+                });
+                runScenario(name + "-apply", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{target}, "private-continuation-private");
+                    scenario.check("privateKind", true, Modifier.isPrivate(target.getDeclaredMethod("number").getModifiers()));
+                    System.gc(); for (PrivateContinuationFixture.Gate gate : gates) gate.resume.countDown();
+                    for (Thread worker : workers) worker.join(10000);
+                    for (int i = 0; i < workers.length; i++) {
+                        scenario.check("joined" + i, true, !workers[i].isAlive());
+                        scenario.check("result" + i, continuationExpected(i, n), results[i]);
+                        scenario.check("finally" + i, i == 11 || i == 12 ? 1 : 0, gates[i].finallyHits);
+                    }
+                    scenario.check("field", 5, subject.field);
+                    scenario.check("externalOverride", iface ? 49 : 47, iface ? override.number() : child.number());
+                });
+            } finally { for (PrivateContinuationFixture.Gate gate : gates) gate.resume.countDown(); for (Thread worker : workers) worker.join(10000); }
+            runScenario(name + "-restore", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{target}, "private-continuation-original");
+                scenario.check("restored", iface ? 34 : 22, iface ? impl.fresh() : subject.fresh());
+            });
+        }
+        for (boolean iface : new boolean[]{false, true}) {
+            final String stem = "continuation-hot-" + (iface ? "interface" : "class");
+            final Class<?> target = iface ? PrivateContinuationFixture.Contract.class : PrivateContinuationFixture.Subject.class;
+            final PrivateContinuationFixture.Subject subject = new PrivateContinuationFixture.Subject();
+            final PrivateContinuationFixture.Impl impl = new PrivateContinuationFixture.Impl();
+            final PrivateContinuationFixture.Gate gate = new PrivateContinuationFixture.Gate(1);
+            final Object[] result = new Object[1]; PrivateContinuationFixture.hot = gate;
+            Thread worker = new Thread(() -> { try { result[0] = iface ? impl.await(gate, 20) : subject.await(gate, 20); }
+                catch (Throwable error) { result[0] = error.getClass().getName(); } });
+            worker.start();
+            try {
+                if (!gate.entered.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("hot entry");
+                for (int phase = 0; phase < 4; phase++) {
+                    final int current = phase, wanted = phase == 2 ? (iface ? 11 : 7) : phase == 1 ? (iface ? 35 : 17) : (iface ? 31 : 13);
+                    final String variant = phase == 2 ? "original" : phase == 1 ? "next" : "private";
+                    runScenario(stem + "-" + phase, 0, scenario -> {
+                        scenario.redefine(new Class<?>[]{target}, "private-continuation-" + variant);
+                        long deadline = System.nanoTime() + 10000000000L;
+                        while (gate.observed != wanted && worker.isAlive() && System.nanoTime() < deadline) Thread.yield();
+                        scenario.check("observed", wanted, gate.observed);
+                        scenario.check("stillRunning", true, worker.isAlive() && !gate.done);
+                        scenario.check("privateKind", current != 2, Modifier.isPrivate(target.getDeclaredMethod("number").getModifiers()));
+                        if (current == 3) {
+                            gate.done = true; worker.join(10000);
+                            scenario.check("joined", true, !worker.isAlive());
+                            scenario.check("locals", wanted * 3 + 41, result[0]);
+                            scenario.check("field", 5, subject.field);
+                        }
+                    });
+                }
+            } finally { gate.done = true; worker.join(10000); PrivateContinuationFixture.hot = null; }
+            runScenario(stem + "-restore", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{target}, "private-continuation-original");
+                scenario.check("restored", iface ? 34 : 22, iface ? impl.fresh() : subject.fresh());
+            });
+        }
+        final PrivateContinuationFixture.Subject subject = new PrivateContinuationFixture.Subject();
+        final PrivateContinuationFixture.Peer peer = new PrivateContinuationFixture.Peer();
+        final PrivateContinuationFixture.Gate outer = new PrivateContinuationFixture.Gate(1), inner = new PrivateContinuationFixture.Gate(1);
+        outer.action = () -> peer.await(inner);
+        final Object[] result = new Object[1];
+        Thread worker = new Thread(() -> { try { result[0] = subject.await(outer, 19); }
+            catch (Throwable error) { result[0] = error.getClass().getName(); } }); worker.start();
+        try {
+            if (!outer.entered.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("outer frame");
+            runScenario("continuation-reentry-outer", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{PrivateContinuationFixture.Subject.class}, "private-continuation-private");
+                outer.resume.countDown();
+                scenario.check("innerEntered", true, inner.entered.await(10, java.util.concurrent.TimeUnit.SECONDS));
+            });
+            runScenario("continuation-reentry-abort", 110, scenario -> {
+                scenario.check("armed", 0, InterfaceAbortInstrumentation.armMappingPlanFailure());
+                scenario.redefine(new Class<?>[]{PrivateContinuationFixture.Peer.class}, "private-continuation-private");
+                scenario.check("outerHeld", true, worker.isAlive());
+            });
+            runScenario("continuation-reentry-inner", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{PrivateContinuationFixture.Peer.class}, "private-continuation-private");
+                System.gc(); inner.resume.countDown(); worker.join(10000);
+                scenario.check("joined", true, !worker.isAlive()); scenario.check("result", 535, result[0]);
+            });
+        } finally { outer.resume.countDown(); inner.resume.countDown(); worker.join(10000); }
+        runScenario("continuation-reentry-restore-peer", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{PrivateContinuationFixture.Peer.class}, "private-continuation-original");
+            scenario.check("restored", 7, peer.number());
+        });
+        runScenario("continuation-reentry-restore-outer", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{PrivateContinuationFixture.Subject.class}, "private-continuation-original");
+            scenario.check("restored", 22, subject.fresh());
+        });
+        final PrivateContinuationFixture.Gate late = new PrivateContinuationFixture.Gate(1);
+        final Object[] lateResult = new Object[1]; final boolean[] actionRan = {false};
+        Thread lateWorker = new Thread(() -> { try { lateResult[0] = peer.await(late); }
+            catch (Throwable error) { lateResult[0] = error.getClass().getName(); } });
+        Runnable action = () -> {
+            actionRan[0] = true; lateWorker.start();
+            try { if (!late.entered.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("late frame"); }
+            catch (InterruptedException error) { throw new AssertionError(error); }
+        };
+        // Link all helper classes before the snapshot, without starting the old
+        // frame. The hook then starts that frame after entry's committed scan.
+        PrivateContinuationFixture.Gate warm = new PrivateContinuationFixture.Gate(1); warm.resume.countDown(); peer.await(warm);
+        runScenario("continuation-late-apply", 0, scenario -> {
+            scenario.check("hookInstalled", 0, StandardJvmtiClient.setClassHookAction(
+                    PrivateContinuationFixture.Peer.class.getName().replace('.', '/'), action));
+            long retries = DcevmRuntime.capabilities().getLong("subclassLoadRetries");
+            try {
+                scenario.redefine(new Class<?>[]{PrivateContinuationFixture.Peer.class}, "private-continuation-private");
+                scenario.check("actionRan", true, actionRan[0]);
+                scenario.check("noRescan", 0L, DcevmRuntime.capabilities().getLong("subclassLoadRetries") - retries);
+                late.resume.countDown(); lateWorker.join(10000);
+                scenario.check("joined", true, !lateWorker.isAlive()); scenario.check("result", 173, lateResult[0]);
+            } finally { StandardJvmtiClient.setClassHookAction(null, null); late.resume.countDown(); lateWorker.join(10000); }
+        });
+        runScenario("continuation-late-restore", 0, scenario -> {
+            scenario.redefine(new Class<?>[]{PrivateContinuationFixture.Peer.class}, "private-continuation-original");
+            scenario.check("restored", 7, peer.number());
+        });
     }
 
     private void runPrivateSelfScenarios() throws Exception {

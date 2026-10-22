@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TOKENS = ('InterfaceAbortInstrumentation', 'JniReceiverLossInstrumentation', 'artdcevm::fault_injection::',
           'RejectThreadProbe()', 'ReferenceRead(bool)', 'failure_stage', 'failure_hits',
           'counters', 'Inject(int)')
+PROFILE_TOKENS = ('continuation_profile::Configure', 'continuation_profile::Read', 'configureContinuationProfile', 'readContinuationProfile', 'addEmptyProfileEnvironment')
 EXPORTS = ('configureImtFallback', 'configurePrivateSelfMask', 'configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes', 'primePointerId', 'rejectRuntimeThreadProbe', 'runtimeReferenceReads', 'runtimeMarkingReads')
 
 
@@ -106,7 +107,7 @@ def main():
                 raise ValueError('The lab APK is missing the isolated JNI-ID promotion probe')
             if not all(token in symbols for token in TOKENS):
                 raise ValueError('The app engine is missing abort-test implementation symbols')
-        elif any(token in dynamic or token in symbols for token in TOKENS):
+        elif any(token in dynamic or token in symbols for token in TOKENS + PROFILE_TOKENS):
             raise ValueError(name + ' contains interface abort-test symbols')
         results.append({'artifact': name, 'artifactSha256': hashlib.sha256(artifact.read_bytes()).hexdigest(),
                         'buildId': identity, 'testSymbols': tests, 'matchedUnstripped': True})

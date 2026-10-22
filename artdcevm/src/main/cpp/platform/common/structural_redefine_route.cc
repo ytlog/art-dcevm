@@ -1,5 +1,7 @@
 #include "platform/common/structural_redefine_internal.h"
 #include "platform/common/constructor_history.h"
+#include "platform/common/private_continuation.h"
+#include "platform/common/interpreter_notifications.h"
 #include "platform/common/method_handle_lookup.h"
 
 #include <android/api-level.h>
@@ -48,6 +50,7 @@ struct Watch {
   std::atomic<bool> subclass_loaded{false}, any_class_prepared{false};
 };
 void JNICALL ClassPrepared(jvmtiEnv*, JNIEnv* jni, jthread, jclass klass) noexcept {
+  private_continuation::Invalidate();
   std::lock_guard<std::mutex> lock(process->watch_mutex);
   for (Watch* watch : process->watches) {
     watch->any_class_prepared = true;
@@ -75,7 +78,7 @@ class WatchScope {
       first = process->watches.empty();
       process->watches.push_back(&watch_);
     }
-    if (first) process->snapshot_env->SetEventNotificationMode(JVMTI_ENABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
+    if (first) interpreter_events::WatchNotification(process->snapshot_env, true);
     BatchOf(context)->subclass_loaded = &watch_.subclass_loaded;
     BatchOf(context)->any_class_loaded = &watch_.any_class_prepared;
   }
@@ -87,7 +90,7 @@ class WatchScope {
       process->watches.erase(std::find(process->watches.begin(), process->watches.end(), &watch_));
       last = process->watches.empty();
     }
-    if (last) process->snapshot_env->SetEventNotificationMode(JVMTI_DISABLE, JVMTI_EVENT_CLASS_PREPARE, nullptr);
+    if (last) interpreter_events::WatchNotification(process->snapshot_env, false);
     for (jobject target : watch_.targets) jni_->DeleteGlobalRef(target);
   }
   WatchScope(const WatchScope&) = delete;
@@ -472,6 +475,27 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
 // leaves the class loaded, so the next attempt includes it.
 jvmtiError RouteWith(jvmtiEnv* env, jint count, const jvmtiClassDefinition* definitions, const Commit& commit) {
   std::lock_guard<std::recursive_mutex> transaction_lock(process->transaction_mutex);
+  // Only a predicted private transition needs the isolated runtime proof.
+  // A transformer introducing one later still meets the fail-closed admission.
+  if (android_get_device_api_level() == 33 && count > 0 && definitions && !private_continuation::Proven()) {
+    JNIEnv* jni = nullptr;
+    process->runtime_vm->GetEnv(reinterpret_cast<void**>(&jni), JNI_VERSION_1_6);
+    bool needed = false;
+    for (jint i = 0; jni && i < count && !needed; ++i) {
+      evolution::ClassSchema live, incoming;
+      std::string error;
+      if (!definitions[i].klass || definitions[i].class_byte_count <= 0 ||
+          live_schema::ReadLiveSchema(process->snapshot_env, jni, definitions[i].klass, &live, &error) != JVMTI_ERROR_NONE ||
+          !evolution::ReadClassDeclarations({definitions[i].class_bytes, static_cast<size_t>(definitions[i].class_byte_count),
+              definitions[i].class_bytes, static_cast<size_t>(definitions[i].class_byte_count)}, &incoming, &error)) continue;
+      if (private_continuation::ProbeTransaction(live.descriptor)) continue;
+      for (const auto& old : live.methods) for (const auto& next : incoming.methods)
+        if (old.name == next.name && old.descriptor == next.descriptor &&
+            !(old.access & (evolution::kAccStatic | evolution::kAccPrivate)) &&
+            !next.IsStatic() && (next.access & evolution::kAccPrivate)) needed = true;
+    }
+    if (needed && private_continuation::Prepare(process->runtime_vm, jni)) private_continuation::Prove(jni);
+  }
   constexpr int kAttempts = 3;
   // Keep this request within the routed transaction, including nested calls
   // made by a ClassFileLoadHook; one transaction cannot consume another's retry.

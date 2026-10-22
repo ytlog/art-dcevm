@@ -1679,7 +1679,59 @@ for _round in range(2):
         REQUIRED_CHECKS[_name] = _checks
 SCENARIOS += tuple(RECEIVER_LOSS_SCENARIOS)
 
+CONTINUATION_SCENARIOS = []
+for _round in range(2):
+    for _kind, _n in (("class", 13), ("interface", 31)):
+        _stem = f"continuation-{_kind}-{_round}"
+        _phase = "abort" if _round == 0 else "retain"
+        _name = _stem + "-" + _phase
+        CONTINUATION_SCENARIOS.append((_name, ["private-continuation-private" if _round == 0 else "private-continuation-retained"], 110 if _round == 0 else 0))
+        REQUIRED_CHECKS[_name] = {"armed": 0, "privateKind": False} if _round == 0 else {"newBody": 3034 if _kind == "interface" else 3022}
+        _name = _stem + "-apply"
+        CONTINUATION_SCENARIOS.append((_name, ["private-continuation-private"], 0))
+        _values = [_n*3+1,"yes",88,30029,-2343,0x123456780000+_n+1,11,int((_n+2.5)*100+1),
+                   f"v-new{_n}!","identity-kept",(3+_n)*10+1,"java.lang.IllegalArgumentException:41",
+                   "java.lang.IllegalArgumentException",_n+1000,_n+100,4*_n+1,_n*1000+_n,(6+_n)*10+1,
+                   "java.lang.NullPointerException",4*_n+6,_n*3+1]
+        REQUIRED_CHECKS[_name] = {"privateKind": True, "field": 5, "externalOverride": 49 if _kind == "interface" else 47,
+            **{f"result{i}": v for i,v in enumerate(_values)}, **{f"joined{i}": True for i in range(21)},
+            **{f"finally{i}": 1 if i in (11,12) else 0 for i in range(21)}}
+        MAPPED_SCENARIOS.add(_name)
+        _name = _stem + "-restore"
+        CONTINUATION_SCENARIOS.append((_name,["private-continuation-original"],0))
+        REQUIRED_CHECKS[_name] = {"restored":34 if _kind == "interface" else 22}
+        MAPPED_SCENARIOS.add(_name)
+for _kind in ("class", "interface"):
+    _stem = "continuation-hot-" + _kind
+    for _phase in range(4):
+        _n = (11 if _kind == "interface" else 7) if _phase == 2 else (35 if _kind == "interface" else 17) if _phase == 1 else (31 if _kind == "interface" else 13)
+        _variant = "original" if _phase == 2 else "next" if _phase == 1 else "private"
+        _name = f"{_stem}-{_phase}"
+        CONTINUATION_SCENARIOS.append((_name,["private-continuation-"+_variant],0))
+        REQUIRED_CHECKS[_name] = {"observed":_n,"stillRunning":True,"privateKind":_phase != 2}
+        if _phase == 3: REQUIRED_CHECKS[_name].update(joined=True,locals=_n*3+41,field=5)
+        MAPPED_SCENARIOS.add(_name)
+    _name = _stem+"-restore"
+    CONTINUATION_SCENARIOS.append((_name,["private-continuation-original"],0))
+    REQUIRED_CHECKS[_name] = {"restored":34 if _kind == "interface" else 22}
+    MAPPED_SCENARIOS.add(_name)
+for _phase,_code,_variant,_checks in (("outer",0,"private",{"innerEntered":True}),
+    ("abort",110,"private",{"armed":0,"outerHeld":True}), ("inner",0,"private",{"joined":True,"result":535}),
+    ("restore-peer",0,"original",{"restored":7}), ("restore-outer",0,"original",{"restored":22})):
+    _name="continuation-reentry-"+_phase
+    CONTINUATION_SCENARIOS.append((_name,["private-continuation-"+_variant],_code))
+    REQUIRED_CHECKS[_name]=_checks
+    if _code == 0: MAPPED_SCENARIOS.add(_name)
+for _phase,_checks in (("apply",{"hookInstalled":0,"actionRan":True,"noRescan":0,"joined":True,"result":173}), ("restore",{"restored":7})):
+    _name="continuation-late-"+_phase
+    CONTINUATION_SCENARIOS.append((_name,["private-continuation-"+("private" if _phase == "apply" else "original")],0))
+    REQUIRED_CHECKS[_name]=_checks
+    MAPPED_SCENARIOS.add(_name)
+SCENARIOS += tuple(CONTINUATION_SCENARIOS)
+
 def _base_scenario_sequence(scenario_group, api=None, self_selection=None):
+    if scenario_group == "private-continuation":
+        return tuple(CONTINUATION_SCENARIOS) if api == 33 else ()
     if scenario_group in ("receiver-loss", "receiver-loss-bound"):
         return tuple(RECEIVER_LOSS_SCENARIOS)
     if scenario_group == "inverse-parents":
@@ -1711,7 +1763,7 @@ def _base_scenario_sequence(scenario_group, api=None, self_selection=None):
     if scenario_group == "interface-shadow":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-shadow-"))
     if scenario_group == "full":
-        return SCENARIOS
+        return tuple(item for item in SCENARIOS if api == 33 or not item[0].startswith("continuation-"))
     if scenario_group == "interface-abstract":
         return tuple(item for item in SCENARIOS if item[0].startswith("interface-abstract-"))
     if scenario_group == "thread-subclass":
@@ -1747,7 +1799,7 @@ def _base_scenario_sequence(scenario_group, api=None, self_selection=None):
         names = [item[0] for item in SCENARIOS]
         return tuple(item for item in SCENARIOS[:names.index("interface-method-bodies")]
                      + SCENARIOS[names.index("interface-hidden"):]
-                     if not item[0].startswith(("static-narrow-", "class-kind-", "constructor-history-", "interface-descriptor-", "interface-symbol-", "interface-hide-parent-", "inverse-parent-", "inverse-static-")))
+                     if not item[0].startswith(("static-narrow-", "class-kind-", "constructor-history-", "interface-descriptor-", "interface-symbol-", "interface-hide-parent-", "inverse-parent-", "inverse-static-", "continuation-")))
     raise RunFailure("Unsupported scenario group")
 
 
@@ -1817,6 +1869,16 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
     direct_selection=capabilities.get("privateDirectSelection")
     if type(direct_selection) is not bool:
         raise RunFailure("The initialization report is missing privateDirectSelection")
+    continuation = report.get("continuationPreparation", {})
+    if device["api"] == 33 and not private_self_mode:
+        if not (continuation.get("privateSelfContinuationPrepared") is True and
+                continuation.get("privateSelfContinuationProven") is True and
+                continuation.get("privateSelfContinuationActive") is True and
+                continuation.get("privateSelfContinuationKinds") == ["class", "interface"] and
+                continuation.get("privateSelfContinuationFailure") == "" and
+                continuation.get("privateSelfContinuationEventPolicy") == "skip-move-result"):
+            raise RunFailure("API 33 continuation runtime self-proof is missing")
+        self_selection = {"class": True, "interface": True}
     expected_scenarios = scenario_sequence(scenario_group, device["api"], self_selection, direct_selection)
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
@@ -1985,7 +2047,7 @@ def main(argv=None):
     parser.add_argument("--apk", type=Path, default=ROOT / "app/build/outputs/apk/debug/app-debug.apk")
     parser.add_argument("--device-id", default="android-device-1", help="Anonymous label for the verification record")
     parser.add_argument("--timeout", type=int, default=600, help="Instrumentation timeout in seconds")
-    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "inverse-static", "inverse-history", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays", "self-array-parents"), default="full",
+    parser.add_argument("--scenario-group", choices=("full", "receiver-loss", "receiver-loss-bound", "inverse-parents", "inverse-static", "inverse-history", "interface-symbols", "member-descriptors", "batch-combinations", "ordinary", "interface-abstract", "thread-subclass", "interface-removal", "narrowed-reference-method", "proxy-interface", "interface-drop-parent", "static-narrow", "field-retype", "invoke-kind", "invoke-interface-kind", "method-private", "method-private-self", "private-continuation", "tool", "retransform", "interface-shadow", "interface-selection", "class-kinds", "constructor-history", "self-arrays", "self-array-parents"), default="full",
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")

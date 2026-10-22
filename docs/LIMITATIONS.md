@@ -67,7 +67,7 @@
 
 | 变化 | 错误码 | 说明 |
 | --- | --- | --- |
-| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到该目标类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。按目标种类安装命名 `FindMethodToCall<kVirtual/kInterface>` 入口并通过 Class/Thread/HandleScope 探测后支持此行为，分别以 `privateSelfSelectionClass`／`privateSelfSelectionInterface` 报告，旧键为交集。API 36 已经真机验证；部分 API 34/37 仅保留 interface 模板的模块按固定源码支持接口目标，尚未上机。API 30–33 和缺少对应命名服务或源码依据的目标仍拒绝 71。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
+| 虚方法改为 private，或已删除的虚方法以 private 方式重新加入，而检测到该目标类的活动帧且缺少自身调用选择能力 | `UNSUPPORTED_REDEFINITION_METHOD_MODIFIERS_CHANGED`（71） | JBR 可让自身旧帧直接调用新 private 方法。按目标种类安装命名 `FindMethodToCall<kVirtual/kInterface>` 入口并通过 Class/Thread/HandleScope 探测后支持此行为，分别以 `privateSelfSelectionClass`／`privateSelfSelectionInterface` 报告，旧键为交集。API 36 已经真机验证；部分 API 34/37 仅保留 interface 模板的模块按固定源码支持接口目标，尚未上机。API 30–32 和缺少对应命名服务或源码依据的目标仍拒绝 71；API 33 另由下述真实续接证明准入。无访问权的批次外旧调用方可保留，调用时抛 IAE，见[调用方式变化](STRUCTURAL_REDEFINE_ENGINE.md#调用方式变化) |
 | 种类变化不满足实例、子类型、分配或分派前提 | 62／66／70 | 见[类种类演进](CLASS_KIND_EVOLUTION.md) |
 | 失去原有父类的父类变化 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 已校验代码依赖旧类型关系，见引擎文档[收窄不支持](STRUCTURAL_REDEFINE_ENGINE.md#收窄不支持) |
 | 移除接口时成员映射或分派保护不可用 | `UNSUPPORTED_REDEFINITION_HIERARCHY_CHANGED`（66） | 见[移除接口的语义](#移除接口的语义) |
@@ -157,7 +157,7 @@
 | 持有动态代理的实例字段改类型 | 新类型是直接声明接口或 `Proxy` 父类时保留；仅间接实现接口时清空 | 目标与继承字段按同一规则处理，见[字段改型对照](TESTING.md#jbr-对照) |
 | 接口方法与非 public 类方法同签名 | 接受；private 不实现 abstract，抛 `AbstractMethodError`；package-private/protected 抛 `IllegalAccessError` | 选择服务可用时相同；类方法调用保留，支持 default/abstract 切换与新增父接口；API 33/36 已验证 |
 | 普通类方法在 static 与实例之间切换，而批次外已加载代码仍按旧方式调用 | 接受，调用时重新解析并抛 `IncompatibleClassChangeError` | 命名调用方式保护可用时接受，旧调用抛 ICCE；旧调用方禁止 JIT 编译及内联，ART 仍执行原有去优化。Android 13、16 覆盖普通／CheckJNI、热调用、活动帧、GC 与隐式重建；入口不可用时保留 71 |
-| 普通类虚方法改为 private，批次外仍有无访问权的旧调用方 | 接受；旧 virtual/super 调用抛 `IllegalAccessError`，自身旧帧可调用新 private 方法 | 接受并保护外部旧调用，抛 IAE；旧调用方禁止 JIT 编译及内联。有对应种类的命名选择服务时（`privateSelfSelectionClass`／`privateSelfSelectionInterface`），自身旧帧直接选择 private 方法并忽略覆写，含接口 default 副本；选择逻辑被内联（API 30–33）或运行时探测不匹配时拒绝 71 |
+| 普通类虚方法改为 private，批次外仍有无访问权的旧调用方 | 接受；旧 virtual/super 调用抛 `IllegalAccessError`，自身旧帧可调用新 private 方法 | 接受并保护外部旧调用，抛 IAE；旧调用方禁止 JIT 编译及内联。有对应种类的命名选择服务时（`privateSelfSelectionClass`／`privateSelfSelectionInterface`），自身旧帧直接选择 private 方法并忽略覆写，含接口 default 副本；API 33 可由独立续接证明准入；API 30–32 或运行时探测不匹配时拒绝 71 |
 | 父类收窄（新父类链不含原父类） | 拒绝 | 拒绝 66 |
 | 失去接口的抽象类之后才加载的具体子类 | 按新层级正确分派 | 持久发布前保护与后续结构重建共同保留正确分派，见[引擎文档](STRUCTURAL_REDEFINE_ENGINE.md#移除接口) |
 | 有 Proxy 实现类的接口移除父接口 | 接受，已有代理不再是该父接口的实例 | 接受；共享父接口保留到最后一条继承路径被移除，已有引用沿用接口收窄规则 |
@@ -171,3 +171,11 @@
 普通类实际移除接口时，已缓存的接口直接／精确绑定句柄抛 ICCE；未绑定的 `invokeWithArguments`／`asType` 在接收者转换时抛 CCE。缓存类句柄失去 default 时抛 AME，自身声明保留。API 33/36 的普通与 CheckJNI 回归另验错误 MethodType、null、方法体异常、两轮失败恢复、批次反序、晚加载与 GC。已绑定接口句柄的 `invokeWithArguments` 也在参数适配完成后抛 ICCE，回归覆盖数组／List、基本类型／引用／null 转换、错误参数个数、返回值适配、spread／drop 适配器与 ICCE 捕获。库通过自身的公开 JVMTI 环境保护 bootstrap `BindTo.transform` 入口，事务前必须实际证明活动帧可读。入口准备成功后在进程内保留，事务中止也不撤销。ART 为断点去优化该方法；旧 ART 在具名检查策略及二次覆盖探针通过后可清除自身断点，继续保留解释执行。探针可证明具名解释器服务时，Runnable 检查省去逐次活动帧读取与 JNI 字段访问；较新的 active-handler 解释器还能关闭自身逐指令通知。服务不可用时保留公开回调。定向解释执行与旧解释器的原生事件状态仍会增加成本；现代 arm64 叶入口保留 ART 的 DEX PC 展开信息并缩短其他解释调用的转发链，仍需连同普通调用、反射、JNI 和实际栈回溯一起衡量；接入应用需自行测量，其他位置的 JIT 保持启用。保留的接口及 copied default JNI ID 通过 CheckJNI 之后的分派保护处理：普通模式对失去接口的虚调用接收者抛 ICCE，nonvirtual default 保留方法体，CheckJNI 保留声明类／接收者诊断。指针／索引 ID、普通／V／A 与 virtual／nonvirtual 矩阵需独立进程和实际 ID 标签证明。普通声明方法的指针 ID 导致 ART 拒绝 79 时，只记安全拒绝，不能计作调用对齐。JNI 活动帧组合仍未完成。
 
 接收者丢失接口的适配器矩阵扩展到 43 组预链接图，包括组合后绑定、替换／忽略接收者、guard 分支、处理器／过滤器顺序、collect／fold、invoker 与 varargs。不兼容捕获通过根化续执行交回 libcore，图中回调先于最终分派错误；这条少见路径需要 JNI 和栈读取，直接／兼容绑定保留已优化的原生路径。准备阶段验证混合参数、返回值与恰好一次调用。任意图、精确栈轨迹格式及 JNI 活动帧组合仍不在本证明范围内。
+
+### API 33 的 obsolete 自身 private 调用
+
+API 33 在真实运行时续接自证明通过后，另行开放普通类和接口的 virtual→private 变更。该能力独立于 `privateSelfSelectionClass/Interface`：`privateSelfContinuationPrepared` 表示命名服务准备完毕，`…Proven` 表示内部类／接口的真实重定义与旧帧调用通过，`…Active` 表示监听已开启，`…Kinds` 列出证明通过的目标种类；`…Failure` 说明不能准入的原因，`…EventPolicy` 为 `skip-move-result`。
+
+服务缺失或自证明失败时，应用事务仍以 71 拒绝。API 30–32 不开放这条路径；API 36 继续使用命名选择入口。内部或应用事务一旦在续接保护下成功提交，监听在进程存续期间常驻，后续失败不撤销，覆盖提交前扫描之后新进入的旧帧。其他调试代理仍收到 invoke 事件，但被续接调用之后的 move-result 事件会跳过。局部变量、引用根、异常与非尾调用后续计算均留在原帧，应用 DEX 与访问标志不变。
+
+其他调试代理强制 pop／retry 和异步异常投递尚无独立设备验收证据；相关分支保留 ART 的处理路径，不据此宣称所有调试代理组合均已对齐。

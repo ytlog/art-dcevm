@@ -1,4 +1,5 @@
 #include "platform/common/structural_redefine_internal.h"
+#include <android/api-level.h>
 
 #include <android/log.h>
 #include "platform/common/art_dex_view.h"
@@ -11,6 +12,7 @@
 #include "platform/common/proxy_relink.h"
 #include "platform/common/member_mapping.h"
 #include "platform/common/invoke_kind.h"
+#include "platform/common/private_continuation.h"
 #include "platform/common/jni_interface_dispatch.h"
 #include "platform/common/method_handle_lookup.h"
 #include "platform/common/runtime_thread.h"
@@ -52,7 +54,10 @@ std::string KindCallers(const runtime_thread::VerifiedThread& thread, ClassRedef
     }
     // Old self frames require a probed selector that bypasses the vtable/IMT.
     if ((batch.active_frame && !protected_change) ||
-        (snapshot.active_frame && private_change && !invoke_kind::SelfCalls(interface_target)))
+        (private_change && !invoke_kind::SelfCalls(interface_target) &&
+         (snapshot.active_frame || (android_get_device_api_level() == 33 && !invoke_kind::SelectionServices(interface_target))) &&
+         !private_continuation::ProbeTransaction(snapshot.live.descriptor) &&
+         !(private_continuation::Proven() && private_continuation::Active() && invoke_kind::CopiedFrames())))
       return "an active frame of " + (protected_change ? snapshot.live.descriptor : *batch.active_frame) +
           " may still invoke the old kind of " + method;
     transaction::Current()->protect_invocations |= protected_change;

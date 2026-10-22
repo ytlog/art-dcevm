@@ -27,6 +27,10 @@ import java.util.zip.Adler32;
 
 /** Repeated failures and successful transactions in one process, with live instances. */
 public final class InterfaceAbortInstrumentation extends Instrumentation {
+    static native boolean provePrivateContinuation();
+    static native boolean configureContinuationProfile(boolean prime);
+    static native long[] readContinuationProfile();
+    static native boolean addEmptyProfileEnvironment();
     private static native int armFailure(int stage);
     private static native int discardedClasses();
     static native int failureHits();

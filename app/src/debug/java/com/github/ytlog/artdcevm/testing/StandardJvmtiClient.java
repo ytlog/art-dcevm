@@ -6,6 +6,7 @@ import java.lang.reflect.Method;
 
 /** Java side of the independent user agent in standard_jvmti_client.cc. */
 final class StandardJvmtiClient {
+    static native int globalBreakpointNotification(boolean enabled);
     private static boolean attached;
 
     private StandardJvmtiClient() {}
@@ -62,6 +63,7 @@ final class StandardJvmtiClient {
     /** Null DEX observes a requested class without replacing its bytes. */
     static native int setClassFileReplacements(String[] names, byte[][] dexes);
     static native long classFileCalls();
+    static native int setClassHookAction(String trigger, Runnable action);
     static native int setNestedRetransform(String trigger, Class<?>[] classes);
     static native int nestedRetransformResult();
     static native long classFileReplacements();

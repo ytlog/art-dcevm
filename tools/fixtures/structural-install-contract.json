@@ -37,7 +37,13 @@
       "privateSelfSelectionInterfaceReason": "invocation guards not installed",
       "constructorHistoryCacheReason": "using public JNI weak identity",
       "constructorHistoryCacheProofs": 1,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "cold": {
       "classModifierChange": false,
@@ -76,7 +82,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "hooksSha256": "e71d48fa47be8fe97e96a57cf4d528b11709143f0d5a5ed45b20270c252da59c",
     "unhooks": []
@@ -119,7 +131,13 @@
       "privateSelfSelectionInterfaceReason": "invocation guards not installed",
       "constructorHistoryCacheReason": "using public JNI weak identity",
       "constructorHistoryCacheProofs": 1,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "cold": {
       "classModifierChange": false,
@@ -158,7 +176,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "hooksSha256": "090338d838055c16acffef645a855550bdf9010efe3ce6cc124fe7269ab67751",
     "unhooks": [
@@ -203,7 +227,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "cold": {
       "classModifierChange": false,
@@ -242,7 +272,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "hooksSha256": "e71d48fa47be8fe97e96a57cf4d528b11709143f0d5a5ed45b20270c252da59c",
     "unhooks": [
@@ -315,7 +351,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "cold": {
       "classModifierChange": false,
@@ -354,7 +396,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "hooksSha256": "73f8c4c1ceef62ed0be44bd12542d2db3fbd16c2b829f73d98d48620335ffefa",
     "unhooks": []
@@ -397,7 +445,13 @@
       "privateSelfSelectionInterfaceReason": "invocation guards not installed",
       "constructorHistoryCacheReason": "using public JNI weak identity",
       "constructorHistoryCacheProofs": 1,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "cold": {
       "classModifierChange": false,
@@ -436,7 +490,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "hooksSha256": "e71d48fa47be8fe97e96a57cf4d528b11709143f0d5a5ed45b20270c252da59c",
     "unhooks": []
@@ -479,7 +539,13 @@
       "privateSelfSelectionInterfaceReason": "invocation guards not installed",
       "constructorHistoryCacheReason": "using public JNI weak identity",
       "constructorHistoryCacheProofs": 1,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "cold": {
       "classModifierChange": false,
@@ -518,7 +584,13 @@
       "privateSelfSelectionInterfaceReason": "method evolution unavailable",
       "constructorHistoryCacheReason": "method evolution unavailable",
       "constructorHistoryCacheProofs": 0,
-      "privateDirectSelection": false
+      "privateDirectSelection": false,
+      "privateSelfContinuationPrepared": false,
+      "privateSelfContinuationProven": false,
+      "privateSelfContinuationActive": false,
+      "privateSelfContinuationKinds": [],
+      "privateSelfContinuationFailure": "not prepared",
+      "privateSelfContinuationEventPolicy": "skip-move-result"
     },
     "hooksSha256": "a1d29618d426fa7ee3f88e16ea4e1da2bf40802a00b7afe66fecb2e52c1a08ec",
     "unhooks": []
