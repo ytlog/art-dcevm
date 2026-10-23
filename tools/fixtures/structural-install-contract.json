@@ -47,7 +47,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -96,7 +97,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "hooksSha256": "e71d48fa47be8fe97e96a57cf4d528b11709143f0d5a5ed45b20270c252da59c",
     "unhooks": []
@@ -149,7 +151,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -198,7 +201,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "hooksSha256": "090338d838055c16acffef645a855550bdf9010efe3ce6cc124fe7269ab67751",
     "unhooks": [
@@ -253,7 +257,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -302,7 +307,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "hooksSha256": "e71d48fa47be8fe97e96a57cf4d528b11709143f0d5a5ed45b20270c252da59c",
     "unhooks": [
@@ -385,7 +391,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -434,7 +441,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "hooksSha256": "73f8c4c1ceef62ed0be44bd12542d2db3fbd16c2b829f73d98d48620335ffefa",
     "unhooks": []
@@ -487,7 +495,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -536,7 +545,8 @@
       "privateSelfContinuationDeviceValidated": true,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "hooksSha256": "e71d48fa47be8fe97e96a57cf4d528b11709143f0d5a5ed45b20270c252da59c",
     "unhooks": []
@@ -589,7 +599,8 @@
       "privateSelfContinuationDeviceValidated": false,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "cold": {
       "classModifierChange": false,
@@ -638,7 +649,8 @@
       "privateSelfContinuationDeviceValidated": false,
       "privateSelfContinuationExceptionAbi": "unavailable",
       "privateSelfContinuationIdentityService": "unverified",
-      "privateSelfContinuationDirectAccessProofs": 0
+      "privateSelfContinuationDirectAccessProofs": 0,
+      "privateSelfContinuationDirectBoundary": "unavailable"
     },
     "hooksSha256": "a1d29618d426fa7ee3f88e16ea4e1da2bf40802a00b7afe66fecb2e52c1a08ec",
     "unhooks": []

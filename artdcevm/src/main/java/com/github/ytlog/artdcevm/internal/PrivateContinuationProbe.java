@@ -37,10 +37,13 @@ public final class PrivateContinuationProbe {
             int[] box = {1}; effect(box);
             int r = range(1L, 2L, 3L);
             int resumed = direct();
+            // The nested commit changed number() again. An older caller must
+            // select that newest body after completing its in-flight call.
+            int after = number();
             int caught = 0;
             try { fail(); } catch (ArithmeticException expected) { caught++; }
             try { Subject receiver = null; receiver.number(); } catch (NullPointerException expected) { caught++; }
-            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && caught == 2 ? 1 : 0;
+            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && after == 17 && caught == 2 ? 1 : 0;
         }
     }
     public interface Contract {
@@ -62,10 +65,13 @@ public final class PrivateContinuationProbe {
             int[] box = {1}; effect(box);
             int r = range(1L, 2L, 3L);
             int resumed = direct();
+            // The nested commit changed number() again. An older caller must
+            // select that newest body after completing its in-flight call.
+            int after = number();
             int caught = 0;
             try { fail(); } catch (ArithmeticException expected) { caught++; }
             try { Contract receiver = null; receiver.number(); } catch (NullPointerException expected) { caught++; }
-            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && caught == 2 ? 1 : 0;
+            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && after == 17 && caught == 2 ? 1 : 0;
         }
     }
     public static final class Impl implements Contract {}

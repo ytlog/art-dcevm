@@ -53,7 +53,9 @@ void* self = reinterpret_cast<void*>(0x2000);
 void* referrer = reinterpret_cast<void*>(0x3000);
 void Require(bool ok, const char* reason);
 namespace artdcevm::private_continuation {
-Services captured{}; bool proving=false;
+Services captured{}; bool proving=false, admitted=false;
+std::atomic<bool> pc_active{false}, direct_pc_active{false};
+bool Admitted() { return admitted; }
 void Configure(Services value) { captured=value; } bool ProofActive() { return proving; }
 }
 namespace artdcevm::captured_method_handle { bool Complete(JNIEnv*,jthread){return true;} }
@@ -77,10 +79,6 @@ int cache_reads = 0;
 uintptr_t cache_value = 0x7000;
 uintptr_t CacheRead(void*) { cache_reads++; return cache_value; }
 bool use_barrier = true;
-bool member_result=false, in_resolver=false;
-using MemberCheck=bool(*)(void*,uintptr_t,uint32_t);
-MemberCheck member_hook=nullptr;
-bool Member(void*,uintptr_t,uint32_t){return member_result;}
 void* Mark(void* object) { return object == reinterpret_cast<void*>(0x9000) ? reinterpret_cast<void*>(0x8000) : object; }
 void Visit(void* thread, abi::arm64::RootVisitor* visitor, uint32_t tid) {
   Require(thread == &fake_thread && tid == 7, "incorrect root visitor ABI");
@@ -121,7 +119,6 @@ void* Resolve(void* l, uint32_t index, void* caller) {
     Require(scope && scope->root == 0x4000, "receiver was not rooted across resolution");
     scope->root = 0x5000;
   }
-  if(in_resolver&&member_hook) Require(member_hook(reinterpret_cast<void*>(0x4000),0x5000,2)==member_result,"observer altered ART access result");
   return missing_method ? nullptr : &method;
 }
 // Android 14--15 ResolveMethod<kNoChecks>(Thread*, ...) continues into the
@@ -142,7 +139,6 @@ extern "C" void* shadowhook_hook_sym_addr(void* target, void* replacement, void*
   hook_attempts++;
   if (hook_failure) return nullptr;
   installed_replacement = replacement;
-  if(target==HookAddress(Member))member_hook=reinterpret_cast<MemberCheck>(replacement);
   *original = target; return target;
 }
 extern "C" void* shadowhook_dlopen(const char*) { return linker; }
@@ -151,7 +147,7 @@ extern "C" void* shadowhook_dlsym(void*, const char* name) {
   using namespace symbols::invoke_kind;
   if (mode == 0) return nullptr;
   if (mode >= 21) {
-    if (mode >= 28 && mode != 30 && name == std::string(kCanAccessMember.name)) return HookAddress(Member);
+    if (mode == 28 && name == std::string(symbols::interface_redefinition::kLookupCache.name)) return HookAddress(LookupType);
     if (name == std::string(symbols::runtime_thread::kCurrentThread.name)) return HookAddress(Current);
     if (name == std::string(symbols::structural::kThrowNewException.name)) return HookAddress(Throw);
     if (name == std::string(kResolveCaller.name)) return HookAddress(Caller);
@@ -218,6 +214,23 @@ int main(int argc, char** argv) {
     abi::arm64::android16::ShadowFrame modern_pc{};modern_pc.dex_pc=7;
     auto modern_access=abi::arm64::FramePcFor<abi::arm64::android16::Class>();
     Require(modern_access(&modern_pc,true)==7&&modern_pc.dex_pc==~uint32_t{0},"modern frame unwind PC incorrect");
+    abi::arm64::android13::ShadowFrame direct_frame{};
+    abi::arm64::android13::CodeItemDataAccessor direct_code{};
+    uint16_t invoke[3]{}; direct_code.insns=invoke; direct_code.size=3;
+    direct_frame.method=&method; method.access_flags.store(abi::arm64::kAccObsoleteMethod);
+    private_continuation::pc_active=true;
+    for(uint8_t op:{0x6e,0x74,0x72,0x78,0x70,0x76,0x52,0x59,0x6f,0x71}) {
+      invoke[0]=op;
+      const bool virtual_call=op==0x6e||op==0x74||op==0x72||op==0x78;
+      private_continuation::direct_pc_active=false;
+      Require(private_continuation::PcRequired(&direct_code,&direct_frame,0)==virtual_call,"direct event entered without service or field entered method adapter");
+      private_continuation::direct_pc_active=true;
+      Require(private_continuation::PcRequired(&direct_code,&direct_frame,0)==(virtual_call||op==0x70||op==0x76),"exact direct/range instruction filter incorrect");
+      Require(!private_continuation::PcRequired(&direct_code,&direct_frame,1),"truncated instruction entered continuation");
+    }
+    method.access_flags.store(0);
+    Require(!private_continuation::PcRequired(&direct_code,&direct_frame,0),"live frame entered continuation");
+    private_continuation::pc_active=false;private_continuation::direct_pc_active=false;
     std::vector<Hook> hooks;
     bool supported = mode == 1 || mode == 2 || mode == 3 || mode >= 6;
     Require(!invoke_kind::CopiedFrames(), "copied-frame guard available before installation");
@@ -245,27 +258,43 @@ int main(int argc, char** argv) {
         if(call) Require(!call(reinterpret_cast<void*>(0x3000),0x4000,&method,0x5000,9,1)&&access_calls==1,
                          "unprobed legacy hook read a Class");
         if(mode==27) invoke_kind::ObserveClassLayout(0,4,8,8);
-        else if(mode!=26) invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking));
+        else if(mode!=26) invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking), mode>=28 ? 8 : ~size_t{0});
         if(mode==27) Require(!call(reinterpret_cast<void*>(0x3000),0x4000,&method,0x5000,9,1),"unprobed collector allowed a Class read");
         Require(invoke_kind::PrivateDirectFrames()==(mode==21),"legacy private admission ignored ownership/probes");
         if(mode>=28) {
-          const int before=hook_attempts;
-          hook_failure=mode==29;
+          invoke_kind::ObserveClassLayout(0,4,8,8,offsetof(FakeThread,marking),8);
           const bool available=mode==28;
-          Require(invoke_kind::PrepareDirectBoundaryProbe()==available,"missing member boundary did not fail closed");
+          Require(invoke_kind::PrepareDirectBoundaryProbe()==available,"incomplete exact DEX boundary did not fail closed");
+          Require(hook_attempts==0,"direct fallback installed a shared member hook");
+          Require(!invoke_kind::DirectSelectionServices(),"unproved direct fallback admitted application frames");
           if(available) {
-            Require(invoke_kind::PrepareDirectBoundaryProbe()&&hook_attempts==before+1,"observer installed twice");
-            Require(!private_continuation::captured.direct_proof(),"member observer granted direct proof");
+            Require(invoke_kind::PrepareDirectBoundaryProbe()&&hook_attempts==0,"exact DEX preparation installed another hook");
+            Require(std::strcmp(invoke_kind::DirectBoundary(),"dex-pc-direct")==0,"wrong exact DEX capability");
+            Require(!private_continuation::captured.direct_proof(),"preparation granted direct proof");
+            void* page=mmap(reinterpret_cast<void*>(0x10000000),4096,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_FIXED,-1,0);
+            Require(page!=MAP_FAILED,"cannot map direct DEX history");
+            uintptr_t owner=0x10000000,old=0x10000100,alias=0x10000200;
+            auto flags=[](uintptr_t klass)->uint32_t& {return *reinterpret_cast<uint32_t*>(klass);};
+            flags(owner)=0;flags(old)=flags(alias)=0x00200000;
+            history={{owner,old}};method.declaring_class=owner;method.access_flags.store(2);own_caller.declaring_class=old;
+            auto direct=private_continuation::captured.direct;
+            Require(direct&&direct(&own_caller,&method,false),"exact direct self rejected");
             private_continuation::proving=true;
-            own_caller.declaring_class=0x4000;referrer=&own_caller;
-            Require(!member_hook(reinterpret_cast<void*>(0x4000),0x5000,2)&&invoke_kind::DirectAccessProofs()==0,"unrelated private field access counted as direct boundary");
-            decltype(&Caller) resolve=nullptr;
-            for(const auto& hook:hooks)if(std::string(hook.name)==symbols::invoke_kind::kResolveCaller.name)resolve=reinterpret_cast<decltype(resolve)>(hook.replacement);
-            in_resolver=true;
-            Require(resolve(linker,self,9,referrer,1)==&method&&invoke_kind::DirectAccessProofs()==4,"checked direct boundary was not observed");
-            Require(!private_continuation::captured.direct_proof()&&!invoke_kind::PrivateDirectFrames(),"observation alone opened direct admission");
-            member_result=true;Require(resolve(linker,self,9,referrer,1)==&method,"successful member access changed");
+            Require(invoke_kind::DirectAccessProofs()==0&&!private_continuation::captured.direct_proof(),"pre-call boundary published success");
+            Require(direct(&own_caller,&method,true)&&invoke_kind::DirectAccessProofs()==9,"class direct completion not proved");
+            flags(owner)|=0x0200;
+            Require(direct(&own_caller,&method,true)&&invoke_kind::DirectAccessProofs()==11&&private_continuation::captured.direct_proof(),"interface direct completion not proved");
             private_continuation::proving=false;
+            Require(!invoke_kind::PrivateDirectFrames(),"candidate proof bits widened device admission");
+            private_continuation::admitted=true;
+            Require(invoke_kind::PrivateDirectFrames(),"proven admitted direct boundary unavailable");
+            for(uint32_t bits:{0u,1u,4u,8u,10u,0x10002u}) {method.access_flags.store(bits);Require(!direct(&own_caller,&method,false),"non-private or constructor escaped restricted adapter");}
+            method.access_flags.store(2);own_caller.declaring_class=alias;
+            Require(!direct(&own_caller,&method,false),"same-layout unrelated class granted private access");
+            own_caller.declaring_class=old;history.clear();
+            Require(!direct(&own_caller,&method,false),"missing ART history granted private access");
+            Require(!direct(nullptr,&method,false)&&!direct(&own_caller,nullptr,false),"missing method identity granted access");
+            munmap(page,4096);
           }
         }
         if(mode==21) {

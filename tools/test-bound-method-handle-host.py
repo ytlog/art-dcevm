@@ -17,7 +17,7 @@ SOURCE = r'''#include "platform/common/bound_method_handle.h"
 #include <thread>
 #include "platform/abi/arm64/common/runtime_objects.h"
 namespace artdcevm::private_continuation {
-std::atomic<bool> pc_active{false};
+std::atomic<bool> pc_active{false}, direct_pc_active{false};
 bool Event(void*,const void*,const void*,uint32_t,const void*,void*,bool passed){return passed;}
 bool Exception(void*,void*,bool,bool,bool* handled){*handled=false;return false;}
 }

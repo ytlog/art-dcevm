@@ -7,7 +7,7 @@
 #include "platform/abi/arm64/android13/continuation.h"
 #include "platform/abi/arm64/common/runtime_objects.h"
 namespace artdcevm::private_continuation {
-extern std::atomic<bool> pc_active;
+extern std::atomic<bool> pc_active, direct_pc_active;
 inline bool PcRequired(const void* accessor, const void* frame, uint32_t pc) {
   if (!pc_active.load(std::memory_order_acquire)) return false;
   const auto* f = static_cast<const abi::arm64::android13::ShadowFrame*>(frame);
@@ -15,7 +15,8 @@ inline bool PcRequired(const void* accessor, const void* frame, uint32_t pc) {
   const auto* a = static_cast<const abi::arm64::android13::CodeItemDataAccessor*>(accessor);
   if (pc > a->size || a->size - pc < 3) return false;
   const uint8_t op = a->insns[pc] & 0xff;
-  return op == 0x6e || op == 0x74 || op == 0x72 || op == 0x78;
+  return op == 0x6e || op == 0x74 || op == 0x72 || op == 0x78 ||
+      ((op == 0x70 || op == 0x76) && direct_pc_active.load(std::memory_order_relaxed));
 }
 // Shared invocation services retain ownership of Class/Thread/collector proofs.
 struct Services {
@@ -27,6 +28,7 @@ struct Services {
   bool (*ready)();
   bool (*identity_proof)(void*, void*, const char*, uintptr_t) = nullptr;
   bool (*direct_proof)() = nullptr;
+  bool (*direct)(void*, void*, bool completed) = nullptr;
 };
 void Configure(Services services);
 // Borrow the engine environment without replacing any callbacks.

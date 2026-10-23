@@ -162,11 +162,12 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             final boolean candidateProof = arguments != null && "true".equals(arguments.getString("continuationProof"));
             if (candidateProof && (Build.VERSION.SDK_INT < 30 || Build.VERSION.SDK_INT > 33))
                 throw new AssertionError("continuation candidate proof requires API 30-33");
-            if (candidateProof || (Build.VERSION.SDK_INT == 33 && (arguments == null || (!arguments.containsKey("privateSelf") && !"private-continuation-benchmark".equals(arguments.getString("scenario")))))) {
+            if (candidateProof || (Build.VERSION.SDK_INT == 33 && (arguments == null || (!arguments.containsKey("privateSelf") && (!"private-continuation-benchmark".equals(arguments.getString("scenario")) || "direct".equals(arguments.getString("continuationInvoke"))))))) {
                 boolean proof = InterfaceAbortInstrumentation.provePrivateContinuation();
                 report.put("continuationPreparation", DcevmRuntime.capabilities());
                 writeReport(false);
-                if (!proof) throw new AssertionError("private continuation runtime self-proof failed");
+                boolean disabledBoundary = arguments != null && "disabled".equals(arguments.getString("directPc"));
+                if (proof == disabledBoundary) throw new AssertionError("private continuation runtime self-proof result");
             }
             runScenarios();
             completed = true;
@@ -4916,6 +4917,7 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
         }
         final boolean candidate = "private".equals(arguments.getString("continuationVariant"));
         final boolean iface = "interface".equals(arguments.getString("continuationKind"));
+        final boolean direct = "direct".equals(arguments.getString("continuationInvoke"));
         final com.github.ytlog.artdcevm.fixture.ContinuationBenchmark value = new com.github.ytlog.artdcevm.fixture.ContinuationBenchmark();
         final com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.Contract contract = new com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.Impl();
         final Class<?> target = iface ? com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.Contract.class : value.getClass();
@@ -4928,7 +4930,8 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
                 affinity[0] = HookOverheadBenchmark.pinCpu(2);
                 if (affinity[0] != 2) throw new AssertionError("CPU binding failed");
                 if (profileRequested) com.github.ytlog.artdcevm.fixture.ContinuationBenchmark.profileEnable();
-                result[0] = iface ? contract.await(ready, resume, count) : value.await(ready, resume, count);
+                result[0] = direct ? (iface ? contract.awaitDirect(ready, resume, count) : value.awaitDirect(ready, resume, count)) :
+                        (iface ? contract.await(ready, resume, count) : value.await(ready, resume, count));
                 profile[0] = profileRequested ? InterfaceAbortInstrumentation.readContinuationProfile() : new long[0];
                 affinity[1] = HookOverheadBenchmark.pinnedCpu();
             } catch (Throwable error) { result[0] = error; }
@@ -4939,14 +4942,14 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             runScenario("continuation-benchmark", 0, scenario -> {
                 scenario.redefine(new Class<?>[]{target}, "continuation-bench-" + (candidate ? "private" : "public"));
                 scenario.check("privateKind", candidate, Modifier.isPrivate(target.getDeclaredMethod("target").getModifiers()));
-                if (candidate && StandardJvmtiClient.globalBreakpointNotification(false) != 0) throw new AssertionError("test listener rollback");
+                if ((candidate || direct) && StandardJvmtiClient.globalBreakpointNotification(false) != 0) throw new AssertionError("test listener rollback");
                 resume.countDown(); worker.join(120000);
                 scenario.check("joined", true, !worker.isAlive());
                 if (!(result[0] instanceof long[])) throw new AssertionError(String.valueOf(result[0]));
                 long[] times = (long[]) result[0];
                 scenario.check("sum", (count + 10000) * 7L, times[1]);
                 scenario.check("cpuBefore", 2, affinity[0]); scenario.check("cpuAfter", 2, affinity[1]);
-                report.put("continuationBenchmark", new JSONObject().put("iterations", count).put("nanos", times[0]).put("variant", candidate ? "private" : "public").put("profileMode", profileMode).put("kind", iface ? "interface" : "class").put("profile", new JSONArray(profile[0])));
+                report.put("continuationBenchmark", new JSONObject().put("iterations", count).put("nanos", times[0]).put("variant", candidate ? "private" : "public").put("profileMode", profileMode).put("kind", iface ? "interface" : "class").put("invoke", direct ? "direct" : "virtual").put("profile", new JSONArray(profile[0])));
             });
         } finally { resume.countDown(); worker.join(120000); }
     }
@@ -5067,6 +5070,47 @@ public final class StructuralRedefineInstrumentation extends Instrumentation {
             runScenario(stem + "-restore", 0, scenario -> {
                 scenario.redefine(new Class<?>[]{target}, "private-continuation-original");
                 scenario.check("restored", iface ? 34 : 22, iface ? impl.fresh() : subject.fresh());
+            });
+        }
+        // The same class changes while DoCall is executing its new private body.
+        // The old caller must keep its locals, finish that invocation once, and
+        // invalidate its cached target before its next call. Exercise unwinding too.
+        for (boolean iface : new boolean[]{false, true}) for (boolean throwing : new boolean[]{false, true}) {
+            final String stem = "continuation-same-class-" + (iface ? "interface" : "class") + (throwing ? "-throw" : "-return");
+            final Class<?> target = iface ? PrivateContinuationFixture.Contract.class : PrivateContinuationFixture.Subject.class;
+            final PrivateContinuationFixture.Subject object = new PrivateContinuationFixture.Subject();
+            final PrivateContinuationFixture.Impl implementation = new PrivateContinuationFixture.Impl();
+            final PrivateContinuationFixture.Gate gate = new PrivateContinuationFixture.Gate(1);
+            final Object[] value = new Object[1]; final int[] nested = {-1, 0};
+            final byte[] next = readAsset("private-continuation-next/" + target.getName().replace('.', '/') + ".dex");
+            gate.action = () -> {
+                nested[1]++;
+                nested[0] = StandardJvmtiClient.redefine(new Class<?>[]{target}, new byte[][]{next});
+                System.gc();
+                if (throwing) throw new IllegalStateException("reentered");
+                return 40;
+            };
+            Thread active = new Thread(() -> {
+                try { value[0] = iface ? implementation.await(gate, 21) : object.await(gate, 21); }
+                catch (Throwable error) { value[0] = error.getClass().getName(); }
+            }); active.start();
+            try {
+                if (!gate.entered.await(10, java.util.concurrent.TimeUnit.SECONDS)) throw new AssertionError("same-class old frame");
+                runScenario(stem + "-apply", 0, scenario -> {
+                    scenario.redefine(new Class<?>[]{target}, "private-continuation-private");
+                    gate.resume.countDown(); active.join(10000);
+                    scenario.check("joined", true, !active.isAlive());
+                    scenario.check("nestedCode", 0, nested[0]); scenario.check("callbackCount", 1, nested[1]);
+                    int before = iface ? 31 : 13, after = iface ? 35 : 17;
+                    scenario.check("result", throwing ? "reentered:" + (before * 10000 + 4100 + after)
+                            : before * 10000 + 4500 + after + 41, value[0]);
+                    scenario.check("finally", 1, gate.finallyHits);
+                    scenario.check("newBody", after * 3 + 1, iface ? implementation.fresh() : object.fresh());
+                });
+            } finally { gate.resume.countDown(); active.join(10000); }
+            runScenario(stem + "-restore", 0, scenario -> {
+                scenario.redefine(new Class<?>[]{target}, "private-continuation-original");
+                scenario.check("restored", iface ? 34 : 22, iface ? implementation.fresh() : object.fresh());
             });
         }
         final PrivateContinuationFixture.Subject subject = new PrivateContinuationFixture.Subject();

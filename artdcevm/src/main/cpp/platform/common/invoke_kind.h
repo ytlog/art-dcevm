@@ -24,6 +24,7 @@ bool DirectSelectionServices();
 bool PrivateDirectFrames();
 const char* ContinuationIdentityService();
 uint32_t DirectAccessProofs();
+const char* DirectBoundary();
 bool PrepareDirectBoundaryProbe();
 // Caller supplies Native-probed Thread declarations and ART's existing admission root.
 void ObserveScope(void* thread, const abi::arm64::RuntimeThread* thread_layout,

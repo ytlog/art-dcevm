@@ -19,6 +19,7 @@ jvmtiEnv* environment = nullptr;
 jclass method_type = nullptr, access_error = nullptr, internal_error = nullptr, missing_error = nullptr;
 jfieldID return_field = nullptr, class_flags_field = nullptr;
 jmethodID instance_method = nullptr, find_virtual = nullptr;
+jmethodID public_recursive = nullptr, interface_recursive = nullptr;
 jmethodID reflected_return = nullptr, reflected_parameters = nullptr;
 jmethodID find_static = nullptr, declared_method = nullptr, class_get_method = nullptr;
 jint static_type_slot = -1;
@@ -35,6 +36,7 @@ jint type_slot = -1;
 std::atomic<bool> enabled{false};
 bool probe_verified = false;
 thread_local bool probing = false, observed = false, preparing = false;
+thread_local bool observed_recursive = false;
 std::mutex install_mutex;
 
 template <typename T> struct Local {
@@ -62,6 +64,34 @@ bool ServiceFailure(JNIEnv* jni) {
   if (!jni->ExceptionCheck()) jni->ThrowNew(internal_error, "live MethodHandle lookup argument unavailable");
   return true;
 }
+// Fixed Class.java (android-13.0.0_r1 / android-16.0.0_r1): traversal alternates
+// getPublicMethodRecursive/findInterfaceMethod before getInstanceMethod and
+// Lookup.findVirtual. Match the complete chain, never an arbitrary ancestor
+// named findVirtual. Read bounded chunks so hierarchy depth is not capped.
+// -1 means another caller; -2 means a failed public stack service.
+jint RecursiveVirtualDepth(jvmtiFrameInfo (&frames)[4], jint count) {
+  jint start = 0;
+  bool failed = false;
+  const auto method_at = [&](jint depth) -> jmethodID {
+    if (depth >= start + count) {
+      start = depth;
+      if (environment->GetStackTrace(nullptr, start, 4, frames, &count)) {
+        failed = true; return nullptr;
+      }
+    }
+    return depth < start + count ? frames[depth - start].method : nullptr;
+  };
+  jint depth = 1;
+  while (public_recursive && interface_recursive && method_at(depth) == public_recursive &&
+         method_at(depth + 1) == interface_recursive) {
+    depth += 2;
+    if (method_at(depth) == instance_method) {
+      if (method_at(depth + 1) == find_virtual) return depth + 1;
+      break;
+    }
+  }
+  return failed ? -2 : -1;
+}
 // ART still chooses the declaration through getInstanceMethod. At each native
 // declared-method step, public JVMTI describes complete signatures before
 // libcore's parameter/return Class identity checks. A descriptor match with a
@@ -76,10 +106,15 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   jvmtiFrameInfo frames[4]{};
   jint count = 0;
   if (environment->GetStackTrace(nullptr, 0, 4, frames, &count)) return ServiceFailure(jni);
-  const bool virtual_lookup = count >= 3 && frames[1].method == instance_method && frames[2].method == find_virtual;
+  jint virtual_depth = count >= 3 && frames[1].method == instance_method && frames[2].method == find_virtual ? 2 : -1;
   const bool static_lookup = (probing || static_verified) && runtime_vm && find_interface && decode_global && new_local &&
       static_type_slot >= 0 && count == 4 && frames[1].method == class_get_method &&
       frames[2].method == declared_method && frames[3].method == find_static;
+  if (virtual_depth < 0 && !static_lookup && count >= 2 && frames[1].method == public_recursive)
+    virtual_depth = RecursiveVirtualDepth(frames, count);
+  if (virtual_depth == -2) return ServiceFailure(jni);
+  const bool virtual_lookup = virtual_depth >= 0;
+  const bool recursive_lookup = virtual_depth > 2;
   if (!virtual_lookup && !static_lookup) return false;
   if (static_lookup && (!(flags & evolution::kAccInterface) || !(flags & evolution::kAccPublic))) return false;
   Local<jobject> loader{jni};
@@ -96,13 +131,14 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   Text requested_signature;
   const auto read_type = [&] {
     if (type.value) return true;
-    if (environment->GetLocalObject(nullptr, static_lookup ? 3 : 2,
+    if (environment->GetLocalObject(nullptr, static_lookup ? 3 : virtual_depth,
                                    static_lookup ? static_type_slot : type_slot, &type.value) ||
         !type.value || !jni->IsInstanceOf(type.value, method_type)) { ServiceFailure(jni); return false; }
     requested_return.value = static_cast<jclass>(jni->GetObjectField(type.value, return_field));
     if (!requested_return.value || environment->GetClassSignature(requested_return.value, &requested_signature.value, nullptr)) {
       ServiceFailure(jni); return false;
     }
+    if (probing && recursive_lookup) observed_recursive = true;
     return true;
   };
   if (static_lookup) {
@@ -154,6 +190,7 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   for (jint i = 0; i < count; ++i) {
     jint modifiers = 0;
     if (environment->GetMethodModifiers(methods.value[i], &modifiers)) return ServiceFailure(jni);
+    if (recursive_lookup && !(modifiers & evolution::kAccPublic)) continue;
     if ((modifiers & evolution::kAccStatic) && !(flags & evolution::kAccInterface)) continue;
     Text member_name, signature;
     if (environment->GetMethodName(methods.value[i], &member_name.value, &signature.value, nullptr)) return ServiceFailure(jni);
@@ -274,6 +311,8 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   if (!missing_error) { jni->ExceptionClear(); return false; }
   {
     instance_method = Method(klass.value, "getInstanceMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+    public_recursive = Method(klass.value, "getPublicMethodRecursive", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+    interface_recursive = Method(klass.value, "findInterfaceMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
     find_virtual = Method(lookup.value, "findVirtual", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
     find_static = Method(lookup.value, "findStatic", "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
     declared_method = Method(klass.value, "getDeclaredMethod", "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
@@ -286,7 +325,7 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     if (find_static && !env->GetMaxLocals(find_static, &locals) && locals >= 4) static_type_slot = locals - 1;
   }
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); return false; }
-  if (!return_field || !class_flags_field || !instance_method || !find_virtual || !reflected_return || !reflected_parameters || type_slot < 0) return false;
+  if (!return_field || !class_flags_field || !instance_method || !public_recursive || !interface_recursive || !find_virtual || !reflected_return || !reflected_parameters || type_slot < 0) return false;
   Local<jclass> probe{jni, jni->FindClass("com/github/ytlog/artdcevm/internal/MethodHandleLookupProbe")};
   jmethodID run = probe.value ? jni->GetStaticMethodID(probe.value, "run", "()V") : nullptr;
   if (!run || jni->ExceptionCheck()) { jni->ExceptionClear(); return false; }
@@ -297,11 +336,11 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethod), HookSlot(&original));
   }
   if (!hook) return false;
-  observed = false;
+  observed = observed_recursive = false;
   probing = true;
   jni->CallStaticVoidMethod(probe.value, run);
   probing = false;
-  const bool passed = observed && !jni->ExceptionCheck();
+  const bool passed = observed && observed_recursive && !jni->ExceptionCheck();
   if (jni->ExceptionCheck()) jni->ExceptionClear();
   // Optional static resolution proof must not disable the existing virtual guard.
   static_verified = false;

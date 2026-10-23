@@ -19,7 +19,28 @@ public final class PrivateContinuationProbe {
         }
     }
     public static class Subject {
-        private int direct() throws Exception { int saved = 19; change(Subject.class, "continuation-next"); return number() + saved; }
+        private int direct() throws Exception {
+            int saved = 19;
+            Object marker = new Object();
+            int[] box = {1};
+            change(Subject.class, "continuation-next");
+            synchronized (marker) {
+                long w = wide(0x123456780000L);
+                double d = real(0.5);
+                Object reference = object(marker);
+                System.gc();
+                effect(box);
+                int r = range(1L, 2L, 3L);
+                int caught = 0;
+                try { fail(); } catch (ArithmeticException expected) { caught++; }
+                finally { saved += 2; }
+                try { Subject receiver = null; receiver.number(); }
+                catch (NullPointerException expected) { caught++; }
+                if (w != 0x12345678000dL || d != 13.5 || reference != marker || box[0] != 14 || r != 19 || caught != 2)
+                    throw new AssertionError("private direct continuation behavior");
+                return number() + saved - 2;
+            }
+        }
         private int number() { return 13; }
         private long wide(long value) { return value + 13; }
         private double real(double value) { return value + 13; }
@@ -37,14 +58,38 @@ public final class PrivateContinuationProbe {
             int[] box = {1}; effect(box);
             int r = range(1L, 2L, 3L);
             int resumed = direct();
+            // The nested commit changed number() again. An older caller must
+            // select that newest body after completing its in-flight call.
+            int after = number();
             int caught = 0;
             try { fail(); } catch (ArithmeticException expected) { caught++; }
             try { Subject receiver = null; receiver.number(); } catch (NullPointerException expected) { caught++; }
-            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && caught == 2 ? 1 : 0;
+            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && after == 17 && caught == 2 ? 1 : 0;
         }
     }
     public interface Contract {
-        private int direct() throws Exception { int saved = 19; change(Contract.class, "continuation-next"); return number() + saved; }
+        private int direct() throws Exception {
+            int saved = 19;
+            Object marker = new Object();
+            int[] box = {1};
+            change(Contract.class, "continuation-next");
+            synchronized (marker) {
+                long w = wide(0x123456780000L);
+                double d = real(0.5);
+                Object reference = object(marker);
+                System.gc();
+                effect(box);
+                int r = range(1L, 2L, 3L);
+                int caught = 0;
+                try { fail(); } catch (ArithmeticException expected) { caught++; }
+                finally { saved += 2; }
+                try { Contract receiver = null; receiver.number(); }
+                catch (NullPointerException expected) { caught++; }
+                if (w != 0x12345678000dL || d != 13.5 || reference != marker || box[0] != 14 || r != 19 || caught != 2)
+                    throw new AssertionError("private direct continuation behavior");
+                return number() + saved - 2;
+            }
+        }
         private int number() { return 13; }
         private long wide(long value) { return value + 13; }
         private double real(double value) { return value + 13; }
@@ -62,10 +107,13 @@ public final class PrivateContinuationProbe {
             int[] box = {1}; effect(box);
             int r = range(1L, 2L, 3L);
             int resumed = direct();
+            // The nested commit changed number() again. An older caller must
+            // select that newest body after completing its in-flight call.
+            int after = number();
             int caught = 0;
             try { fail(); } catch (ArithmeticException expected) { caught++; }
             try { Contract receiver = null; receiver.number(); } catch (NullPointerException expected) { caught++; }
-            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && caught == 2 ? 1 : 0;
+            return n == 13 && w == 0x12345678000dL && d == 13.5 && reference == marker && box[0] == 14 && r == 19 && resumed == 36 && after == 17 && caught == 2 ? 1 : 0;
         }
     }
     public static final class Impl implements Contract {}

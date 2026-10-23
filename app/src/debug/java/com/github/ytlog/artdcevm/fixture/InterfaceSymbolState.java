@@ -33,6 +33,11 @@ public final class InterfaceSymbolState {
         public InterfaceSymbolFixture.Result objectValue() { return null; }
         public int echo(InterfaceSymbolFixture.Result value) { return 7; }
     }
+    // A distinct multi-level hierarchy keeps recursive lookup independent of
+    // the Child declarations being changed by the transaction matrix.
+    public interface LookupMiddle extends InterfaceSymbolFixture.Parent {}
+    public interface LookupLeaf extends LookupMiddle {}
+    public static class LookupReceiver implements LookupLeaf {}
     public Class<?> aliasReturn;
     private Method lateChild, lateParent;
     public InterfaceSymbolState() throws Exception { }
@@ -81,14 +86,21 @@ public final class InterfaceSymbolState {
         check.eq(prefix+"unreflectChildStatic", changed && kind.equals("static") ? 11 :
                 changed && kind.equals("private") ? "java.lang.IllegalAccessException" : "java.lang.NoSuchMethodException",
                 result(() -> MethodHandles.publicLookup().unreflect(child.getDeclaredMethod("value")).invokeWithArguments()));
-        for (Class<?> owner : new Class<?>[]{parent, OrdinaryLookup.class}) {
-            String key=prefix+(owner==parent?"interface":"ordinary");
+        for (Class<?> owner : new Class<?>[]{parent, OrdinaryLookup.class, LookupMiddle.class, LookupLeaf.class, LookupReceiver.class}) {
+            String key=prefix+(owner==parent?"interface":owner==OrdinaryLookup.class?"ordinary":owner==LookupMiddle.class?"middle":owner==LookupLeaf.class?"leaf":"inheritedClass");
             check.eq(key+"AliasedReturn", "java.lang.IllegalAccessException",
                     result(() -> MethodHandles.publicLookup().findVirtual(owner,"objectValue",MethodType.methodType(aliasReturn))));
             check.eq(key+"AliasedParameter", "java.lang.IllegalAccessException",
                     result(() -> MethodHandles.publicLookup().findVirtual(owner,"echo",MethodType.methodType(int.class,aliasReturn))));
             check.eq(key+"WrongReturn", "java.lang.NoSuchMethodException",
                     result(() -> MethodHandles.publicLookup().findVirtual(owner,"objectValue",MethodType.methodType(String.class))));
+            if (owner != parent && owner != OrdinaryLookup.class) {
+                check.eq(key+"MatchingCall", 7, result(() -> MethodHandles.publicLookup().findVirtual(owner,"echo",
+                        MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class))
+                        .invokeWithArguments(new LookupReceiver(),new InterfaceSymbolFixture.Result())));
+                check.eq(key+"ReflectionAlias", "java.lang.NoSuchMethodException",
+                        result(() -> owner.getMethod("echo",aliasReturn)));
+            }
         }
         check.eq(prefix+"childStaticResolution", changed && kind.equals("drop") ? "java.lang.NoSuchMethodException" : changed && kind.equals("static") ? 11 : "java.lang.IllegalAccessException",
                 result(() -> MethodHandles.publicLookup().findStatic(child,"value",type).invokeWithArguments()));

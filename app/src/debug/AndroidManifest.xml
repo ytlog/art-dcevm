@@ -1,4 +1,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <activity
+        android:name="com.github.ytlog.artdcevm.testing.HookBenchmarkActivity"
+        android:exported="true"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"/>
+  </application>
   <instrumentation
       android:name="com.github.ytlog.artdcevm.testing.JniFrameInstrumentation"
       android:targetPackage="dev.artdcevm.lab"

@@ -58,6 +58,7 @@ std::string Capabilities() {
       ",\"privateSelfContinuationExceptionAbi\":" + QuoteJsonMutf8(interpreter_events::ExceptionAbi()) +
       ",\"privateSelfContinuationIdentityService\":" + QuoteJsonMutf8(invoke_kind::ContinuationIdentityService()) +
       ",\"privateSelfContinuationDirectAccessProofs\":" + std::to_string(invoke_kind::DirectAccessProofs()) +
+      ",\"privateSelfContinuationDirectBoundary\":" + QuoteJsonMutf8(invoke_kind::DirectBoundary()) +
       ",\"methodDeletion\":" + retirement + ",\"methodSignatureChange\":" + retirement +
       ",\"fieldDeletion\":" + field_retirement + ",\"fieldTypeChange\":" + field_retirement +
       ",\"memberMapping\":" + QuoteJsonMutf8(class_layout::State()) +

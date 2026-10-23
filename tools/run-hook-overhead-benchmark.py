@@ -6,6 +6,7 @@ per round so drift and thermal effects spread across states. Raw reports and
 the summary stay under ignored build/evidence.
 """
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
@@ -15,13 +16,16 @@ import re
 import statistics
 import subprocess
 import sys
+import time
 
 from apk_verification import base_apk_path, require_install_success, verified_apk_sha256
 from evidence_paths import new_evidence_directory
+from hook_benchmark_conditions import qualify as qualify_conditions, qualify_units, qualify_foreground
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = "dev.artdcevm.lab"
 COMPONENT = PACKAGE + "/com.github.ytlog.artdcevm.testing.HookOverheadBenchmark"
+ACTIVITY = PACKAGE + "/com.github.ytlog.artdcevm.testing.HookBenchmarkActivity"
 REPORT_PATH = "files/hook-overhead.json"
 STATES = ("none", "agent", "engine", "engine-client", "added", "removed")
 # Opt-in controls: redefinitions without the engine's transaction (--states).
@@ -46,6 +50,45 @@ _runner.loader.exec_module(_tests)
 safe_console, safe_report, find_adb = _tests.safe_console, _tests.safe_report, _tests.find_adb
 
 
+def launch_foreground(adb, finished, save_launch, timeout=30):
+    """Launch once, only after this instrumentation installed its ActivityMonitor."""
+    deadline = time.monotonic() + timeout
+    while not finished() and time.monotonic() < deadline:
+        raw = adb("exec-out", "run-as", PACKAGE, "cat", REPORT_PATH, timeout=5)
+        try:
+            report = json.loads(raw.stdout)
+        except ValueError:
+            report = None
+        if isinstance(report, dict) and report.get("foregroundLaunchRequested") is True:
+            if "completed" in report:
+                raise ValueError("Foreground instrumentation ended before launch")
+            launch = adb("shell", "am", "start", "-W", "-n", ACTIVITY, timeout=10)
+            output = launch.stdout + launch.stderr
+            save_launch(output)
+            if launch.returncode != 0 or not re.search(r"^Status: ok\s*$", output, re.M):
+                raise ValueError("Explicit foreground activity launch failed")
+            return
+        if isinstance(report, dict) and "completed" in report:
+            break
+        time.sleep(.1)
+    raise ValueError("Foreground instrumentation did not request a launch before its deadline")
+
+
+def safe_benchmark_report(raw, serial):
+    """Keep the exact public cpuset name needed to verify foreground evidence."""
+    report = safe_report(raw, serial)
+    if not isinstance(raw, dict):
+        return report
+    pairs = [(raw, report)]
+    if isinstance(raw.get("workloads"), dict):
+        pairs.extend((metric, report["workloads"][name])
+                     for name, metric in raw["workloads"].items() if isinstance(metric, dict))
+    for original, sanitized in pairs:
+        if original.get("foregroundCpuset") == "/top-app":
+            sanitized["foregroundCpuset"] = "/top-app"
+    return report
+
+
 def affinity_matches(report, cpu):
     if cpu is None:
         if "cpuAffinity" not in report:
@@ -56,6 +99,76 @@ def affinity_matches(report, cpu):
             and isinstance(workloads, dict) and bool(workloads)
             and all(isinstance(metric, dict) and type(metric.get("cpuAffinity")) is int
                     and metric["cpuAffinity"] == cpu for metric in workloads.values()))
+
+
+def report_conditions(report, *, mode, state, checkjni, cpu, foreground, stable_jni, clock_units):
+    """Use the same admission checks for live reports and offline recomputation."""
+    if not isinstance(report, dict) or report.get("completed") is not True:
+        raise ValueError("Benchmark did not complete")
+    if report.get("mode") != mode or report.get("state") != state:
+        raise ValueError("Reported benchmark cell mismatch")
+    if checkjni is not None and report.get("checkJni") != checkjni:
+        raise ValueError("Reported CheckJNI mode mismatch")
+    if not affinity_matches(report, cpu):
+        raise ValueError("Reported CPU affinity mismatch")
+    qualify_foreground(report, foreground)
+    result = {}
+    if stable_jni:
+        result["steadyConditions"] = qualify_conditions(report)
+    if clock_units:
+        result["unitClockConditions"] = qualify_units(report, clock_units)
+    setup = report.get("setup")
+    if not isinstance(setup, dict):
+        raise ValueError("Missing benchmark setup checks")
+    if state == "selected" and setup.get("interfaceSelectionActive") is not True:
+        raise ValueError("Interface selection was not activated")
+    schema = report.get("schemaVersion", 1)
+    if type(schema) is not int or schema < 1:
+        raise ValueError("Invalid benchmark schema")
+    if schema >= 2 and setup.get("methodHandleChecks") is not True:
+        raise ValueError("MethodHandle result checks failed")
+    if schema >= 3 and setup.get("arrayAssignabilityChecks") is not True:
+        raise ValueError("Array assignability result checks failed")
+    return result
+
+
+def completed_reports(directory, *, cpu, foreground, stable_jni, clock_units):
+    """Require the complete original matrix; failed or missing cells cannot vanish."""
+    try:
+        meta = json.loads((directory / "run.json").read_text())
+    except (OSError, ValueError):
+        raise ValueError("Missing or invalid benchmark run manifest") from None
+    if not isinstance(meta, dict) or meta.get("passed") is not True:
+        raise ValueError("Benchmark run manifest records an incomplete or failed run")
+    rounds, modes, states, runs = (meta.get(key) for key in ("rounds", "modes", "states", "runs"))
+    if (type(rounds) is not int or rounds <= 0 or
+            not isinstance(modes, list) or not modes or not all(mode in MODES for mode in modes) or
+            len(set(modes)) != len(modes) or not isinstance(states, list) or not states or
+            not all(state in STATES + CONTROLS + SELECTION + PROBES for state in states) or
+            len(set(states)) != len(states) or not isinstance(runs, list)):
+        raise ValueError("Invalid benchmark run matrix")
+    if (meta.get("cpuAffinity") != cpu or meta.get("foreground", False) is not foreground or
+            meta.get("requireStableJni", False) is not stable_jni or meta.get("clockUnits", []) != clock_units):
+        raise ValueError("Summary conditions differ from the original benchmark run")
+    expected = {f"r{index}-{mode}-{state}": (mode, state)
+                for index in range(rounds) for mode in modes for state in states}
+    labels = [run.get("label") if isinstance(run, dict) else None for run in runs]
+    if (len(labels) != len(expected) or any(type(label) is not str for label in labels) or
+            set(labels) != set(expected) or
+            any(run.get("completed") is not True or run.get("instrumentationOk") is not True for run in runs)):
+        raise ValueError("Benchmark run has missing, duplicate or failed cells")
+    if {path.name for path in directory.glob("r*-*.json")} != {label + ".json" for label in expected}:
+        raise ValueError("Raw benchmark reports differ from the run manifest")
+    reports = []
+    for label, (mode, state) in expected.items():
+        try:
+            report = json.loads((directory / (label + ".json")).read_text())
+        except (OSError, ValueError):
+            raise ValueError("Missing or invalid raw benchmark report") from None
+        report_conditions(report, mode=mode, state=state, checkjni=meta.get("checkJni"),
+                          cpu=cpu, foreground=foreground, stable_jni=stable_jni, clock_units=clock_units)
+        reports.append({**report, "round": label.split("-")[0]})
+    return reports
 
 
 def summarize(reports):
@@ -134,6 +247,12 @@ def main(argv=None):
                         help="JNI checking mode selected before any agent (Debug apps default to true)")
     parser.add_argument("--timeout", type=int, default=600)
     parser.add_argument("--cpu-affinity", type=int, help="Bind only the benchmark thread to this CPU; verify each metric")
+    parser.add_argument("--require-stable-jni", action="store_true",
+                        help="Require all JNI clock-control samples, frequency residency and GC to be stable")
+    parser.add_argument("--clock-units", default="",
+                        help="Condition and qualify methodHandleBound,reflectNewInstance with references outside all batches")
+    parser.add_argument("--foreground", action="store_true",
+                        help="Require an unlocked focused benchmark window and actual top-app worker group")
     parser.add_argument("--probe-unwind", action="store_true",
                         help="Probe states only: let the original instrumentation thread exit before redefining")
     parser.add_argument("--evidence-root", type=Path, default=ROOT / "build/evidence/hook-overhead/runs")
@@ -142,13 +261,25 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.cpu_affinity is not None and not 0 <= args.cpu_affinity < 1024:
         parser.error("CPU affinity must be in 0..1023")
+    if args.require_stable_jni and args.cpu_affinity is None:
+        parser.error("Stable JNI control requires --cpu-affinity")
+    clock_units = args.clock_units.split(",") if args.clock_units else []
+    if (len(set(clock_units)) != len(clock_units) or
+            not set(clock_units) <= {"methodHandleBound", "reflectNewInstance"}):
+        parser.error("Unsupported or repeated clock units")
+    if clock_units and args.cpu_affinity is None:
+        parser.error("Unit clock controls require --cpu-affinity")
     if args.summarize:
         reports = []
-        for directory in args.summarize:
-            for path in sorted(directory.glob("r*-*.json")):
-                report = json.loads(path.read_text())
-                if report.get("completed") is True:
-                    reports.append({**report, "round": directory.name + "/" + path.name.split("-")[0]})
+        if len({directory.resolve() for directory in args.summarize}) != len(args.summarize):
+            parser.error("A benchmark evidence directory cannot be summarized twice")
+        for index, directory in enumerate(args.summarize):
+            try:
+                cells = completed_reports(directory, cpu=args.cpu_affinity, foreground=args.foreground,
+                                          stable_jni=args.require_stable_jni, clock_units=clock_units)
+            except ValueError as error:
+                parser.error(str(error))
+            reports.extend({**report, "round": str(index) + "/" + report["round"]} for report in cells)
         print(markdown(summarize(reports)))
         return 0
     modes, states = args.modes.split(","), args.states.split(",")
@@ -171,7 +302,9 @@ def main(argv=None):
     meta = {"deviceId": args.device_id, "apkSha256": hashlib.sha256(args.apk.read_bytes()).hexdigest(),
             "startedUtc": timestamp, "rounds": args.rounds, "modes": modes, "states": states,
             "checkJni": args.checkjni, "probeUnwind": args.probe_unwind,
-            "cpuAffinity": args.cpu_affinity, "runs": []}
+            "cpuAffinity": args.cpu_affinity, "requireStableJni": args.require_stable_jni, "runs": []}
+    meta["clockUnits"] = clock_units
+    meta["foreground"] = args.foreground
     installed = adb("install", "-r", str(args.apk))
     require_install_success(installed.returncode, installed.stdout, installed.stderr)
     path = base_apk_path(adb("shell", "pm", "path", PACKAGE).stdout)
@@ -184,30 +317,52 @@ def main(argv=None):
                 label = "r%d-%s-%s" % (round_index, mode, state)
                 adb("shell", "am", "force-stop", PACKAGE)
                 adb("shell", "run-as", PACKAGE, "rm", "-f", REPORT_PATH)
-                test = adb("shell", "am", "instrument", "-w", "-r", "-e", "state", state, "-e", "mode", mode,
+                command = ("shell", "am", "instrument", "-w", "-r", "-e", "state", state, "-e", "mode", mode,
                            "-e", "probeunwind", str(args.probe_unwind).lower(),
                            "-e", "cpu", "none" if args.cpu_affinity is None else str(args.cpu_affinity),
-                           "-e", "checkjni", args.checkjni, COMPONENT, timeout=args.timeout)
+                           "-e", "steadyConditioning", str(args.require_stable_jni).lower(),
+                           *(["-e", "clockUnits", args.clock_units] if clock_units else []),
+                           *(["-e", "foreground", "true"] if args.foreground else []),
+                           "-e", "checkjni", args.checkjni, COMPONENT)
+                launch_error = None
+                if args.foreground:
+                    with ThreadPoolExecutor(max_workers=1) as executor:
+                        pending = executor.submit(adb, *command, timeout=args.timeout)
+                        try:
+                            launch_foreground(adb, pending.done, lambda output:
+                                (out / (label + "-foreground.txt")).write_text(safe_console(output, args.serial)))
+                        except (ValueError, subprocess.TimeoutExpired) as error:
+                            launch_error = (str(error) if isinstance(error, ValueError)
+                                            else "Foreground launch command timed out")
+                            adb("shell", "am", "force-stop", PACKAGE)
+                        test = pending.result()
+                else:
+                    test = adb(*command, timeout=args.timeout)
                 (out / (label + ".txt")).write_text(safe_console(test.stdout + test.stderr, args.serial))
                 raw = adb("exec-out", "run-as", PACKAGE, "cat", REPORT_PATH).stdout
-                run = {"label": label, "instrumentationOk": "INSTRUMENTATION_CODE: -1" in test.stdout}
+                (out / "raw").mkdir(exist_ok=True)
+                (out / "raw" / (label + ".json")).write_text(raw)
+                run = {"label": label, "instrumentationOk": launch_error is None and "INSTRUMENTATION_CODE: -1" in test.stdout}
+                if launch_error:
+                    run["foregroundLaunchError"] = launch_error
                 try:
-                    report = safe_report(json.loads(raw), args.serial)
+                    report = safe_benchmark_report(json.loads(raw), args.serial)
+                    if not isinstance(report, dict):
+                        raise ValueError("Benchmark report is not an object")
                 except ValueError:
                     report = None
                 if report is not None:
                     (out / (label + ".json")).write_text(json.dumps(report, indent=2))
-                    run["completed"] = report.get("completed") is True
-                    if not affinity_matches(report, args.cpu_affinity):
-                        run["completed"] = False
-                    if state == "selected" and report.get("setup", {}).get("interfaceSelectionActive") is not True:
-                        run["completed"] = False
-                    if report.get("schemaVersion", 1) >= 2 and report.get("setup", {}).get("methodHandleChecks") is not True:
-                        run["completed"] = False
-                    if report.get("schemaVersion", 1) >= 3 and report.get("setup", {}).get("arrayAssignabilityChecks") is not True:
-                        run["completed"] = False
+                    run["completed"] = False
+                    try:
+                        run.update(report_conditions(report, mode=mode, state=state, checkjni=args.checkjni,
+                                                     cpu=args.cpu_affinity, foreground=args.foreground,
+                                                     stable_jni=args.require_stable_jni, clock_units=clock_units))
+                        run["completed"] = True
+                    except ValueError as error:
+                        run["error"] = report.get("fatalError") or str(error)
                     if run["completed"] and run["instrumentationOk"]: reports.append({**report, "round": round_index})
-                    else: run["error"] = report.get("fatalError")
+                    else: run.setdefault("error", report.get("fatalError"))
                     probe = report.get("instrumentationProbe", {})
                     if "restorationSucceeded" in probe:
                         run["restoration"] = "restored" if probe["restorationSucceeded"] else "blocked"

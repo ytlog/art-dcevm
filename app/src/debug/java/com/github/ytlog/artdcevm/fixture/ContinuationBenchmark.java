@@ -18,7 +18,31 @@ public class ContinuationBenchmark {
         if (profiling) profileEnd();
         return new long[]{elapsed, sum};
     }
+    private int directTarget() { return 7; }
+    public long[] awaitDirect(CountDownLatch ready, CountDownLatch resume, int count) throws Exception {
+        return directBody(ready, resume, count);
+    }
+    private long[] directBody(CountDownLatch ready, CountDownLatch resume, int count) throws Exception {
+        ready.countDown(); resume.await();
+        int sum = 0;
+        for (int i = 0; i < 10000; ++i) sum += directTarget();
+        long started = System.nanoTime();
+        for (int i = 0; i < count; ++i) sum += directTarget();
+        return new long[]{System.nanoTime() - started, sum};
+    }
     public interface Contract {
+    private int directTarget() { return 7; }
+    default long[] awaitDirect(CountDownLatch ready, CountDownLatch resume, int count) throws Exception {
+        return directBody(ready, resume, count);
+    }
+    private long[] directBody(CountDownLatch ready, CountDownLatch resume, int count) throws Exception {
+        ready.countDown(); resume.await();
+        int sum = 0;
+        for (int i = 0; i < 10000; ++i) sum += directTarget();
+        long started = System.nanoTime();
+        for (int i = 0; i < count; ++i) sum += directTarget();
+        return new long[]{System.nanoTime() - started, sum};
+    }
         default int target() { return 7; }
         default long[] await(CountDownLatch ready, CountDownLatch resume, int count) throws Exception {
         ready.countDown(); resume.await();

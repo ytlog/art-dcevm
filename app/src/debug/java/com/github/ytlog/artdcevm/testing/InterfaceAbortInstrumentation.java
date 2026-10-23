@@ -40,6 +40,7 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
     private static native int configureCheckJni(boolean enabled);
     private static native int configureImtFallback(int mode);
     private static native int configurePrivateSelfMask(int mask);
+    private static native int configureDirectPcMode(int mode);
     static native long referenceCleanupVisits();
     static native long referenceCleanupClears();
     static int armMappingPlanFailure() { return armFailure(22); }
@@ -274,6 +275,12 @@ public final class InterfaceAbortInstrumentation extends Instrumentation {
             int bits = "no-getter".equals(mode) ? 1 : -1;
             int code = configureImtFallback(bits);
             if (code != 0) throw new AssertionError("Cannot select IMT fallback mode: " + code);
+        }
+        if (arguments.containsKey("directPc")) {
+            System.loadLibrary("artdcevm");
+            String mode = arguments.getString("directPc");
+            int code = configureDirectPcMode("forced".equals(mode) ? 1 : "disabled".equals(mode) ? 2 : -1);
+            if (code != 0) throw new AssertionError("Cannot select direct PC boundary: " + code);
         }
         if (arguments.containsKey("privateSelf")) {
             System.loadLibrary("artdcevm");

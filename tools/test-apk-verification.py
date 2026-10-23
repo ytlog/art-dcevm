@@ -84,7 +84,7 @@ def complete_report(api=36, self_selection=None, direct_selection=None, continua
             "privateSelfContinuationFailure": "", "privateSelfContinuationEventPolicy": "skip-move-result",
             "privateSelfContinuationDeviceValidated": True, "privateSelfContinuationExceptionAbi": "skip-flags",
             "privateSelfContinuationIdentityService": "named-method-and-fixed-source",
-            "privateSelfContinuationDirectAccessProofs": 3}
+            "privateSelfContinuationDirectAccessProofs": 3, "privateDirectSelection": True}
     return report
 
 
@@ -159,7 +159,7 @@ class ApkVerificationTests(unittest.TestCase):
                  "privateSelfContinuationDeviceValidated": True,
                  "privateSelfContinuationExceptionAbi": "skip-flags",
                  "privateSelfContinuationIdentityService": "named-method-and-fixed-source",
-                 "privateSelfContinuationDirectAccessProofs": 3}
+                 "privateSelfContinuationDirectAccessProofs": 3, "privateDirectSelection": True}
         report["continuationPreparation"] = proof
         names = {name for name, _, _ in runner.scenario_sequence("method-private-self", 33, {"class": True, "interface": True}, True)}
         report["scenarios"] = [item for item in report["scenarios"] if item["name"] in names]
@@ -177,6 +177,33 @@ class ApkVerificationTests(unittest.TestCase):
             del broken["continuationPreparation"][key]
             with self.subTest(missing=key), self.assertRaises(runner.RunFailure):
                 runner.validate_report(broken, scenario_group="method-private-self")
+
+    def test_exact_direct_boundary_requires_completed_calls_and_retains_refusal(self):
+        report = complete_report(33)
+        proof = report["continuationPreparation"]
+        proof.update(privateSelfContinuationDirectBoundary="dex-pc-direct", privateSelfContinuationDirectAccessProofs=11)
+        runner.validate_direct_boundary(report, "forced")
+        old = copy.deepcopy(report)
+        old["device"]["api"] = 31
+        old["continuationPreparation"].update(privateSelfContinuationDeviceValidated=False, privateDirectSelection=False)
+        runner.validate_direct_boundary(old, "forced")
+        old["continuationPreparation"]["privateDirectSelection"] = True
+        with self.assertRaises(runner.RunFailure): runner.validate_direct_boundary(old, "forced")
+        for key, value in (("privateSelfContinuationDirectBoundary", "throwing-access"),
+                           ("privateSelfContinuationProven", False), ("privateDirectSelection", False),
+                           *[("privateSelfContinuationDirectAccessProofs", bits) for bits in (0, 3, 4, 9, 10)]):
+            bad = copy.deepcopy(report); bad["continuationPreparation"][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(runner.RunFailure):
+                runner.validate_direct_boundary(bad, "forced")
+        proof.update(privateSelfContinuationPrepared=False, privateSelfContinuationProven=False,
+                     privateSelfContinuationActive=False, privateDirectSelection=False,
+                     privateSelfContinuationDirectBoundary="unavailable",
+                     privateSelfContinuationFailure="direct method access boundary unavailable")
+        runner.validate_direct_boundary(report, "disabled")
+        for key in ("privateSelfContinuationPrepared", "privateSelfContinuationProven", "privateSelfContinuationActive", "privateDirectSelection"):
+            bad = copy.deepcopy(report); bad["continuationPreparation"][key] = True
+            with self.subTest(key=key), self.assertRaises(runner.RunFailure):
+                runner.validate_direct_boundary(bad, "disabled")
 
     def test_interface_selection_requires_transport_access_and_loader_evidence(self):
         report = complete_report(36)
@@ -356,6 +383,10 @@ class ApkVerificationTests(unittest.TestCase):
                                          ("interface-symbol-apply-static-0", "wrongReturnHandle"),
                                          ("interface-symbol-apply-static-0", "freshAliasedChildHandle"),
                                          ("interface-symbol-apply-static-0", "freshAliasedParameterHandle"),
+                                         ("interface-symbol-abort-drop-0", "middleAliasedParameter"),
+                                         ("interface-symbol-apply-private-0", "leafAliasedReturn"),
+                                         ("interface-symbol-restore-static-1", "gcinheritedClassMatchingCall"),
+                                         ("interface-symbol-apply-static-1", "leafReflectionAlias"),
                                          ("interface-symbol-restore-abort-static-1", "gccachedParentEchoHandle"),
                                          ("interface-symbol-restore-abort-static-1", "gcaliasReturnDistinct"),
                                          ("interface-symbol-restore-static-1", "freshObjectChildHandle"),

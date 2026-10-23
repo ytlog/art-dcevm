@@ -15,7 +15,7 @@ namespace artdcevm::fault_injection {
 namespace {
 bool interface_prepared = false;
 int imt_fallback_mode = 0;
-int private_self_mask = 0;
+int private_self_mask = 0, direct_pc_mode = 0;
 thread_local int failure_stage = 0, failure_hits = 0;
 thread_local std::array<int, 5> counters{};
 thread_local bool reject_next_probe = false;
@@ -30,6 +30,7 @@ void SnapshotFinished(std::chrono::steady_clock::time_point start, int targets, 
 void InterfacePrepared(bool prepared) { interface_prepared = prepared; }
 int ImtFallbackMode() { return imt_fallback_mode; }
 int PrivateSelfMask() { return private_self_mask; }
+int DirectPcMode() { return direct_pc_mode; }
 bool Inject(int stage) {
   if (failure_stage != stage) return false;
   failure_stage = 0;
@@ -61,6 +62,13 @@ Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configurePr
     JNIEnv*, jclass, jint mask) {
   if (mask < 0 || mask > 3) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
   private_self_mask = mask;
+  return JVMTI_ERROR_NONE;
+}
+extern "C" JNIEXPORT jint JNICALL
+Java_com_github_ytlog_artdcevm_testing_InterfaceAbortInstrumentation_configureDirectPcMode(
+    JNIEnv*, jclass, jint mode) {
+  if (mode < 0 || mode > 2) return JVMTI_ERROR_ILLEGAL_ARGUMENT;
+  direct_pc_mode = mode;
   return JVMTI_ERROR_NONE;
 }
 extern "C" JNIEXPORT jint JNICALL

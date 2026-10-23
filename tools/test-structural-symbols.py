@@ -99,6 +99,16 @@ class SymbolCatalogTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'Structural catalog contains unused services: kWrapper'):
             check.read_active_catalog(check.CATALOG, (first, second), "Structural")
 
+    def test_bound_catalog_includes_the_shared_interpreter_owner(self):
+        entry = next(row for row in check.OPTIONAL_CATALOGS if row[0] == "boundMethodHandleServices")
+        _, label, header, sources = entry
+        self.assertIn("interpreter_events.cc", sources)
+        paths = tuple(check.COMMON / name for name in sources)
+        catalog, _, _ = check.read_active_catalog(check.COMMON.parent / "symbols" / header, paths, label)
+        self.assertTrue(any(name == "kDexPcModern" for name, *_ in catalog))
+        with self.assertRaisesRegex(ValueError, "unused services: kDexPc"):
+            check.read_active_catalog(check.COMMON.parent / "symbols" / header, paths[:1], label)
+
     def test_catalog_accepts_multiline_initializers(self):
         check.CATALOG.write_text(
             'NamedSymbol kAllocator{\n'

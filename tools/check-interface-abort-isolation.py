@@ -17,7 +17,7 @@ TOKENS = ('InterfaceAbortInstrumentation', 'JniReceiverLossInstrumentation', 'ar
           'RejectThreadProbe()', 'ReferenceRead(bool)', 'failure_stage', 'failure_hits',
           'counters', 'Inject(int)')
 PROFILE_TOKENS = ('continuation_profile::Configure', 'continuation_profile::Read', 'configureContinuationProfile', 'readContinuationProfile', 'addEmptyProfileEnvironment')
-EXPORTS = ('configureImtFallback', 'configurePrivateSelfMask', 'configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes', 'primePointerId', 'rejectRuntimeThreadProbe', 'runtimeReferenceReads', 'runtimeMarkingReads')
+EXPORTS = ('configureImtFallback', 'configurePrivateSelfMask', 'configureDirectPcMode', 'configureCheckJni', 'armFailure', 'discardedClasses', 'failureHits', 'allocationOrder', 'allocatedTypes', 'primePointerId', 'rejectRuntimeThreadProbe', 'runtimeReferenceReads', 'runtimeMarkingReads')
 
 
 def ndk_bin():

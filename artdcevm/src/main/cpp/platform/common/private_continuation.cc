@@ -16,7 +16,7 @@
 #include <vector>
 
 namespace artdcevm::private_continuation {
-std::atomic<bool> pc_active{false};
+std::atomic<bool> pc_active{false}, direct_pc_active{false};
 namespace {
 using Frame = abi::arm64::android13::ShadowFrame;
 using Accessor = abi::arm64::android13::CodeItemDataAccessor;
@@ -174,11 +174,12 @@ __attribute__((noinline)) bool Continue(void* self, const Accessor* accessor, Fr
       ++identity_hits;
     }
     if (!services.own(frame->method, target)) return true;
+    if (kind == 1 && (!services.direct || !services.direct(frame->method, target, false))) return true;
     if (generation == epoch.load(std::memory_order_acquire))
       decision = {generation, frame->method, insn[1], kind, target};
   }
   if (observe_async(self)) return Push(self, frame, pc, pc, true, instrumentation);
-  const bool range = opcode == 0x74 || opcode == 0x78;
+  const bool range = opcode == 0x74 || opcode == 0x78 || opcode == 0x76;
   const uint32_t receiver = range ? insn[2] : insn[2] & 15;
   if (!abi::arm64::ReadFrameReference<Frame>(frame, receiver)) {
     services.throw_exception(self, "Ljava/lang/NullPointerException;", "null obsolete private self receiver");
@@ -217,6 +218,7 @@ __attribute__((noinline)) bool Continue(void* self, const Accessor* accessor, Fr
       ++next;
     }
   }
+  if (kind == 1 && services.direct) services.direct(frame->method, target, true);
   if (proving) ++proof_hits;
   return Push(self, frame, pc, next, false, instrumentation);
 }
@@ -231,7 +233,8 @@ bool Event(void* self, const void* raw_accessor, const void* raw_frame, uint32_t
   if (pc > accessor->size || accessor->size - pc < 3 || accessor->registers != frame->number_of_vregs) return true;
   const auto* insn = accessor->insns + pc;
   const uint8_t opcode = insn[0] & 0xff;
-  const int kind = opcode == 0x6e || opcode == 0x74 ? 2 : opcode == 0x72 || opcode == 0x78 ? 4 : -1;
+  const int kind = opcode == 0x6e || opcode == 0x74 ? 2 : opcode == 0x72 || opcode == 0x78 ? 4 :
+      ((opcode == 0x70 || opcode == 0x76) && direct_pc_active.load(std::memory_order_relaxed)) ? 1 : -1;
   if (kind < 0) return true;
   if (!instrumentation) return true;
   return Continue(self, accessor, frame, pc, insn, opcode, kind, flags, instrumentation);

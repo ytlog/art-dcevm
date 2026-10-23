@@ -2,12 +2,14 @@ package com.github.ytlog.artdcevm.testing;
 
 import android.app.Activity;
 import android.app.Instrumentation;
+import android.app.KeyguardManager;
 import android.content.Context;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Debug;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.PowerManager;
 
 import com.github.ytlog.artdcevm.api.DcevmRuntime;
 import com.github.ytlog.artdcevm.fixture.Evolving;
@@ -76,10 +78,16 @@ public final class HookOverheadBenchmark extends Instrumentation {
     private Context context;
     private Throwable preparationError;
     private int benchmarkCpu = -1;
+    private boolean conditioned;
+    private String clockUnits;
+    private HookBenchmarkActivity foregroundActivity;
+    private int initialForegroundEpoch = -1;
     private final JSONObject report = new JSONObject();
 
     /** Stops ART's JIT workers for the rest of the process (test engine library). */
     static native int suspendJit();
+    private static native void warmNative(Object workload, int count, long nanos);
+    private static native long referenceWork(int expectedCpu);
     static native int boundHandleEntryMode();
     static native int boundHandlePreparationProofs();
     static native boolean jniPrepare(Class<?> base);
@@ -125,10 +133,18 @@ public final class HookOverheadBenchmark extends Instrumentation {
         Bundle result = new Bundle();
         try {
             if (preparationError != null) throw preparationError;
+            if (argument("foreground", "false").equals("true")) startForeground();
             run();
             completed = true;
         } catch (Throwable error) {
             try { report.put("fatalError", error.toString()); } catch (Exception ignored) { }
+        } finally {
+            try {
+                if (foregroundActivity != null) runOnMainBounded(foregroundActivity::finish);
+            } catch (Throwable error) {
+                completed = false;
+                try { report.put("foregroundCleanupError", error.toString()); } catch (Exception ignored) { }
+            }
         }
         try {
             report.put("completed", completed);
@@ -142,6 +158,75 @@ public final class HookOverheadBenchmark extends Instrumentation {
         finish(completed ? Activity.RESULT_OK : Activity.RESULT_CANCELED, result);
     }
 
+    private void startForeground() throws Exception {
+        report.put("foreground", true);
+        KeyguardManager keyguard = (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
+        PowerManager power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
+        if (keyguard == null || power == null || keyguard.isKeyguardLocked() || !power.isInteractive())
+            throw new AssertionError("Foreground benchmark requires an unlocked, interactive device");
+        ActivityMonitor monitor = addMonitor(HookBenchmarkActivity.class.getName(), null, false);
+        try {
+            // The host explicitly launches the inert Debug window through ADB.
+            // Vendor background-start policy can reject an in-app launch even
+            // with an unlocked screen and active instrumentation.
+            report.put("foregroundLaunchRequested", true);
+            writeReport();
+            Activity activity = monitor.waitForActivityWithTimeout(15000);
+            if (!(activity instanceof HookBenchmarkActivity))
+                throw new AssertionError("Foreground benchmark activity did not start");
+            foregroundActivity = (HookBenchmarkActivity) activity;
+            if (!foregroundActivity.awaitReady()) throw new AssertionError("Foreground window did not gain focus");
+            initialForegroundEpoch = foregroundActivity.interruptions();
+            long until = System.nanoTime() + 5_000_000_000L;
+            while (!threadGroup().equals("/top-app") && System.nanoTime() < until) Thread.sleep(20);
+            checkForeground();
+            report.put("foregroundReady", true).put("foregroundCpuset", "/top-app")
+                    .put("foregroundEpoch", initialForegroundEpoch);
+        } finally {
+            removeMonitor(monitor);
+            if (foregroundActivity == null && monitor.getLastActivity() instanceof HookBenchmarkActivity)
+                runOnMainBounded(monitor.getLastActivity()::finish);
+        }
+    }
+
+    // Instrumentation.runOnMainSync has no deadline if the main looper stalls.
+    // Bound startup and cleanup too, without launching a replacement process.
+    private void runOnMainBounded(Runnable action) throws InterruptedException {
+        Handler handler = new Handler(Looper.getMainLooper());
+        CountDownLatch done = new CountDownLatch(1);
+        Throwable[] failure = new Throwable[1];
+        Runnable task = () -> {
+            try { action.run(); }
+            catch (Throwable error) { failure[0] = error; }
+            finally { done.countDown(); }
+        };
+        if (!handler.post(task)) throw new AssertionError("Benchmark main looper rejected action");
+        try {
+            if (!done.await(5, TimeUnit.SECONDS))
+                throw new AssertionError("Benchmark main-thread action timed out");
+        } finally {
+            handler.removeCallbacks(task);
+        }
+        if (failure[0] != null) throw new AssertionError("Benchmark main-thread action failed", failure[0]);
+    }
+
+    private int checkForeground() throws Exception {
+        if (foregroundActivity == null) return -1;
+        if (!foregroundActivity.isReady() || !threadGroup().equals("/top-app") ||
+                foregroundActivity.interruptions() != initialForegroundEpoch)
+            throw new AssertionError("Foreground benchmark lost focus or top-app scheduling group");
+        return initialForegroundEpoch;
+    }
+
+    private String threadGroup() throws IOException {
+        try (InputStream input = new java.io.FileInputStream("/proc/thread-self/cpuset");
+             ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[256];
+            for (int n; (n = input.read(buffer)) != -1;) bytes.write(buffer, 0, n);
+            return bytes.toString("UTF-8").trim();
+        }
+    }
+
     private void run() throws Throwable {
         String state = argument("state", "none");
         String baseState = state.replaceFirst("-(observe|restore|jvmti)$", "");
@@ -153,7 +238,17 @@ public final class HookOverheadBenchmark extends Instrumentation {
             throw new IllegalArgumentException("Unsupported state " + state);
         if (!mode.equals("jit") && !mode.equals("interp"))
             throw new IllegalArgumentException("Unsupported mode " + mode);
-        report.put("schemaVersion", 4).put("state", state).put("mode", mode)
+        conditioned = argument("steadyConditioning", "false").equals("true");
+        clockUnits = argument("clockUnits", "");
+        if (!clockUnits.isEmpty()) {
+            for (String unit : clockUnits.split(",", -1))
+                if (!unit.equals("methodHandleBound") && !unit.equals("reflectNewInstance"))
+                    throw new IllegalArgumentException("Unsupported clock unit");
+        }
+        report.put("schemaVersion", 6).put("clockUnits", clockUnits)
+                .put("measurementProtocol", conditioned
+                ? "entry-and-batch-conditioning-v4" : "entry-warm-v1")
+                .put("state", state).put("mode", mode)
                 .put("device", new JSONObject().put("model", Build.MODEL)
                         .put("api", Build.VERSION.SDK_INT).put("release", Build.VERSION.RELEASE));
         // Selects CheckJNI before any agent; this only loads the engine library.
@@ -375,13 +470,19 @@ public final class HookOverheadBenchmark extends Instrumentation {
     }
 
     /**
-     * Sizes one batch to about 5 ms, warms the workload (for JIT: 400 ms, a
-     * pause for the compiler thread, then 200 ms), and records ns per call
-     * over {@link #SAMPLES} batches.
+     * The default uses 5 ms batches after real-entry warm-up. Explicit
+     * conditioning selects 50 ms JIT batches and 2 s of actual-batch warm-up.
+     * Selected clock units also warm actual batches for 2 s, with independent
+     * references before and after all 21 batches. JNI references surround each
+     * allocation-free batch. Every measured batch is retained.
      */
     private void measure(JSONObject into, String name, boolean compiled, Workload workload) throws Throwable {
-        if (benchmarkCpu >= 0 && pinnedCpu() != benchmarkCpu)
-            throw new AssertionError("Benchmark CPU binding lost before " + name);
+        int foregroundEpoch = checkForeground();
+        boolean unitClock = Arrays.asList(clockUnits.split(",")).contains(name);
+        // Android may replace a process task profile between units. Establish
+        // affinity at point of use; never repair it during a measured unit.
+        if (benchmarkCpu >= 0 && pinCpu(benchmarkCpu) != benchmarkCpu)
+            throw new AssertionError("Cannot bind benchmark CPU before " + name);
         int count = 64;
         while (true) {
             long begin = System.nanoTime();
@@ -390,29 +491,69 @@ public final class HookOverheadBenchmark extends Instrumentation {
             count *= 2;
         }
         if (compiled) {
-            warm(workload, count, 400_000_000L);
+            // Preserve all eight receiver types in the megamorphic profiles.
+            int warmCount = name.endsWith("Mega") ? 8 : 1;
+            warm(workload, warmCount, 400_000_000L);
             Thread.sleep(100);
-            warm(workload, count, 200_000_000L);
+            warm(workload, warmCount, 200_000_000L);
         } else {
             for (int i = 0; i < 3; i++) workload.run(count);
         }
-        // JIT warmup can reduce batch time by orders of magnitude. Calibrate
-        // the measured batch after warmup as well, so its intended 5 ms window
-        // does not collapse to a handful of allocation/GC transition samples.
+        // Entry warm-up prevents caller inlining from leaving measured entries
+        // cold. Actual-batch conditioning separately settles the execution load.
         if (compiled) {
             while (count < (1 << 26)) {
                 long begin = System.nanoTime();
                 workload.run(count);
-                if (System.nanoTime() - begin >= 5_000_000L) break;
+                if (System.nanoTime() - begin >= (conditioned ? 50_000_000L : 5_000_000L)) break;
                 count *= 2;
             }
         }
+        if (unitClock || (conditioned && (compiled || name.equals("jniCallIntMethod")))) {
+            long until = System.nanoTime() + 2_000_000_000L;
+            do { workload.run(count); } while (System.nanoTime() < until);
+        }
+        if (benchmarkCpu >= 0 && pinCpu(benchmarkCpu) != benchmarkCpu)
+            throw new AssertionError("Cannot bind benchmark CPU after conditioning " + name);
+        long[] unitRefsBefore = new long[unitClock ? SAMPLES : 0];
+        long[] unitRefsAfter = new long[unitClock ? SAMPLES : 0];
+        if (unitClock) for (int i = 0; i < SAMPLES; i++) unitRefsBefore[i] = referenceWork(benchmarkCpu);
+        String unitFrequency = unitClock ? frequencyResidency() : "";
+        String unitGc = unitClock ? Debug.getRuntimeStat("art.gc.gc-count") : "";
+        long[] unitCpu = new long[unitClock ? SAMPLES : 0];
+        boolean qualify = conditioned && name.equals("jniCallIntMethod");
+        long[] referenceBefore = qualify ? new long[SAMPLES] : null;
+        long[] referenceAfter = qualify ? new long[SAMPLES] : null;
+        double[] cpuSamples = qualify ? new double[SAMPLES] : null;
+        String frequencyBefore = qualify ? frequencyResidency() : "";
+        String gcBefore = qualify ? Debug.getRuntimeStat("art.gc.gc-count") : "";
         double[] samples = new double[SAMPLES];
         long checksum = 0;
         for (int i = 0; i < SAMPLES; i++) {
+            if (qualify) referenceBefore[i] = referenceWork(benchmarkCpu);
+            long unitBegin = unitClock ? Debug.threadCpuTimeNanos() : 0;
+            long cpuBegin = qualify ? Debug.threadCpuTimeNanos() : 0;
             long begin = System.nanoTime();
             checksum += workload.run(count);
             samples[i] = (System.nanoTime() - begin) / (double) count;
+            if (unitClock) unitCpu[i] = Debug.threadCpuTimeNanos() - unitBegin;
+            if (qualify) {
+                cpuSamples[i] = (Debug.threadCpuTimeNanos() - cpuBegin) / (double) count;
+                referenceAfter[i] = referenceWork(benchmarkCpu);
+            }
+        }
+        String unitFrequencyAfter = unitClock ? frequencyResidency() : "";
+        String unitGcAfter = unitClock ? Debug.getRuntimeStat("art.gc.gc-count") : "";
+        if (unitClock) for (int i = 0; i < SAMPLES; i++) unitRefsAfter[i] = referenceWork(benchmarkCpu);
+        if (qualify) {
+            String gcAfter = Debug.getRuntimeStat("art.gc.gc-count");
+            String frequencyAfter = frequencyResidency();
+            report.put("steadyConditions", new JSONObject()
+                    .put("cpuSamplesNs", new JSONArray(cpuSamples))
+                    .put("referenceBeforeNs", new JSONArray(referenceBefore))
+                    .put("referenceAfterNs", new JSONArray(referenceAfter))
+                    .put("frequencyBefore", frequencyBefore).put("frequencyAfter", frequencyAfter)
+                    .put("gcBefore", gcBefore).put("gcAfter", gcAfter));
         }
         double[] sorted = samples.clone();
         Arrays.sort(sorted);
@@ -420,17 +561,45 @@ public final class HookOverheadBenchmark extends Instrumentation {
         for (double sample : samples) raw.put(Math.round(sample * 1000) / 1000.0);
         if (benchmarkCpu >= 0 && pinnedCpu() != benchmarkCpu)
             throw new AssertionError("Benchmark CPU binding lost after " + name);
-        into.put(name, new JSONObject().put("callsPerBatch", count)
+        JSONObject measured = new JSONObject().put("callsPerBatch", count)
                 .put("cpuAffinity", benchmarkCpu)
                 .put("medianNs", sorted[SAMPLES / 2]).put("minNs", sorted[0])
                 .put("p10Ns", sorted[SAMPLES / 10]).put("p90Ns", sorted[SAMPLES - 1 - SAMPLES / 10])
-                .put("samplesNs", raw).put("checksum", checksum));
+                .put("samplesNs", raw).put("checksum", checksum);
+        if (foregroundActivity != null) {
+            if (checkForeground() != foregroundEpoch)
+                throw new AssertionError("Foreground benchmark was interrupted during " + name);
+            measured.put("foregroundEpoch", foregroundEpoch).put("foregroundCpuset", "/top-app");
+        }
+        if (unitClock) measured.put("clockConditions", new JSONObject()
+                .put("referenceBeforeNs", new JSONArray(unitRefsBefore))
+                .put("referenceAfterNs", new JSONArray(unitRefsAfter))
+                .put("cpuSamplesNs", new JSONArray(unitCpu))
+                .put("frequencyBefore", unitFrequency).put("frequencyAfter", unitFrequencyAfter)
+                .put("gcBefore", unitGc).put("gcAfter", unitGcAfter));
+        into.put(name, measured);
         writeReport();
     }
 
+    private String frequencyResidency() {
+        if (benchmarkCpu < 0) return "";
+        String path = "/sys/devices/system/cpu/cpu" + benchmarkCpu + "/cpufreq/stats/time_in_state";
+        try (InputStream input = new java.io.FileInputStream(path);
+             ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[4096];
+            for (int n; (n = input.read(buffer)) != -1;) bytes.write(buffer, 0, n);
+            return bytes.toString("UTF-8");
+        } catch (IOException unavailable) {
+            return "";
+        }
+    }
+
     private static void warm(Workload workload, int count, long nanos) throws Throwable {
-        long end = System.nanoTime() + nanos;
-        while (System.nanoTime() < end) workload.run(count);
+        // A Java warm loop may inline its target while leaving the separate
+        // measured entry cold. Cross JNI for each actual workload invocation.
+        // The native loop also guarantees a full 16-bit counter's worth of
+        // real entries before each warm phase completes.
+        warmNative(workload, count, nanos);
     }
 
     private static String signature(String name) {

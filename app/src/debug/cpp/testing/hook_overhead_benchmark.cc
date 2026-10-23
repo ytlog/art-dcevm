@@ -2,6 +2,8 @@
 // so it measures whichever table is current: ART's own (CheckJNI or plain) or
 // the engine's retirement-guard override in front of it.
 #include <jni.h>
+#include <time.h>
+#include <cstdint>
 #include <cstring>
 #include <dlfcn.h>
 #include <unwind.h>
@@ -81,4 +83,40 @@ Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_interpreterUnwind(J
   }, &trace);
   return (static_cast<jlong>(trace.frames) << 32) |
          (static_cast<jlong>(trace.engine) << 16) | trace.after_engine;
+}
+
+
+// Debug measurement setup only; calls the real workload through its ordinary
+// JNI entry, so the warm-up caller cannot inline the measured Java entry.
+extern "C" JNIEXPORT void JNICALL
+Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_warmNative(
+    JNIEnv* jni, jclass, jobject workload, jint count, jlong nanos) {
+    jclass type = jni->GetObjectClass(workload);
+    jmethodID run = type ? jni->GetMethodID(type, "run", "(I)J") : nullptr;
+    jni->DeleteLocalRef(type);
+    if (!run || jni->ExceptionCheck()) return;
+    auto now = [] { timespec t; clock_gettime(CLOCK_MONOTONIC, &t);
+        return int64_t(t.tv_sec) * 1000000000 + t.tv_nsec; };
+    const int64_t end = now() + nanos;
+    uint32_t entries = 0;
+    do {
+        (void)jni->CallLongMethod(workload, run, count);
+        if (jni->ExceptionCheck()) return;
+        ++entries;
+    } while (entries < 65536 || now() < end);
+}
+
+// Independent fixed-work clock proxy: only this debug library's register loop.
+// No ART data, symbols, memory lookups or inferred machine addresses.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_referenceWork(JNIEnv* jni,jclass type,jint expected_cpu) {
+ if(expected_cpu>=0&&Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_pinnedCpu(jni,type)!=expected_cpu)return -1;
+ auto cpu=[] { timespec t{};clock_gettime(CLOCK_THREAD_CPUTIME_ID,&t);return int64_t(t.tv_sec)*1000000000+t.tv_nsec; };
+ // A multi-millisecond reference bounds relative clock-read noise on little
+ // cores as well as big cores. Keep every observation, including outliers.
+ uint64_t value=0x123456789abcdef0ULL;uint32_t count=4194304;int64_t begin=cpu();
+ asm volatile(".p2align 6\n1: eor %0, %0, %0, lsl #7\neor %0, %0, %0, lsr #11\nadd %0, %0, #1\nsubs %w1, %w1, #1\nb.ne 1b\n" : "+r"(value),"+r"(count) : : "cc", "memory");
+ int64_t elapsed=cpu()-begin;
+ if(expected_cpu>=0&&Java_com_github_ytlog_artdcevm_testing_HookOverheadBenchmark_pinnedCpu(jni,type)!=expected_cpu)return -1;
+ return elapsed;
 }

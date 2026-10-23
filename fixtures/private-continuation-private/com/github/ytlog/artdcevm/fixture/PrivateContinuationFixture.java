@@ -74,6 +74,12 @@ public final class PrivateContinuationFixture {
                 case 17: return range(1L, 2L, 3L) * 10 + 1;
                 case 18: { Subject receiver = (Subject)gate.receiver; return receiver.number(); }
                 case 19: return reenter(gate.action) * 3 + 1;
+                case 21: {
+                    int before = number();
+                    try { return before * 10000 + reenter(gate.action) * 100 + number() + saved; }
+                    catch (IllegalStateException error) { return error.getMessage() + ":" + (before * 10000 + saved * 100 + number()); }
+                    finally { gate.finallyHits++; }
+                }
                 default: throw new AssertionError("mode");
             }
         }
@@ -130,6 +136,12 @@ public final class PrivateContinuationFixture {
                 case 17: return range(1L, 2L, 3L) * 10 + 1;
                 case 18: { Contract receiver = (Contract)gate.receiver; return receiver.number(); }
                 case 19: return reenter(gate.action) * 3 + 1;
+                case 21: {
+                    int before = number();
+                    try { return before * 10000 + reenter(gate.action) * 100 + number() + saved; }
+                    catch (IllegalStateException error) { return error.getMessage() + ":" + (before * 10000 + saved * 100 + number()); }
+                    finally { gate.finallyHits++; }
+                }
                 default: throw new AssertionError("mode");
             }
         }

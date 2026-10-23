@@ -56,19 +56,6 @@ const bool* use_read_barrier = nullptr;
 std::atomic<bool> class_verified{false};
 std::atomic<bool> identity_verified{false};
 std::atomic<uint32_t> direct_access_proofs{0};
-using MemberAccess = bool (*)(void*, uintptr_t, uint32_t);
-MemberAccess original_member_access = nullptr;
-void* member_access_hook = nullptr;
-struct DirectContext { void* caller; int type; };
-thread_local DirectContext direct_context{nullptr, -1};
-struct DirectScope {
-  bool observing;
-  DirectContext previous{};
-  DirectScope(void* caller, int type) : observing(member_access_hook != nullptr) {
-    if (observing) { previous = direct_context; direct_context = {caller, type}; }
-  }
-  ~DirectScope() { if (observing) direct_context = previous; }
-};
 size_t class_access = 0, class_dex_cache = 0, class_ext_data = 0, ext_obsolete_methods = 0;
 size_t gc_marking_offset = ~size_t{0};
 size_t method_index_offset = ~size_t{0};
@@ -227,8 +214,10 @@ bool OwnClass(void* caller, void* resolved) {
 
 // Fixed Class::IsObsoleteVersionOf identity follows ART's retained history.
 // Classes are nonmoving; the named getter owns ClassExt/read-barrier access.
-bool MethodAccessCheck(void* referring, uintptr_t owner, void* method, uintptr_t cache,
-                       uint32_t index, int type) noexcept {
+// Keep the installed access hook's common rejection path a direct ART forward.
+// Sharing the predicate must not add an outlined call to every access check.
+__attribute__((always_inline)) inline bool HistoricalPrivateSelf(
+    void* referring, uintptr_t owner, void* method, int type) noexcept {
   constexpr uint32_t kAccObsoleteObject = 0x00200000;  // modifiers.h.
   if (type == 1 && referring && owner && method && enabled.load(std::memory_order_acquire) &&
       CopiedFrames() && obsolete_class &&
@@ -241,16 +230,38 @@ bool MethodAccessCheck(void* referring, uintptr_t owner, void* method, uintptr_t
       for (uintptr_t current = obsolete_class(reinterpret_cast<void*>(owner)); current;
            current = obsolete_class(reinterpret_cast<void*>(current))) {
         if (current == reinterpret_cast<uintptr_t>(referring)) {
-          if (private_continuation::ProofActive())
-            direct_access_proofs.fetch_or(
-                runtime_roots::Field<uint32_t>(reinterpret_cast<void*>(owner), class_access) & evolution::kAccInterface ? 2 : 1,
-                std::memory_order_release);
           return true;
         }
       }
     }
   }
+  return false;
+}
+void RecordDirectProof(uintptr_t owner, uint32_t boundary) {
+  if (private_continuation::ProofActive())
+    direct_access_proofs.fetch_or(boundary |
+        (runtime_roots::Field<uint32_t>(reinterpret_cast<void*>(owner), class_access) & evolution::kAccInterface ? 2 : 1),
+        std::memory_order_release);
+}
+bool MethodAccessCheck(void* referring, uintptr_t owner, void* method, uintptr_t cache,
+                       uint32_t index, int type) noexcept {
+  if (HistoricalPrivateSelf(referring, owner, method, type)) {
+    RecordDirectProof(owner, 0);
+    return true;
+  }
   return original_method_access(referring, owner, method, cache, index, type);
+}
+bool ContinueDirect(void* caller, void* target, bool completed) {
+  if (!private_continuation::direct_pc_active.load(std::memory_order_acquire) || !caller || !target) return false;
+  auto* from = static_cast<abi::arm64::ArtMethodPrefix*>(caller);
+  auto* to = static_cast<abi::arm64::ArtMethodPrefix*>(target);
+  // Constructors are outside this adapter. DoCall receives the exact resolved
+  // ordinary private method; fields never enter this instruction boundary.
+  if (to->access_flags.load(std::memory_order_relaxed) & 0x00010000) return false;
+  const auto owner = Reference<true>(to->declaring_class);
+  if (!HistoricalPrivateSelf(reinterpret_cast<void*>(Reference<true>(from->declaring_class)), owner, target, 1)) return false;
+  if (completed) RecordDirectProof(owner, 8);
+  return true;
 }
 
 // ResolveMethod has already resolved the symbolic owner, so this lookup never
@@ -287,16 +298,6 @@ bool ProveIdentity(void* caller, void* target, const char* expected, uintptr_t e
   }
   identity_verified.store(true, std::memory_order_release);
   return true;
-}
-bool ObserveMemberAccess(void* referring, uintptr_t owner, uint32_t flags) {
-  const bool result = original_member_access(referring, owner, flags);
-  // This is deliberately observational. A shared field/member entry is not a
-  // proven replacement for the throwing method-access boundary.
-  if (private_continuation::ProofActive() && direct_context.caller && direct_context.type == 1 &&
-      !result && (flags & evolution::kAccPrivate) && referring && owner &&
-      Reference<true>(static_cast<abi::arm64::ArtMethodPrefix*>(direct_context.caller)->declaring_class) == reinterpret_cast<uintptr_t>(referring))
-    direct_access_proofs.fetch_or(4, std::memory_order_release);
-  return result;
 }
 void* SymbolicOwner(void* cache, uint32_t index, void* loader, bool* valid) {
   *valid = false;
@@ -375,14 +376,12 @@ void* ResolveUnchecked(void* self, uint32_t index, void* caller, int type) {
   return resolved;
 }
 void* ResolveCaller(void* linker, void* self, uint32_t index, void* caller, int type) noexcept {
-  DirectScope direct(caller, type);
   void* resolved = original_caller(linker, self, index, caller, type);
   if (resolved && !unchecked_resolution && !CheckClassKind(self, caller, index, type)) return nullptr;
   return Check(self, resolved, type);
 }
 void* ResolveCache(void* linker, uint32_t index, Handle cache, Handle loader,
                    void* caller, int type) noexcept {
-  DirectScope direct(caller, type);
   void* resolved = original_cache(linker, index, cache, loader, caller, type);
   if (resolved && !unchecked_resolution && !CheckClassKind(nullptr, caller, index, type, cache.Get<void>(), loader.Get<void>())) return nullptr;
   return unchecked_resolution ? resolved : Check(nullptr, resolved, type);
@@ -545,11 +544,11 @@ bool Prepare(std::vector<Hook>* hooks) {
   // Intercept only the named throwing access test, before it creates IAE.
   if (!resolve_method_id && caller && cache && cache_legacy && mark) {
     obsolete_class = reinterpret_cast<decltype(obsolete_class)>(symbols::Find(kGetObsoleteClass));
-    if (void* access = obsolete_class ? symbols::Find(kResolvedMethodAccess) : nullptr)
+    if (void* access = obsolete_class && !ARTDCEVM_DIRECT_PC_MODE() ? symbols::Find(kResolvedMethodAccess) : nullptr)
       prepared.push_back({access, HookAddress(MethodAccessCheck), HookSlot(&original_method_access), kResolvedMethodAccess.name});
   }
   private_continuation::Configure({ResolveUnchecked, OwnClass, ContinuationKind, ContinuationException, throw_exception, ContinuationReady,
-      ProveIdentity, [] { return (direct_access_proofs.load(std::memory_order_acquire) & 3) == 3; }});
+      ProveIdentity, [] { return (direct_access_proofs.load(std::memory_order_acquire) & 3) == 3; }, ContinueDirect});
   hooks->insert(hooks->end(), prepared.begin(), prepared.end());
   return true;
 }
@@ -615,7 +614,8 @@ bool CopiedFrames() {
 bool DirectSelectionServices() {
   return installed.load(std::memory_order_acquire) &&
       ((resolve_method_id && original_nterp && method_descriptor && method_loader) ||
-       (!resolve_method_id && original_caller && original_cache && original_method_access && obsolete_class));
+       (!resolve_method_id && original_caller && original_cache && obsolete_class &&
+        (original_method_access || (private_continuation::direct_pc_active.load(std::memory_order_acquire) && private_continuation::Admitted()))));
 }
 bool PrivateDirectFrames() {
   return CopiedFrames() && DirectSelectionServices();
@@ -625,13 +625,20 @@ const char* ContinuationIdentityService() {
   return method_descriptor && method_loader ? "named-method-and-fixed-source" : "fixed-source";
 }
 uint32_t DirectAccessProofs() { return direct_access_proofs.load(std::memory_order_acquire); }
+const char* DirectBoundary() {
+  if (original_method_access) return "throwing-access";
+  if (resolve_method_id && original_nterp) return "modern-selector";
+  return private_continuation::direct_pc_active.load(std::memory_order_acquire) ? "dex-pc-direct" : "unavailable";
+}
 bool PrepareDirectBoundaryProbe() {
   if (original_method_access || resolve_method_id) return true;
-  if (member_access_hook) return true;
-  void* entry = symbols::Find(symbols::invoke_kind::kCanAccessMember);
-  if (!entry) return false;
-  member_access_hook = shadowhook_hook_sym_addr(entry, HookAddress(ObserveMemberAccess), HookSlot(&original_member_access));
-  return member_access_hook != nullptr;
+  // No broad CanAccessMember hook: use the shared exact DEX instruction event.
+  // Publication still requires independent class/interface real-frame proofs.
+  if (!installed.load(std::memory_order_acquire) || !original_caller || !original_cache ||
+      !obsolete_class || !original_cache_read || !mark || !lookup_type ||
+      ARTDCEVM_DIRECT_PC_MODE() == 2) return false;
+  private_continuation::direct_pc_active.store(true, std::memory_order_release);
+  return true;
 }
 bool ClassKinds() {
   return ClassKindUnavailable() == nullptr;

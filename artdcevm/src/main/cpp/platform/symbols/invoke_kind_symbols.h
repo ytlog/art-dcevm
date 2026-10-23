@@ -12,8 +12,6 @@ inline constexpr NamedSymbol kResolveMethodId{Library::kArt, "_ZN3art11ClassLink
 // the exact retained-class chain used by Class::IsObsoleteVersionOf.
 inline constexpr NamedSymbol kResolvedMethodAccess{Library::kArt, "_ZN3art6mirror5Class24ResolvedMethodAccessTestILb1EEEbNS_6ObjPtrIS1_EEPNS_9ArtMethodENS3_INS0_8DexCacheEEEjNS_10InvokeTypeE", SymbolTable::kAnyNamed};
 inline constexpr NamedSymbol kGetObsoleteClass{Library::kArt, "_ZN3art6mirror5Class16GetObsoleteClassEv", SymbolTable::kAnyNamed};
-// Observer only until an exact direct-resolution boundary has been proved.
-inline constexpr NamedSymbol kCanAccessMember{Library::kArt, "_ZN3art6mirror5Class15CanAccessMemberENS_6ObjPtrIS1_EEj", SymbolTable::kAnyNamed};
 // nterp.cc. Android 14+ also uses this cache-fill entry in the switch interpreter.
 inline constexpr NamedSymbol kNterpGetMethod{Library::kArt, "NterpGetMethod", SymbolTable::kAnyNamed};
 // entrypoint_utils-inl.h, Android 14--17: switch interpreter invocation selection.

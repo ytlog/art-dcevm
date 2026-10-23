@@ -1559,10 +1559,12 @@ def interface_symbol_checks(kind, changed, late=True):
         ordinaryStaticHandle=9,
         childInstance=True, parentInstance=True, identity=True, marker=31, peerCall=5 if changed else 3,
         newReceiverChild=failure if changed else 7, cachedChildJni=7, cachedParentJni=7)
-    for _owner in ("interface","ordinary"):
+    for _owner in ("interface","ordinary","middle","leaf","inheritedClass"):
         result.update({_owner+"AliasedReturn":"java.lang.IllegalAccessException",
                        _owner+"AliasedParameter":"java.lang.IllegalAccessException",
                        _owner+"WrongReturn":"java.lang.NoSuchMethodException"})
+        if _owner in ("middle", "leaf", "inheritedClass"):
+            result.update({_owner+"MatchingCall":7, _owner+"ReflectionAlias":"java.lang.NoSuchMethodException"})
     result.update(childStaticResolution="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else "java.lang.IllegalAccessException",
                   childStaticWrongReturn="java.lang.NoSuchMethodException",parentStaticWrongReturn="java.lang.NoSuchMethodException",
                   parentStaticAliasedParameter="java.lang.IllegalAccessException",childStaticAliasedReturn="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException",
@@ -1715,6 +1717,20 @@ for _kind in ("class", "interface"):
     CONTINUATION_SCENARIOS.append((_name,["private-continuation-original"],0))
     REQUIRED_CHECKS[_name] = {"restored":34 if _kind == "interface" else 22}
     MAPPED_SCENARIOS.add(_name)
+for _kind, _before, _after in (("class", 13, 17), ("interface", 31, 35)):
+    for _throw in (False, True):
+        _stem = "continuation-same-class-" + _kind + ("-throw" if _throw else "-return")
+        _name = _stem + "-apply"
+        CONTINUATION_SCENARIOS.append((_name, ["private-continuation-private"], 0))
+        REQUIRED_CHECKS[_name] = dict(joined=True, nestedCode=0, callbackCount=1,
+            result=f"reentered:{_before * 10000 + 4100 + _after}" if _throw else _before * 10000 + 4500 + _after + 41,
+            newBody=_after * 3 + 1)
+        REQUIRED_CHECKS[_name]["finally"] = 1
+        MAPPED_SCENARIOS.add(_name)
+        _name = _stem + "-restore"
+        CONTINUATION_SCENARIOS.append((_name, ["private-continuation-original"], 0))
+        REQUIRED_CHECKS[_name] = {"restored": 34 if _kind == "interface" else 22}
+        MAPPED_SCENARIOS.add(_name)
 for _phase,_code,_variant,_checks in (("outer",0,"private",{"innerEntered":True}),
     ("abort",110,"private",{"armed":0,"outerHeld":True}), ("inner",0,"private",{"joined":True,"result":535}),
     ("restore-peer",0,"original",{"restored":7}), ("restore-outer",0,"original",{"restored":22})):
@@ -1883,6 +1899,9 @@ def validate_report(report, scenario_group="full", private_self_mode=None):
                 (continuation.get("privateSelfContinuationDirectAccessProofs", 0) & 3) == 3):
             raise RunFailure("API 33 continuation runtime self-proof is missing")
         self_selection = {"class": True, "interface": True}
+        if continuation.get("privateDirectSelection") is not True:
+            raise RunFailure("Proven API 33 continuation is missing retained direct-frame service")
+        direct_selection = True
     expected_scenarios = scenario_sequence(scenario_group, device["api"], self_selection, direct_selection)
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list) or len(scenarios) != len(expected_scenarios):
@@ -2043,6 +2062,28 @@ def safe_report(value, serial):
     return value
 
 
+def validate_direct_boundary(report, mode):
+    api = report["device"]["api"]
+    proof = report.get("continuationPreparation", {})
+    if 30 <= api <= 33 and mode == "forced":
+        if (proof.get("privateSelfContinuationDirectBoundary") != "dex-pc-direct" or
+                (proof.get("privateSelfContinuationDirectAccessProofs", 0) & 11) != 11 or
+                proof.get("privateSelfContinuationProven") is not True or
+                proof.get("privateDirectSelection") is not (api == 33) or
+                proof.get("privateSelfContinuationDeviceValidated") is not (api == 33)):
+            raise RunFailure("Exact direct DEX boundary lacks independent real-call proofs")
+    if api == 33 and mode == "disabled":
+        if (any(proof.get(key) is not False for key in
+                ("privateSelfContinuationPrepared", "privateSelfContinuationProven", "privateSelfContinuationActive", "privateDirectSelection")) or
+                proof.get("privateSelfContinuationDirectBoundary") != "unavailable" or
+                proof.get("privateSelfContinuationFailure") != "direct method access boundary unavailable"):
+            raise RunFailure("Missing direct boundary did not fail closed before proof and admission")
+    if api >= 36:
+        caps = report["initialization"]["capabilities"]
+        if caps.get("privateSelfContinuationDirectBoundary") != "modern-selector":
+            raise RunFailure("Legacy debug mode changed the modern direct service")
+
+
 def main(argv=None):
     started = time.perf_counter()
     parser = argparse.ArgumentParser(description=__doc__)
@@ -2055,6 +2096,8 @@ def main(argv=None):
                         help="Run the complete suite, ordinary-class suite, or abstract interface transactions")
     parser.add_argument("--continuation-proof", action="store_true",
                         help="Run the internal API 30-33 candidate proof without widening device admission")
+    parser.add_argument("--direct-pc-mode", choices=("forced", "disabled"),
+                        help="Debug-only mask of throwing direct access; exercise or disable exact DEX continuation")
     parser.add_argument("--private-self-mode", choices=("interface-only", "class-only", "disabled"),
                         help="Debug-only mask of named own-frame selectors before installation")
     parser.add_argument("--imt-fallback-mode", choices=("no-getter",),
@@ -2129,6 +2172,7 @@ def main(argv=None):
         try:
             mode_args = ["-e", "checkjni", "true" if args.checkjni_mode == "checkjni" else "false"] if args.checkjni_mode else []
             if args.scenario_group != "full": mode_args += ["-e", "scenario", args.scenario_group]
+            if args.direct_pc_mode: mode_args += ["-e", "directPc", args.direct_pc_mode]
             if args.continuation_proof: mode_args += ["-e", "continuationProof", "true"]
             if args.private_self_mode: mode_args += ["-e", "privateSelf", args.private_self_mode]
             if args.imt_fallback_mode: mode_args += ["-e", "imtFallback", args.imt_fallback_mode]
@@ -2161,7 +2205,8 @@ def main(argv=None):
             result = json.loads(report.stdout)
         except (ValueError, TypeError) as error:
             raise RunFailure("The device report is not valid JSON") from error
-        validate_report(result, scenario_group=args.scenario_group, private_self_mode=args.private_self_mode)
+        validate_report(result, scenario_group=args.scenario_group,
+                        private_self_mode="disabled" if args.direct_pc_mode == "disabled" and result["device"]["api"] == 33 else args.private_self_mode)
         if args.imt_fallback_mode:
             sealing = result["initialization"]["capabilities"].get("interfaceDispatchSealing", "")
             expected = "LinkMethods saturated probe"
@@ -2181,6 +2226,9 @@ def main(argv=None):
                     (proof.get("privateSelfContinuationDirectAccessProofs", 0) & 3) == 3):
                 raise RunFailure("Candidate continuation proof is missing or widened device admission")
             meta["continuationProof"] = True
+        if args.direct_pc_mode:
+            validate_direct_boundary(result, args.direct_pc_mode)
+            meta["directPcMode"] = args.direct_pc_mode
         if args.private_self_mode: meta["privateSelfMode"] = args.private_self_mode
         meta["device"] = result["device"]
         meta["scenarioCount"] = len(result["scenarios"])

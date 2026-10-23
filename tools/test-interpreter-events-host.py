@@ -39,7 +39,7 @@ extern "C" { std::atomic<void*> artdcevm_bound_entry_method{nullptr}; }
 bool DispatchPc(interpreter_events::Pc p,void* s,const void* a,const void* f,uint32_t pc,const void* i,void* r){return p(s,a,f,pc,i,r);}
 }
 namespace artdcevm::private_continuation {
-std::atomic<bool> pc_active{false};
+std::atomic<bool> pc_active{false}, direct_pc_active{false};
 bool Event(void*,const void*,const void*,uint32_t,const void*,void*,bool passed){return passed;}
 bool Exception(void* self,void* frame,bool,bool,bool* handled){
  *handled=mode==3||mode==4;

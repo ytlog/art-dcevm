@@ -286,16 +286,43 @@ python3 tools/run-jni-receiver-tests.py --serial DEVICE_SELECTOR --device-id and
 
 ### API 33 private 续接
 
-`--scenario-group private-continuation` 执行 API 33 的 29 个场景：普通类／接口 copied default、覆写接收者、各种返回类型、普通／range 调用、null、GC、先改方法体、失败回滚、重复恢复、非尾后续计算、catch/finally、锁、递归旧帧、重入、热循环中连续提交，以及 ClassFileLoadHook 在初始扫描后启动旧帧且重扫次数为零。其他 API 不执行这个附加组。关联路径定向运行 `method-private-self`、`method-private`、`invoke-kind`、`receiver-loss-bound` 和 `inverse-*` 的普通／CheckJNI 组合。安全拒绝 71、CheckJNI 诊断、真实调用成功分别记录。
+`--scenario-group private-continuation` 执行 API 33 的 37 个场景：普通类／接口 copied default、覆写接收者、各种返回类型、普通／range 调用、null、GC、先改方法体、失败回滚、重复恢复、非尾后续计算、catch/finally、锁、递归旧帧、重入、热循环中连续提交，以及 ClassFileLoadHook 在初始扫描后启动旧帧且重扫次数为零。新增的同类重入场景在新 private 方法执行期间再次重定义该类／接口，分别正常返回或抛异常，核对回调只执行一次、旧局部变量、finally、后续调用选中新方法及恢复。其他 API 不执行这个附加组。关联路径定向运行 `method-private-self`、`method-private`、`invoke-kind`、`receiver-loss-bound` 和 `inverse-*` 的普通／CheckJNI 组合。安全拒绝 71、CheckJNI 诊断、真实调用成功分别记录。
 
 `test-retirement-filter-host.py` 验证精确集合对照、饱和及并发发布；`test-interpreter-notifications-host.py` 验证合并租约、部分失败、重入与成功后常驻。`-PcontinuationProfile=true` 开启可选 Debug 阶段计时及命名 DoCall 计数，默认 app 和生产 AAR 不含该 profiler。稀疏嵌套计时有重叠，只作诊断，不能相加或代替性能验收。
 
 运行前固定协议：绑定单 CPU 的一对预检，再按 control/candidate 交替顺序运行六对，不追加轮次。监听期间以真实非尾旧帧自身调用的 ns/call 为指标，预热 10,000 次、测量 100,000 次，成对相对增幅中位数不超过 10%。监听关闭的稳态指标仅在成对增量中位数同时超过 5 ns 与 3% 时失败。前后核对 CPU 绑定，保留无效与越线运行，同设备功能／GC／性能串行。冻结代码后再执行 API 33／API 36 普通／CheckJNI 完整矩阵，定向结果不能替代。
 
-`test-interpreter-events-host.py` 编译生产共享 Hook 所有者，用精确类型替身验证 API 30／31／32 的 instrumentation 指针及 API 33／36 的双 bool 转发、marker 消费、真实异常回放、缺服务／Hook 失败和 ICF 去重，共 30 项。`test-invoke-kind-host.py` 增至 31 项，新增 direct 调用边界仅观察、缺服务／安装失败及类／接口独立证明；`test-dex-code-host.py` 对真实 D8 DEX 核对 MethodId 所有者、同描述符不同加载器及越界拒绝；signed／unsigned root 原型由 `test-interface-scope-visitors-host.py` 分别调用。主机结果不证明旧设备 ABI 可执行。
+`test-interpreter-events-host.py` 编译生产共享 Hook 所有者，用精确类型替身验证 API 30／31／32 的 instrumentation 指针及 API 33／36 的双 bool 转发、marker 消费、真实异常回放、缺服务／Hook 失败和 ICF 去重，共 30 项。`test-invoke-kind-host.py` 增至 31 项，覆盖精确 direct／range 指令筛选、构造器／字段／外部类拒绝、缺服务及类／接口独立完成证明；`test-dex-code-host.py` 对真实 D8 DEX 核对 MethodId 所有者、同描述符不同加载器及越界拒绝；signed／unsigned root 原型由 `test-interface-scope-visitors-host.py` 分别调用。主机结果不证明旧设备 ABI 可执行。
 
 续接性能基准增加 `-e continuationKind interface`，独立测 copied-default；省略或使用 `class` 测普通类。两种目标各按上述一对预检、六对交替和 10% 门槛验收，不能混合平均。当前先对 API 33／36 完整普通／CheckJNI 回归；API 30–32 没有本功能设备证据，仍保留 71，后续取得设备后须先运行内部证明与缺服务负例，再执行该版本适用的完整验收和同一性能协议。
 
-JIT 稳态基准在预热后再次校准每批调用数，使实际测量批次仍约为 5 ms。只在预热前校准会使编译后的批次缩至约 1 ms 或更短，21 批分配采样易落入不同 GC 阶段。该修正不增加进程轮次、不剔除 GC 样本，也不改变成对门槛；校准修正前的越线与独立诊断必须保留。
+默认 JIT 稳态基准在入口预热后按约 5 ms 再次校准每批调用数。显式启用 `--require-stable-jni` 时，JIT 改为约 50 ms 批次并持续预热实际批次 2 s；解释模式保留约 5 ms 批次，其 JNI 时钟对照也预热实际批次 2 s。只在预热前校准会使编译后的批次缩至约 1 ms 或更短，21 批分配采样易落入不同 GC 阶段。该修正不增加进程轮次、不剔除 GC 样本，也不改变成对门槛；校准修正前的越线与独立诊断必须保留。
 
 旧设备就绪后，可用 `--scenario-group method-private-self --continuation-proof` 显式请求内部候选证明，并核对随后应用场景仍返回 71。该 Debug 选项不改变设备准入；证明失败、direct 边界未证实或缺服务须保留失败报告，不得记为旧版功能通过。
+
+缺少 throwing direct 入口的替代路径可在 API 33 用 `--direct-pc-mode forced` 验证：准备报告必须为 `dex-pc-direct`，真实完成证明掩码须包含 1／2／8，证明后才发布 `privateDirectSelection`。`--direct-pc-mode disabled --scenario-group method-private-self` 屏蔽原入口并禁用替代，必须在自证明前失败并实际返回 71。API 36 两个测试模式均保留 `modern-selector`，不能用其现代分派结果证明旧版 ABI。冻结后 API 33 默认／强制替代及 API 36 默认路径各跑完整普通／CheckJNI；旧版无设备证据保持关闭。
+
+`-e continuationInvoke direct` 在 private 旧帧跨提交后的计数循环中测普通类／接口 direct 调用。control 与 candidate 使用同一 APK，分别选择原 throwing-access 和强制 DexPc 路径，均先完成自证明，关闭测试环境通知，只保留引擎监听；使用 public 结构变体保留已 private 的 direct 目标。每种目标独立按一对预检、六对交替、CPU 2、预热 10,000／测量 100,000、成对增幅中位数不超过 10% 验收；不能与 virtual 单元混合平均。
+
+JIT 预热现在通过独立 JNI 循环真实调用 workload：三个 `*Mega` 单元用 `run(8)` 覆盖全部八种接收者，其余用 `run(1)`，每段至少 65,536 次方法进入且不少于原 400／200 ms，中间仍暂停 100 ms；计时批次仍在预热后校准，仍为 21 个样本。Java 大批次计时预热及批次上限 64 的尝试都在只读入口诊断中出现绑定 lambda 在计时内切换入口，因此保留失败记录并不进入其验收。独立 JNI 入口预热确认 workload 与绑定 lambda 在计时前切换、计时内入口稳定；不改 ART 访问标志、代码或对象字段。此修正影响全部 JIT 单元，须按新协议重新预检与六对验收；独立续接计时不调用这个预热方法，可按原 APK 哈希及相同引擎／计时源码复用；共享稳态计时库或校准流程变化时须核对解释模式影响，无法证明未受影响时也重跑完整对照。功能完整矩阵也保留原 APK 身份，不能改写为新测试包实测。
+
+固定 CPU 绑定与 sysfs 瞬时频率不能证明有效执行频率稳定。稳态预检越线后，另设固定轮次的诊断，结合工作线程的硬件周期、线程 CPU 时间、GC 与编译入口核对运行条件；外部计数器的窗口须排除诊断序列化和解释执行的等待轮询，并保留剩余采样开销。公共固定性能模式命令返回成功也须实测验证，结束后恢复测试设置。诊断不并入验收，不把旧越线追认成通过；未证明条件稳定时，不启动新的完整对照。
+
+周期／指令计数与线程 CPU 时间必须采用相同起止边界。外部 PMU 的完整窗口可能包含未计入各批 CPU 时间的报告记录、分配和握手开销，不能用全窗口周期除以各批 CPU 时间之和，声称得到精确的有效频率。阻塞握手后的首批变慢也会使全段平均值与批次中位数分离；两种统计量不能互换，更不能据此校正旧预检的中位数。参照只位于整批调用前后时，其稳定性仍不能排除批内有效频率变化。保留全部批次，后续诊断须先证明采样窗口对应关系。
+
+参照全距异常应先分别核对最小值、最大值相对中位数的偏差，区分偏快与偏慢。定位时可同时记录嵌套的线程 CPU／墙钟边界、线程切换和调度等待；这些区间的差值不能直接当作精确的中断耗时。`simpleperf stat --group` 的逐事件读取不保证同一时间边界；支持时，可用 `record --add-counter` 的同次组采样，对齐参照区间内的用户态周期、指令和恒定频率周期，并核对计数器范围、丢样及复用调度。只读取命名计数服务，不分析 ART 指令地址。预先固定边界保护区，所有边界样本也须保存；硬件事件不可用时明确标为缺服务。采样本身会引入中断，IRQ 计数不能自动区分采样器与其他来源，架构计数器和单调时钟也可能共享时钟源。诊断只能解释对应进程，不能追认旧失败的原因或替代不带采样器的稳定性验证。
+
+需要独立时钟校验的稳态对照显式启用 `run-hook-overhead-benchmark.py --require-stable-jni --cpu-affinity <cpu>`；默认保留原入口预热协议，不隐式延长旧设备进程。每个单元开始及计时前固定建立 CPU 绑定；计时期间只校验，不重新绑定或重试。分配无关的 `jniCallIntMethod` 在每批计时外执行独立寄存器工作量参照（4,194,304 次迭代），并核对参照前后绑定、线程 CPU 时间、频率累计驻留和 GC。参照不访问 ART，不根据假定 IPC 推算绝对频率。
+
+分配单元需要独立时钟校验时，使用 `--clock-units methodHandleBound,reflectNewInstance`。每个选定单元先预热实际批次 2 s，再在完整 21 批采样之前、之后各执行 21 次独立参照，不在分配批次之间插入参照。沿用参照中央分布 1%、全距 2%、频率驻留 98% 及成对参照差 1% 的界限；GC 次数和 CPU 时间变化作为被测工作保留，不剔除或修正样本。该选项可配合旧设备的默认短协议使用。选定单元须在运行前固定，之前的失败独立保留。
+
+`hook_benchmark_conditions.py` 对 JNI 校验要求全部 21 批 CPU 时间及 42 个参照值有效，P90–P10／中位数不超过 1%，全距／中位数不超过 2%；频率主档驻留至少 98%，GC 计数不变，JNI 返回校验和须独立符合 `21*N*(N-1)/2`。跨 APK 成对比较还要求同一频率档及参照中位数差不超过 1%，完整对照固定为相应预检控制格的频率档。任何一项不满足则整格无效，原始值全部保留；不归一化或校正原始 ns，不剔除样本，性能门槛和进程轮次不变。`test-hook-benchmark-conditions.py` 的负例覆盖缺服务、非有限值、单个异常值、时钟漂移、计数器重置、GC 和伪造调用结果。
+
+
+`--foreground` 是可选的测量条件：设备须已解锁且屏幕交互可用，测试窗口须获得焦点，工作线程须实际进入 `/top-app`。启动、退出的主线程操作及窗口就绪等待均有期限；超时使该格失败。就绪时记录进程的 `foregroundEpoch`，每个单元前后检查焦点、调度组和失焦／暂停计数；计数必须始终等于初始值，包括单元之间失焦后恢复也会失败。离线验证要求所有单元与进程初始计数一致。Debug 窗口仅在该进程内保持亮屏，不修改安全锁；跨进程的亮屏条件须由运行器预先固定、记录并在结束后恢复。前台标志本身不证明频率或 JNI 执行稳定，仍须通过原有时钟、GC 与真实返回值校验。缺失窗口／调度服务或锁屏时不回退为可验收的后台计时。
+
+前台运行器等待仪器安装 ActivityMonitor 并发布启动请求后，通过 ADB 显式启动仅用于 Debug 的测试窗口；不依赖应用后台启动权限。启动请求、ADB 返回和窗口就绪均有期限，失败不重试，原始启动输出单独保留。只有实际焦点、调度组及连续性检查通过后才计时。`test-benchmark-foreground.py` 验证未就绪／已结束的仪器、启动拒绝、超时及单次启动约束。 原始设备报告另存于忽略证据目录的 `raw/`。脱敏仅在前台调度组字段保留精确的公共名称 `/top-app`，不得把任意路径放行，也不得把已脱敏的占位符当作调度组证明。
+
+`run-hook-overhead-benchmark.py --summarize` 仅重新汇总完整成功的原运行：必须提供 `run.json`，其预定轮次／模式／状态的每一格和原始报告须全部存在且成功，不能跳过失败格、纳入未登记报告或重复计算同一目录。汇总须显式复用原 CPU、前台、JNI 时钟和选定单元条件，并重新执行与现场相同的报告校验。`test-benchmark-summary.py` 覆盖这些负例；汇总不会追加设备运行或改变原性能判定。
+
+`interface-symbols` 同时覆盖两层父接口和实现类的跨加载器参数／返回类型、错误完整描述符、匹配类型的真实调用及普通反射负例，贯穿失败批次、提交、恢复与 GC。共享 `InterfaceSymbolState` 也用于固定 JBR 的解释器／JIT 对照。`test-method-handle-lookup-host.py` 的 12 组验证另含 1／3／9 层调用链、不同调用方、非 public 声明、分段栈读取失败、缺递归方法标识与缺活参数观察；报告验证器拒绝省略递归检查。此路径改变共享查找守卫，冻结后在 API 33／36 运行完整普通／CheckJNI 功能矩阵。其他运行库的 SO／ABI 分析仅标为静态验证，不能写成设备实测，API 30–32 的续接 71 不变。

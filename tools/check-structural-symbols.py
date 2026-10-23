@@ -29,7 +29,7 @@ STRUCTURAL_IMPLEMENTATIONS = tuple(sorted(COMMON.glob('*.cc')))
 OPTIONAL_CATALOGS = (
     ('verificationServices', 'Verification', 'verification_redirect_symbols.h', 'verification_redirect.cc'),
     ('constructorHistoryServices', 'Constructor history', 'constructor_history_symbols.h', 'constructor_history.cc'),
-    ('boundMethodHandleServices', 'Bound MethodHandle', 'bound_method_handle_symbols.h', 'bound_method_handle.cc'),
+    ('boundMethodHandleServices', 'Bound MethodHandle', 'bound_method_handle_symbols.h', ('bound_method_handle.cc', 'interpreter_events.cc')),
     ('jniInterfaceDispatchServices', 'JNI interface dispatch', 'jni_interface_dispatch_symbols.h', 'jni_interface_dispatch.cc'),
     ('methodHandleLookupServices', 'MethodHandle lookup', 'method_handle_lookup_symbols.h', 'method_handle_lookup.cc'),
     ('invokeKindServices', 'Invoke kind', 'invoke_kind_symbols.h', 'invoke_kind.cc'),
@@ -177,7 +177,9 @@ def main(argv=None):
                 path = CATALOG.parent / header
                 if not path.exists():
                     continue
-                entries, digest, source_digest = read_active_catalog(path, COMMON / implementation, label)
+                sources = (implementation,) if isinstance(implementation, str) else implementation
+                entries, digest, source_digest = read_active_catalog(
+                    path, tuple(COMMON / name for name in sources), label)
                 services = collect_report(args.runtime_lib, entries, digest)
                 services['implementationSha256'] = source_digest
                 report[key] = services

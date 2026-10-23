@@ -22,7 +22,9 @@ SOURCE = r'''
 #include <vector>
 using namespace artdcevm;
 int mode, installs, calls, access_throws, internal_throws, missing_throws, allocations, frees, local_reads, unhooks;
-bool lookup_static=false;
+bool lookup_static=false, stack_failure=false, malformed_chain=false, nonpublic=false;
+int recursive_levels=0;
+jmethodID public_recursive=reinterpret_cast<jmethodID>(23), interface_recursive=reinterpret_cast<jmethodID>(24);
 int test_api=36;
 extern "C" int android_get_device_api_level(){return test_api;}
 bool install_failure, pending, static_method=true, interface_class=true, scope=true, missing_local=false;
@@ -100,13 +102,18 @@ void Run(JNIEnv* jni,jclass,jmethodID method,va_list) {
   pending=false;
   reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments);
   pending=false; // The Java helper catches the access exception.
+  if (reinterpret_cast<uintptr_t>(method)!=19 && mode!=10) {
+    static_method=false; recursive_levels=3;
+    reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments);
+    pending=false; recursive_levels=0;
+  }
   static_method=saved;lookup_static=false;
 }
 jvmtiError Caps(jvmtiEnv*,const jvmtiCapabilities* c){Require(c->can_access_local_variables,"missing local capability");return mode==3?JVMTI_ERROR_NOT_AVAILABLE:JVMTI_ERROR_NONE;}
 jvmtiError Methods(jvmtiEnv*,jclass c,jint* count,jmethodID** out){
- *count=c==owner?2:reinterpret_cast<uintptr_t>(c)==1?3:2;*out=static_cast<jmethodID*>(malloc(sizeof(jmethodID)*(*count)));allocations++;
+ *count=c==owner?2:reinterpret_cast<uintptr_t>(c)==1?5:2;*out=static_cast<jmethodID*>(malloc(sizeof(jmethodID)*(*count)));allocations++;
  if(c==owner){(*out)[0]=reinterpret_cast<jmethodID>(101);(*out)[1]=reinterpret_cast<jmethodID>(100);}
- else if(reinterpret_cast<uintptr_t>(c)==1){(*out)[0]=instance;(*out)[1]=declared_method;(*out)[2]=class_get_method;}
+ else if(reinterpret_cast<uintptr_t>(c)==1){(*out)[0]=instance;(*out)[1]=declared_method;(*out)[2]=class_get_method;(*out)[3]=public_recursive;(*out)[4]=interface_recursive;}
  else {(*out)[0]=virtual_method;(*out)[1]=static_lookup;}
  return JVMTI_ERROR_NONE;
 }
@@ -114,6 +121,7 @@ jvmtiError Name(jvmtiEnv*,jmethodID m,char** n,char** s,char**){
  if(name_failure&&reinterpret_cast<uintptr_t>(m)==100){pending=true;return JVMTI_ERROR_INTERNAL;}
  const char* name="value";const char* signature=reinterpret_cast<uintptr_t>(m)==101?"()Ljava/lang/String;":member_signature;
  if(m==instance||m==declared_method){name=m==instance?"getInstanceMethod":"getDeclaredMethod";signature="(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;";}
+ if(m==public_recursive||m==interface_recursive){name=m==public_recursive?"getPublicMethodRecursive":mode==11?"unavailable":"findInterfaceMethod";signature="(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;";}
  if(m==class_get_method){name="getMethod";signature="(Ljava/lang/String;[Ljava/lang/Class;Z)Ljava/lang/reflect/Method;";}
  if(m==virtual_method||m==static_lookup){name=m==virtual_method?"findVirtual":"findStatic";signature="(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;";}
  if(n)*n=Copy(name);if(s)*s=Copy(signature);return JVMTI_ERROR_NONE;
@@ -121,10 +129,22 @@ jvmtiError Name(jvmtiEnv*,jmethodID m,char** n,char** s,char**){
 jvmtiError Fields(jvmtiEnv*,jclass c,jint* count,jfieldID** out){*count=1;*out=static_cast<jfieldID*>(malloc(sizeof(jfieldID)));allocations++;**out=reinterpret_cast<uintptr_t>(c)==1?flags_field:return_field;return JVMTI_ERROR_NONE;}
 jvmtiError FieldName(jvmtiEnv*,jclass,jfieldID f,char** n,char** s,char**){*n=Copy(f==return_field?"rtype":"accessFlags");*s=Copy(f==return_field?"Ljava/lang/Class;":"I");return JVMTI_ERROR_NONE;}
 jvmtiError Locals(jvmtiEnv*,jmethodID,jint* n){*n=9;return JVMTI_ERROR_NONE;}
-jvmtiError Modifiers(jvmtiEnv*,jmethodID m,jint* f){*f=reinterpret_cast<uintptr_t>(m)==100&&static_method?9:1;return JVMTI_ERROR_NONE;}
+jvmtiError Modifiers(jvmtiEnv*,jmethodID m,jint* f){*f=reinterpret_cast<uintptr_t>(m)==100?(nonpublic?2:static_method?9:1):1;return JVMTI_ERROR_NONE;}
 jvmtiError Loader(jvmtiEnv*,jclass c,jobject* out){Require(c==owner,"wrong declaring interface");*out=boot?nullptr:reinterpret_cast<jobject>(90);return JVMTI_ERROR_NONE;}
-jvmtiError Stack(jvmtiEnv*,jthread t,jint start,jint max,jvmtiFrameInfo* f,jint* count){Require(!t&&!start&&max==4,"wrong public stack request");*count=lookup_static?4:3;f[1].method=lookup_static?class_get_method:instance;f[2].method=lookup_static?declared_method:scope?virtual_method:instance;if(lookup_static)f[3].method=scope?static_lookup:instance;return JVMTI_ERROR_NONE;}
-jvmtiError Local(jvmtiEnv*,jthread t,jint depth,jint slot,jobject* out){Require(!t&&depth==(lookup_static?3:2)&&slot==8,"wrong public local slot");local_reads++;if(missing_local)return JVMTI_ERROR_OPAQUE_FRAME;*out=type;return JVMTI_ERROR_NONE;}
+jvmtiError Stack(jvmtiEnv*,jthread t,jint start,jint max,jvmtiFrameInfo* f,jint* count){
+ Require(!t&&start>=0&&max==4,"wrong public stack request");
+ if(stack_failure&&start>0)return JVMTI_ERROR_OPAQUE_FRAME;
+ std::vector<jmethodID> trace{nullptr};
+ if(lookup_static)trace.insert(trace.end(),{class_get_method,declared_method,scope?static_lookup:instance});
+ else {
+  for(int i=0;i<recursive_levels;i++)trace.insert(trace.end(),{public_recursive,malformed_chain?instance:interface_recursive});
+  trace.insert(trace.end(),{instance,scope?virtual_method:instance});
+ }
+ *count=0;
+ for(int i=start;i<int(trace.size())&&*count<max;i++)f[(*count)++].method=trace[i];
+ return JVMTI_ERROR_NONE;
+}
+jvmtiError Local(jvmtiEnv*,jthread t,jint depth,jint slot,jobject* out){Require(!t&&depth==(lookup_static?3:2+2*recursive_levels)&&slot==8,"wrong public local slot");local_reads++;if(missing_local)return JVMTI_ERROR_OPAQUE_FRAME;*out=type;return JVMTI_ERROR_NONE;}
 jvmtiError Signature(jvmtiEnv*,jclass c,char** out,char**){*out=Copy(reinterpret_cast<uintptr_t>(c)>=80?"LParam;":requested_kind?"Ljava/lang/String;":"LResult;");return JVMTI_ERROR_NONE;}
 int main(int argc,char** argv){try{
  Require(argc==2,"mode required");mode=std::stoi(argv[1]);if(mode==7)test_api=33;
@@ -133,8 +153,8 @@ int main(int argc,char** argv){try{
  Require(!method_handle_lookup::Available()&&!method_handle_lookup::Enable()&&!installs,"lookup activated before preparation");
  if(mode==4)missing_local=true;
  bool ok=method_handle_lookup::Prepare(&jni,&env);
- if(mode==1||mode==3)Require(!ok&&!method_handle_lookup::Available()&&!method_handle_lookup::Enable()&&!installs,"missing named/public capability accepted");
- else if(mode==4||mode==5){Require(!ok&&!method_handle_lookup::Available()&&!method_handle_lookup::Enable()&&installs==1&&unhooks==1,"failed runtime proof accepted");if(mode==5)Require(!method_handle_lookup::Prepare(&jni,&env)&&installs==1,"failed unhook installed another copy");}
+ if(mode==1||mode==3||mode==11)Require(!ok&&!method_handle_lookup::Available()&&!method_handle_lookup::Enable()&&!installs,"missing named/public capability accepted");
+ else if(mode==4||mode==5||mode==10){Require(!ok&&!method_handle_lookup::Available()&&!method_handle_lookup::Enable()&&installs==1&&unhooks==1,"failed runtime proof accepted");if(mode==5)Require(!method_handle_lookup::Prepare(&jni,&env)&&installs==1,"failed unhook installed another copy");}
  else{
  Require(ok&&installs==1&&unhooks==1,"Native proof left its temporary hook installed");replacement=nullptr;calls=access_throws=internal_throws=local_reads=0;
  install_failure=true;Require(!method_handle_lookup::Enable()&&!replacement,"failed lazy install escaped");install_failure=false;Require(method_handle_lookup::Enable()&&replacement,"retry failed");Require(method_handle_lookup::Enable()&&installs==3,"duplicate installation");
@@ -173,7 +193,19 @@ int main(int argc,char** argv){try{
  Require(!invoke()&&pending&&access_throws==8,"static parameter loader alias fell through");
  }
  lookup_static=false;parameters.clear();actual_parameters.clear();member_signature="()LResult;";
- reflected=nullptr;requested_name="missing";Require(!invoke()&&!pending&&access_throws==((mode==8||mode==9)?5:8),"original missing member failure overwritten");
+ static_method=false; requested=reinterpret_cast<jclass>(71);
+ for(int levels:{1,3,9}){
+  recursive_levels=levels;
+  Require(!invoke()&&pending,"recursive inherited return identity escaped");
+  scope=false;Require(invoke()==reflected&&!pending,"ordinary recursive reflection intercepted");scope=true;
+  nonpublic=true;Require(invoke()==reflected&&!pending,"nonpublic recursive declaration intercepted");nonpublic=false;
+  malformed_chain=true;Require(invoke()==reflected&&!pending,"unrelated intervening frame intercepted");malformed_chain=false;
+  stack_failure=true;Require(!invoke()&&pending,"failed recursive stack service ignored");stack_failure=false;
+  requested=reinterpret_cast<jclass>(70);Require(invoke()==reflected&&!pending,"matching inherited type rejected");requested=reinterpret_cast<jclass>(71);
+ }
+ recursive_levels=0;requested=reinterpret_cast<jclass>(70);
+ const int previous_access=access_throws;
+ reflected=nullptr;requested_name="missing";Require(!invoke()&&!pending&&access_throws==previous_access,"original missing member failure overwritten");
  }
  Require(allocations==frees,"JVMTI buffers leaked");std::cout<<"Lookup guard case "<<mode<<" PASS\n";
  }catch(const std::exception& e){std::cerr<<e.what()<<"\n";return 1;}}
@@ -192,7 +224,7 @@ def main():
         command=[shutil.which('clang++') or shutil.which('c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I'+str(work),'-I'+str(native),'-I'+str(include),'-I'+str(include/platform),'-I'+str(ROOT/'third_party/jvmti'),str(source),str(native/'platform/common/method_handle_lookup.cc'),'-o',str(binary)]
         result=subprocess.run(command,capture_output=True,text=True);(evidence/'compile.log').write_text(result.stdout+result.stderr)
         if result.returncode:raise RuntimeError('Lookup compilation failed; inspect ignored evidence')
-        for mode in range(10):
+        for mode in range(12):
             result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True,timeout=30);(evidence/f'case-{mode}.log').write_text(result.stdout+result.stderr)
             if result.returncode:raise RuntimeError('Lookup guard case failed; inspect ignored evidence')
             print(result.stdout.strip())
