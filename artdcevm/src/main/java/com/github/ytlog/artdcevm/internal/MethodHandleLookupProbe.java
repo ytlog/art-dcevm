@@ -10,7 +10,8 @@ public final class MethodHandleLookupProbe {
     public interface Parent { default int inherited() { return 2; } }
     public interface Child extends Parent { }
     public interface Leaf extends Child { }
-    public static void runStatic() throws NoSuchMethodException, IllegalAccessException {
+    public static class OrdinaryOwner { public static int value() { return 3; } }
+    public static void runStatic() throws Throwable {
         try {
             MethodHandles.publicLookup().findStatic(Child.class, "inherited", MethodType.methodType(int.class));
             throw new AssertionError("inherited instance static lookup accepted");
@@ -19,6 +20,11 @@ public final class MethodHandleLookupProbe {
             MethodHandles.publicLookup().findStatic(Child.class, "inherited", MethodType.methodType(String.class));
             throw new AssertionError("wrong static return lookup accepted");
         } catch (NoSuchMethodException expected) { }
+        // The guard must also observe the ordinary-class live MethodType;
+        // matching identities still reach ART and invoke the actual body.
+        int value = (int) MethodHandles.publicLookup().findStatic(
+                OrdinaryOwner.class, "value", MethodType.methodType(int.class)).invokeExact();
+        if (value != 3) throw new AssertionError("ordinary static lookup changed target");
     }
     public static void run() throws NoSuchMethodException, IllegalAccessException {
         try {

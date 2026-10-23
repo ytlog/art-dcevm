@@ -1557,6 +1557,13 @@ def interface_symbol_checks(kind, changed, late=True):
         declaredChildStatic=(kind=="static") if changed and kind!="drop" else "java.lang.NoSuchMethodException",
         unreflectChildStatic=11 if changed and kind=="static" else "java.lang.IllegalAccessException" if changed and kind=="private" else "java.lang.NoSuchMethodException",
         ordinaryStaticHandle=9,
+        ordinaryStaticAliasedReturn="java.lang.IllegalAccessException",
+        ordinaryStaticAliasedParameter="java.lang.IllegalAccessException",
+        ordinaryStaticAliasedBoth="java.lang.IllegalAccessException",
+        ordinaryStaticWrongReturn="java.lang.NoSuchMethodException",
+        ordinaryStaticWrongParameter="java.lang.NoSuchMethodException",
+        ordinaryStaticMatchingCall=29, ordinaryStaticNullCall=41, ordinaryStaticIdentityCall=True,
+        ordinaryStaticReflectionAlias="java.lang.NoSuchMethodException",
         childInstance=True, parentInstance=True, identity=True, marker=31, peerCall=5 if changed else 3,
         newReceiverChild=failure if changed else 7, cachedChildJni=7, cachedParentJni=7)
     for _owner in ("interface","ordinary","middle","leaf","inheritedClass"):

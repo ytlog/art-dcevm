@@ -31,7 +31,7 @@ int runtime_api = 0;
 void* (*decode_global)(JavaVM*, jobject) = nullptr;
 jobject (*new_local)(JNIEnv*, void*) = nullptr;
 bool static_verified = false;
-thread_local bool observed_static = false;
+thread_local bool observed_static = false, observed_static_class = false;
 jint type_slot = -1;
 std::atomic<bool> enabled{false};
 bool probe_verified = false;
@@ -116,7 +116,7 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
   const bool virtual_lookup = virtual_depth >= 0;
   const bool recursive_lookup = virtual_depth > 2;
   if (!virtual_lookup && !static_lookup) return false;
-  if (static_lookup && (!(flags & evolution::kAccInterface) || !(flags & evolution::kAccPublic))) return false;
+  if (static_lookup && !(flags & evolution::kAccPublic)) return false;
   Local<jobject> loader{jni};
   if (environment->GetClassLoader(static_cast<jclass>(klass), &loader.value)) return ServiceFailure(jni);
   if (!loader.value) return false; // Boot interfaces cannot be enhanced; keep hidden-API filtering.
@@ -139,9 +139,10 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
       ServiceFailure(jni); return false;
     }
     if (probing && recursive_lookup) observed_recursive = true;
+    if (probing && static_lookup && !(flags & evolution::kAccInterface)) observed_static_class = true;
     return true;
   };
-  if (static_lookup) {
+  if (static_lookup && (flags & evolution::kAccInterface)) {
     if (!read_type()) return true;
     std::string descriptor("(");
     for (jsize i = 0, n = jni->GetArrayLength(args); i < n; ++i) {
@@ -191,7 +192,7 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
     jint modifiers = 0;
     if (environment->GetMethodModifiers(methods.value[i], &modifiers)) return ServiceFailure(jni);
     if (recursive_lookup && !(modifiers & evolution::kAccPublic)) continue;
-    if ((modifiers & evolution::kAccStatic) && !(flags & evolution::kAccInterface)) continue;
+    if (virtual_lookup && (modifiers & evolution::kAccStatic) && !(flags & evolution::kAccInterface)) continue;
     Text member_name, signature;
     if (environment->GetMethodName(methods.value[i], &member_name.value, &signature.value, nullptr)) return ServiceFailure(jni);
     if (std::strcmp(member_name.value, requested_name.chars)) continue;
@@ -347,10 +348,10 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   jmethodID run_static = jni->GetStaticMethodID(probe.value, "runStatic", "()V");
   if (jni->ExceptionCheck()) jni->ExceptionClear();
   if (passed && run_static && runtime_vm && find_interface && decode_global && new_local && find_static && declared_method && class_get_method && static_type_slot >= 0) {
-    observed_static = false; probing = true;
+    observed_static = observed_static_class = false; probing = true;
     jni->CallStaticVoidMethod(probe.value, run_static);
     probing = false;
-    static_verified = observed_static && !jni->ExceptionCheck();
+    static_verified = observed_static && observed_static_class && !jni->ExceptionCheck();
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
   {

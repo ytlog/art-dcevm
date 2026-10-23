@@ -32,6 +32,8 @@ public final class InterfaceSymbolState {
     public static class OrdinaryLookup {
         public InterfaceSymbolFixture.Result objectValue() { return null; }
         public int echo(InterfaceSymbolFixture.Result value) { return 7; }
+        public static InterfaceSymbolFixture.Result staticObject(InterfaceSymbolFixture.Result value) { return value; }
+        public static int staticEcho(InterfaceSymbolFixture.Result value) { return value == null ? 41 : 29; }
     }
     // A distinct multi-level hierarchy keeps recursive lookup independent of
     // the Child declarations being changed by the transaction matrix.
@@ -118,6 +120,34 @@ public final class InterfaceSymbolState {
                 result(() -> MethodHandles.publicLookup().findStatic(child,null,type)));
         check.eq(prefix+"ordinaryStaticHandle", 9,
                 result(() -> MethodHandles.publicLookup().findStatic(Math.class,"abs",MethodType.methodType(int.class,int.class)).invokeWithArguments(-9)));
+        check.eq(prefix+"ordinaryStaticAliasedReturn", "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticObject",
+                        MethodType.methodType(aliasReturn,InterfaceSymbolFixture.Result.class))));
+        check.eq(prefix+"ordinaryStaticAliasedParameter", "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticEcho",
+                        MethodType.methodType(int.class,aliasReturn))));
+        check.eq(prefix+"ordinaryStaticAliasedBoth", "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticObject",
+                        MethodType.methodType(aliasReturn,aliasReturn))));
+        check.eq(prefix+"ordinaryStaticWrongReturn", "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticObject",
+                        MethodType.methodType(String.class,InterfaceSymbolFixture.Result.class))));
+        check.eq(prefix+"ordinaryStaticWrongParameter", "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticEcho",
+                        MethodType.methodType(int.class,String.class))));
+        InterfaceSymbolFixture.Result argument = new InterfaceSymbolFixture.Result();
+        check.eq(prefix+"ordinaryStaticMatchingCall", 29,
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticEcho",
+                        MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class)).invokeWithArguments(argument)));
+        check.eq(prefix+"ordinaryStaticNullCall", 41,
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticEcho",
+                        MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class)).invokeWithArguments((Object)null)));
+        check.eq(prefix+"ordinaryStaticIdentityCall", true,
+                result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticObject",
+                        MethodType.methodType(InterfaceSymbolFixture.Result.class,InterfaceSymbolFixture.Result.class))
+                        .invokeWithArguments(argument) == argument));
+        check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
+                result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }
     public void verify(Check check, String prefix, String kind, boolean changed) throws Exception {
         Object failure = !changed ? null : kind.equals("drop") ? "java.lang.NoSuchMethodError"

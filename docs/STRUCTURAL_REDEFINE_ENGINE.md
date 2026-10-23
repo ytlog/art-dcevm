@@ -176,6 +176,8 @@ Android 13/API 33、Android 14/API 34、Android 15/API 35 与 Android 16/API 36 
 
    对 public 应用接口的 `findStatic`，在 FastNative 调用方的共享 mutator 权限下，命名 `Class::FindInterfaceMethod` 按完整名称与描述符执行 ART 原有的自身／父接口解析，解析函数内不分配、不挂起，不另建继承解析器。未匹配抛 NSME，匹配到实例方法抛 IAE，自身 static 继续身份检查与原访问检查。Android 11–14 和 15–17 的 PointerSize 声明差异只保留在 ABI 层。命名 `JavaVMExt::DecodeGlobal` 和 `JNIEnvExt::NewLocalRef` 为不移动的声明 Class 建根；bootstrap 目标、bootstrap 声明及 obsolete mirror 交回 libcore，保留 hidden API 和 obsolete 检查。普通反射、缓存句柄及其他查找帧保留原路径。实例查找进一步识别固定 Class 递归调用链：成对的 `getPublicMethodRecursive/findInterfaceMethod` 后必须紧接 `getInstanceMethod/Lookup.findVirtual`。通过公开 JVMTI 每次读取四帧，按实际深度取得 `MethodType`，不设接口层数上限，也不扫描任意祖先调用方来扩大匹配。仅检查递归路径允许的 public 声明；原 ART/libcore 继续选择方法。内部 Leaf 探针必须实际触发递归活参数观察；缺方法标识或证明失败仍以 71 拒绝需要该服务的事务，运行中栈服务失败抛 InternalError。
 
+   普通 public 应用类的 `findStatic` 在同一精确调用链中复用完整描述符及反射 Class 身份核对；只对类型加载器身份不符报告 IAE。此路径检查当前类声明，不调用接口解析器，成员选择和访问检查继续由原 libcore 负责。静态探针同时要求普通类的活参数观察与实际静态调用返回值；缺少该观察时不发布 static 证明，原 virtual 证明独立保留。
+
    准备只在 Native 接口批次路径执行一次，先于已加载类快照及 ART 重定义／链接锁。临时 Java 探针必须实际观察到活参数，原 libcore 的 IAE 不能充当证明；保留原 virtual 必需证明，static 另需对应命名服务及独立的继承实例／错误返回类型证明。撤下临时 Hook 后，首个 Native 接口批次启用保护，失败以 71 拒绝该批次。安装锁不跨 JNI/JVMTI 或 Java，同线程准备重入报告未就绪。保护位于普通 FastNative JNI 入口，处于结构校验／链接／分配回调之外，跨可挂起操作的对象均由 JNI 引用保活。ART 的[局部变量实现](https://android.googlesource.com/platform/art/+/android-13.0.0_r1/openjdkjvmti/ti_method.cc)负责栈遍历、验证、根转移及仪器化。服务失败时保留 pending exception 或报告 InternalError；中止批次可保留已启用保护，但不发布类定义或 Java 数组。
 
 2. 新增 default 与类链 protected/package-private 虚方法同签名时，`Abilities::interface_selection` 决定能否按 JBR 接受：类方法优先，接口调用抛 `IllegalAccessError`，原有类方法调用保留；更具体 public 覆写仍优先。`subtype_shadows` 保留服务不可用时的拒绝依据，命名服务与运行时声明探测通过后才放开新增 default、abstract/default 切换和新增父接口带来的 default。
@@ -565,3 +567,5 @@ Android 11–12L 的命名 `MoveToExceptionHandler` 接收 `const Instrumentatio
 缺少 throwing method-access 入口时，复用共享 DexPc 入口接管旧自身帧的 `invoke-direct`／range，再走同一 DoCall／marker 续接。解析仍交给命名 `ResolveMethod<kNoChecks>`；它不是 checked 解析边界，不能借其 TLS 上下文放宽成员访问。精确指令、方法 DEX 身份与定义加载器、private 实例目标，以及 ART `GetObsoleteClass` 历史链必须匹配；构造器排除。字段指令及外部调用保留原访问检查。删除原观察用 `CanAccessMember` Hook，不新增 Hook 所有者、JVMTI 环境或迁移路径。自证明实际完成 direct 调用后才记录边界位，准备或观察不能代替成功。
 
 `privateSelfContinuationDirectBoundary` 报告选中的 `throwing-access`、`dex-pc-direct`、`modern-selector` 或 `unavailable`；选中仍不代表证明或准入。`…DirectAccessProofs` 的 1／2 表示类／接口真实 direct 成功，8 表示精确 DexPc direct 调用实际完成（旧观察位 4 不再产生）。API 33 Debug 可屏蔽 throwing 入口验证受限替代，禁用替代则必须在自证明前失败、应用返回 71。API 36 保留现代选择及 BindTo 入口。API 30–32 的候选证明与设备准入相互独立，没有设备证据仍保持 71；API 33 强制路径不能证明旧版异常 ABI 或 OEM 调用边界。
+
+查找探针的完整内部类、接口层级与方法名由库的 consumer 规则保留。Native 通过稳定入口执行探针，探针又用字符串名称查找成员；仅保留外部探针类不足以阻止 R8 改名内部成员，可能使运行时证明拒绝准入。发布规则以实际缩减后探针调用验证。

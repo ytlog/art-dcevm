@@ -28,7 +28,7 @@ jmethodID public_recursive=reinterpret_cast<jmethodID>(23), interface_recursive=
 int test_api=36;
 extern "C" int android_get_device_api_level(){return test_api;}
 bool install_failure, pending, static_method=true, interface_class=true, scope=true, missing_local=false;
-bool type_valid=true, name_failure=false, boot=false, obsolete=false;
+bool type_valid=true, name_failure=false, boot=false, obsolete=false, public_class=true;
 int requested_kind=0;
 const char* requested_name="value";
 const char* member_signature="()LResult;";
@@ -82,7 +82,7 @@ void Delete(JNIEnv*,jobject){}
 jboolean Exception(JNIEnv*){return pending;}
 void Clear(JNIEnv*){pending=false;}
 jboolean Instance(JNIEnv*,jobject o,jclass){return o==type&&type_valid;}
-jint IntField(JNIEnv*,jobject o,jfieldID f){Require(o==owner&&f==flags_field,"wrong Class flag field");return (interface_class?0x201:1)|(obsolete?0x00200000:0);}
+jint IntField(JNIEnv*,jobject o,jfieldID f){Require(o==owner&&f==flags_field,"wrong Class flag field");return (interface_class?0x200:0)|(public_class?1:0)|(obsolete?0x00200000:0);}
 jobject ObjectField(JNIEnv*,jobject o,jfieldID f){Require(o==type&&f==return_field,"wrong MethodType field");return requested;}
 jsize Length(JNIEnv*,jarray a){Require(a==arguments||a==actual_arguments,"wrong parameter array");return a==arguments?parameters.size():actual_parameters.size();}
 jobject Element(JNIEnv*,jobjectArray a,jsize i){auto& list=a==arguments?parameters:actual_parameters;Require((a==arguments||a==actual_arguments)&&i>=0&&size_t(i)<list.size(),"wrong parameter element");return list[i];}
@@ -102,6 +102,11 @@ void Run(JNIEnv* jni,jclass,jmethodID method,va_list) {
   pending=false;
   reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments);
   pending=false; // The Java helper catches the access exception.
+  if (reinterpret_cast<uintptr_t>(method)==19 && mode!=12) {
+    interface_class=false; static_method=true;
+    reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments);
+    interface_class=true; pending=false;
+  }
   if (reinterpret_cast<uintptr_t>(method)!=19 && mode!=10) {
     static_method=false; recursive_levels=3;
     reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments);
@@ -180,7 +185,7 @@ int main(int argc,char** argv){try{
  parameters={reinterpret_cast<jclass>(80)};Require(invoke()==reflected&&!pending,"matching instance identities did not delegate");
  parameters.clear();actual_parameters.clear();member_signature="()LResult;";static_method=true;interface_class=true;
  lookup_static=true;static_method=false;
- if(mode==8||mode==9){
+ if(mode==8||mode==9||mode==12){
   const int before=calls;
   Require(invoke()==reflected&&!pending&&calls==before+1&&access_throws==5,
           "missing static service/proof disabled virtual protection or intercepted unproved static frames");
@@ -191,6 +196,21 @@ int main(int argc,char** argv){try{
  requested=reinterpret_cast<jclass>(71);Require(!invoke()&&pending&&access_throws==7,"static return loader alias fell through");requested=reinterpret_cast<jclass>(70);
  member_signature="(LParam;)LResult;";parameters={reinterpret_cast<jclass>(81)};actual_parameters={reinterpret_cast<jclass>(80)};
  Require(!invoke()&&pending&&access_throws==8,"static parameter loader alias fell through");
+ interface_class=false;
+ Require(!invoke()&&pending,"ordinary static parameter alias fell through");
+ parameters={reinterpret_cast<jclass>(80)};
+ Require(invoke()==reflected&&!pending,"matching ordinary static identities did not delegate");
+ requested=reinterpret_cast<jclass>(71);
+ Require(!invoke()&&pending,"ordinary static return alias fell through");
+ parameters={reinterpret_cast<jclass>(81)};
+ Require(!invoke()&&pending,"ordinary static double alias fell through");
+ scope=false;Require(invoke()==reflected&&!pending,"ordinary static reflection intercepted");scope=true;
+ public_class=false;Require(invoke()==reflected&&!pending,"nonpublic static owner intercepted");public_class=true;
+ boot=true;Require(invoke()==reflected&&!pending,"boot static filtering bypassed");boot=false;
+ missing_local=true;Require(!invoke()&&pending,"unreadable ordinary static local accepted");missing_local=false;
+ requested=reinterpret_cast<jclass>(70); parameters.clear(); actual_parameters.clear();member_signature="()LResult;";
+ requested_kind=1;Require(invoke()==reflected&&!pending,"wrong ordinary static descriptor did not delegate");requested_kind=0;
+ interface_class=true;
  }
  lookup_static=false;parameters.clear();actual_parameters.clear();member_signature="()LResult;";
  static_method=false; requested=reinterpret_cast<jclass>(71);
@@ -224,7 +244,7 @@ def main():
         command=[shutil.which('clang++') or shutil.which('c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I'+str(work),'-I'+str(native),'-I'+str(include),'-I'+str(include/platform),'-I'+str(ROOT/'third_party/jvmti'),str(source),str(native/'platform/common/method_handle_lookup.cc'),'-o',str(binary)]
         result=subprocess.run(command,capture_output=True,text=True);(evidence/'compile.log').write_text(result.stdout+result.stderr)
         if result.returncode:raise RuntimeError('Lookup compilation failed; inspect ignored evidence')
-        for mode in range(12):
+        for mode in range(13):
             result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True,timeout=30);(evidence/f'case-{mode}.log').write_text(result.stdout+result.stderr)
             if result.returncode:raise RuntimeError('Lookup guard case failed; inspect ignored evidence')
             print(result.stdout.strip())

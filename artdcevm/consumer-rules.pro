@@ -11,7 +11,8 @@
 -keep class com.github.ytlog.artdcevm.internal.InterfaceLinkProbe { *; }
 # Native startup verifies lookup arguments through this exact Java contract.
 -keep class com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe { *; }
--keep interface com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe$StaticOwner { *; }
+# Method names and the inherited interface chain are part of the live proof.
+-keep class com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe$* { *; }
 # Native preparation verifies the bootstrap BindTo entry through this probe.
 -keep class com.github.ytlog.artdcevm.internal.BoundMethodHandleProbe { *; }
 -keep interface com.github.ytlog.artdcevm.internal.BoundMethodHandleProbe$Contract { *; }
