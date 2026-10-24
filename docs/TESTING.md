@@ -4,6 +4,24 @@
 
 本页说明如何构建、执行测试与核对诊断；已有公开结论见 [COMPATIBILITY.md](COMPATIBILITY.md)，拒绝规则见 [LIMITATIONS.md](LIMITATIONS.md)。测试结束后的诊断用于证明覆盖，不应被接入方用作提交前开关。
 
+## 真实 Android 编辑联调
+
+开发体验验证放在同级 `android-compose-hotreload` 工程，使用正常 Kotlin／Java → D8 → 设备 runtime 路径。先冻结引擎源码，再以独立版本发布 Release AAR 到 Maven Local，避免覆盖公开版本：
+
+```sh
+ENGINE_VERSION=0.1.0-dev.$(git rev-parse --short=8 HEAD)
+./gradlew :artdcevm:publishToMavenLocal -PpublishVersion="$ENGINE_VERSION"
+cd ../android-compose-hotreload
+python3 tools/real-edit-test.py --serial DEVICE_SELECTOR --device-id local-apiNN \
+  --art-dcevm-version "$ENGINE_VERSION" --scenario-group full
+```
+
+`DEVICE_SELECTOR` 是本机选择器占位符，不能写入提交的证据。消费方仅显式指定 `artDcevmVersion` 时从 Maven Local 解析引擎；通常仍使用公开版本。脚本记录匿名设备、源码版本、AAR／APK／引擎哈希，核对实际安装包与本地 AAR 的动态库，原始输出保存在消费方已忽略的 `build/evidence/`。
+
+优先验证保留输入、详情页选择、ViewModel 与独立 `remember` 状态时修改业务逻辑、渲染和已注册 lambda；再验证新增类、批次拒绝与后续恢复。每组连续更新在同一进程执行，并请求 GC、切换前后台。开发期按 `business`、`rendering`、`callbacks`、`recovery` 分组定位，冻结后执行双设备 `full`。旧回调改体、插入 lambda、新增捕获与新注册回调分别验收；新回调成功不能代替旧回调通过。
+
+该联调不能替代本仓库要求的引擎矩阵，也不表示历史性能越线或长停顿已解决。引擎源码未改时，底层冻结证据保留原始版本与产物来源，不写成新样例 APK 实测。
+
 ## 准备与主机检查
 
 源码构建需要 JDK 17 或以上、Android SDK 37、NDK 27.2.12479018、CMake 4.3.4，并在本地 `local.properties` 配置 `sdk.dir`。示例应用、库 Debug 与库 Release 必须分别构建，才能核对测试隔离：

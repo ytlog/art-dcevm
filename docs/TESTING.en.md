@@ -4,6 +4,24 @@ English | [中文](TESTING.md)
 
 This page covers builds, test execution and diagnostic checks. See [COMPATIBILITY.en.md](COMPATIBILITY.en.md) for existing public conclusions and [LIMITATIONS.en.md](LIMITATIONS.en.md) for rejection rules. Post-test diagnostics establish coverage; integrators must not turn them into pre-submission switches.
 
+## Real Android edit workflow
+
+Keep developer workflow cases in the sibling `android-compose-hotreload` project, using the normal Kotlin/Java → D8 → device runtime path. Freeze the engine source and publish a distinct Release AAR version to Maven Local:
+
+```sh
+ENGINE_VERSION=0.1.0-dev.$(git rev-parse --short=8 HEAD)
+./gradlew :artdcevm:publishToMavenLocal -PpublishVersion="$ENGINE_VERSION"
+cd ../android-compose-hotreload
+python3 tools/real-edit-test.py --serial DEVICE_SELECTOR --device-id local-apiNN \
+  --art-dcevm-version "$ENGINE_VERSION" --scenario-group full
+```
+
+`DEVICE_SELECTOR` is a local placeholder; never commit its real value. The consumer uses Maven Local for the engine only with an explicit `artDcevmVersion`; normal builds retain the published version. The runner records anonymous device information, source revision and AAR/APK/engine hashes, checks the installed APK and packaged native library against the local AAR, and keeps raw evidence in the consumer's ignored `build/evidence/`.
+
+Prioritize business logic, rendering and registered lambdas while retaining input, detail selection, the ViewModel and an unrelated `remember` scope. Then cover new classes, rejected batches and recovery. Each group performs consecutive updates in one process, requests GC and backgrounds/resumes the Activity. Use `business`, `rendering`, `callbacks` or `recovery` during development; run `full` on both devices after freezing. Check existing callback bodies, inserted lambdas, added captures and newly registered callbacks separately; success of a new callback does not prove an old callback works.
+
+This workflow does not replace the required engine matrix or resolve historical performance and pause failures. When engine source is unchanged, retain the original revision and artifact provenance of reused engine evidence; do not describe it as execution of the new sample APK.
+
 ## Preparation and host checks
 
 Source builds require JDK 17 or later, Android SDK 37, NDK 27.2.12479018, CMake 4.3.4 and `sdk.dir` in local `local.properties`. Build the sample app, library Debug and library Release separately to check test isolation:
