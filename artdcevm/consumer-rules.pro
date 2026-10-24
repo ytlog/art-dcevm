@@ -21,3 +21,7 @@
 # Exact isolated identities and old call sites are part of the runtime proof.
 -keep class com.github.ytlog.artdcevm.internal.PrivateContinuationProbe { *; }
 -keep class com.github.ytlog.artdcevm.internal.PrivateContinuationProbe$* { *; }
+
+# Native preparation proves most-specific public method enumeration.
+-keep class com.github.ytlog.artdcevm.internal.MethodEnumerationProbe { *; }
+-keep class com.github.ytlog.artdcevm.internal.MethodEnumerationProbe$* { *; }

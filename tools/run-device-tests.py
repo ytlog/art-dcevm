@@ -1605,6 +1605,17 @@ def interface_symbol_checks(kind, changed, late=True):
                        _key+"Null":"java.lang.NullPointerException", _key+"BodyException":"java.lang.IllegalStateException",
                        _key+"WrongReturn":"java.lang.NoSuchMethodException", _key+"AccessDenied":"java.lang.IllegalAccessException", _key+"BridgePresent":True, _key+"Reflection":True})
     result.update(covariantOverride="override", covariantExact="after" if changed else "before")
+    for _slot in range(9):
+        _key = "enumeration" + str(_slot)
+        _value = "override" if _slot == 8 else "after" if changed else "before"
+        result.update({_key+"BridgeOwner":True, _key+"Bridge":True, _key+"Synthetic":True,
+                       _key+"Default":2 <= _slot < 8, _key+"NarrowOwner":True,
+                       _key+"Call":_value, _key+"NarrowCall":_value, _key+"Cached":_value,
+                       _key+"Null":"java.lang.NullPointerException",
+                       _key+"Body":"override" if _slot==8 else "java.lang.IllegalStateException",
+                       _key+"Declared":_slot in (0,2,8)})
+        if 2 <= _slot < 8: result.update({_key+"RankOwner":True, _key+"RankCall":7})
+    result.update(enumerationExtraOwner=True, enumerationExtraCall=97)
     result.update(childStaticResolution="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else "java.lang.IllegalAccessException",
                   childStaticWrongReturn="java.lang.NoSuchMethodException",parentStaticWrongReturn="java.lang.NoSuchMethodException",
                   parentStaticAliasedParameter="java.lang.IllegalAccessException",childStaticAliasedReturn="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException",

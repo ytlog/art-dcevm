@@ -1,3 +1,4 @@
+#include "platform/common/method_enumeration.h"
 #include "platform/common/structural_redefine_internal.h"
 #include "platform/common/constructor_history.h"
 #include "platform/common/private_continuation.h"
@@ -293,6 +294,7 @@ jvmtiError RouteOnce(jvmtiEnv* env, jint count, const jvmtiClassDefinition* defi
         // Public local access can update boot entry points. Request it only for
         // an interface batch, while still Native and before the loaded-class view.
         if (method_handle_lookup::Prepare(jni, process->snapshot_env)) method_handle_lookup::Enable();
+        if (method_enumeration::Prepare(jni, process->snapshot_env)) method_enumeration::Enable();
         continue;
       }
       Diagnose(Signature(definitions[i].klass) + ": " + (interfaces ? interfaces->RuntimeState() : process->interface_runtime), true);

@@ -67,12 +67,70 @@ public final class InterfaceSymbolState {
     public static class CovariantOverride extends InterfaceSymbolFixture.Peer {
         @Override public String covariant(boolean fail) { return "override"; }
     }
-    public interface CovariantRoot { Object covariant(boolean fail); }
+    public interface CovariantRoot { Object covariant(boolean fail); default int rank() { return 1; } }
     public interface CovariantInterface extends CovariantRoot {
+        @Override default int rank() { return 7; }
         @Override default String covariant(boolean fail) { return new InterfaceSymbolFixture.Peer().covariant(fail); }
     }
     public interface CovariantInterfaceLeaf extends CovariantInterface { }
     public static class CovariantReceiver implements CovariantInterfaceLeaf { }
+    public interface EnumerationLeft extends CovariantInterface { }
+    public interface EnumerationRight extends CovariantInterface { }
+    public interface EnumerationExtra { default int extra() { return 97; } }
+    public interface EnumerationDiamond extends EnumerationLeft, EnumerationRight, EnumerationExtra { }
+    public interface EnumerationReverse extends EnumerationRight, EnumerationLeft, EnumerationExtra { }
+    public static class EnumerationReceiver implements EnumerationDiamond { }
+    private final Method[] enumerationCache = new Method[9];
+    private static Method enumerated(Class<?> owner, String name, Class<?> result, Class<?>... parameters) throws Exception {
+        Method selected = null;
+        for (Method method : owner.getMethods()) {
+            if (!method.getName().equals(name) || method.getReturnType() != result
+                    || !java.util.Arrays.equals(method.getParameterTypes(),parameters)) continue;
+            if (selected != null) throw new AssertionError("duplicate enumeration for " + name);
+            selected = method;
+        }
+        if (selected == null) throw new NoSuchMethodException(name);
+        return selected;
+    }
+    private void verifyEnumeration(Check check, String prefix, boolean changed) throws Exception {
+        Class<?>[] owners = {InterfaceSymbolFixture.Peer.class, CovariantLeaf.class, CovariantInterface.class,
+                CovariantInterfaceLeaf.class, CovariantReceiver.class, EnumerationDiamond.class,
+                EnumerationReverse.class, EnumerationReceiver.class, CovariantOverride.class};
+        Object[] targets = {peer, new CovariantLeaf(), new CovariantReceiver(), new CovariantReceiver(),
+                new CovariantReceiver(), new EnumerationReceiver(), new EnumerationReceiver(),
+                new EnumerationReceiver(), new CovariantOverride()};
+        for (int i = 0; i < owners.length; ++i) {
+            final int slot = i; Class<?> owner = owners[i]; Object target = targets[i];
+            Class<?> declaring = i < 2 ? InterfaceSymbolFixture.Peer.class : i == 8 ? CovariantOverride.class : CovariantInterface.class;
+            String key = prefix + "enumeration" + i;
+            String value = i == 8 ? "override" : changed ? "after" : "before";
+            Method bridge = enumerated(owner,"covariant",Object.class,boolean.class);
+            Method narrow = enumerated(owner,"covariant",String.class,boolean.class);
+            check.eq(key+"BridgeOwner", true, bridge.getDeclaringClass() == declaring);
+            check.eq(key+"Bridge", true, bridge.isBridge());
+            check.eq(key+"Synthetic", true, bridge.isSynthetic());
+            check.eq(key+"Default", i >= 2 && i < 8, bridge.isDefault());
+            check.eq(key+"NarrowOwner", true, narrow.getDeclaringClass() == declaring);
+            check.eq(key+"Call", value, result(() -> bridge.invoke(target,false)));
+            check.eq(key+"NarrowCall", value, result(() -> narrow.invoke(target,false)));
+            check.eq(key+"Cached", value, result(() -> {
+                if (enumerationCache[slot] == null) enumerationCache[slot] = bridge;
+                return enumerationCache[slot].invoke(target,false);
+            }));
+            check.eq(key+"Null", "java.lang.NullPointerException", result(() -> bridge.invoke(null,false)));
+            check.eq(key+"Body", i == 8 ? "override" : "java.lang.IllegalStateException", result(() -> bridge.invoke(target,true)));
+            check.eq(key+"Declared", i == 0 || i == 2 || i == 8,
+                    java.util.Arrays.stream(owner.getDeclaredMethods()).anyMatch(m -> m.getName().equals("covariant")));
+            if (i >= 2 && i < 8) {
+                Method rank = enumerated(owner,"rank",int.class);
+                check.eq(key+"RankOwner", true, rank.getDeclaringClass() == CovariantInterface.class);
+                check.eq(key+"RankCall", 7, rank.invoke(target));
+            }
+        }
+        Method extra = enumerated(EnumerationDiamond.class,"extra",int.class);
+        check.eq(prefix+"enumerationExtraOwner", true, extra.getDeclaringClass() == EnumerationExtra.class);
+        check.eq(prefix+"enumerationExtraCall", 97, extra.invoke(new EnumerationReceiver()));
+    }
     private final MethodHandle[] covariantHandles = new MethodHandle[5];
     public Class<?> aliasReturn;
     private Method lateChild, lateParent;
@@ -300,6 +358,7 @@ public final class InterfaceSymbolState {
                     "covariant",MethodType.methodType(Object.class,boolean.class));
             return (Object) handle.invokeExact(peer,false);
         }));
+        verifyEnumeration(check,prefix,changed);
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }

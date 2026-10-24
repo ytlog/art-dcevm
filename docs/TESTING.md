@@ -329,12 +329,15 @@ JIT 预热现在通过独立 JNI 循环真实调用 workload：三个 `*Mega` �
 
 `interface-symbols` 另验普通类已声明静态方法的参数／返回类型加载器别名（含两者同时不同）、错误描述符、匹配参数的真实调用、null、返回对象身份及普通反射负例；失败批次、提交、恢复和 GC 前后均必须有证据。共享 JBR 探针使用相同用例。主机回归另验证普通类静态活参数缺失时不发布 static 证明，以及 bootstrap 类、未通过独立证明的非 public 类与不匹配调用方继续委托。
 
-`python3 tools/test-lookup-probe-shrinking.py [--java-home <jdk>]` 用实际 consumer 规则执行 R8，再在 JVM 中分别运行缩减后的 virtual／static／inherited-static／nonpublic-static／bridge 探针。它验证字符串查找所需的方法及内部接口层级没有被混淆破坏；仅保留最早的 StaticOwner 不能保护后来增加的探针。该主机结果验证 Java 发布契约，不替代 ART 活帧与设备证明。
+`python3 tools/test-lookup-probe-shrinking.py [--java-home <jdk>]` 用实际 consumer 规则执行 R8，再在 JVM 中分别运行缩减后的 virtual／static／inherited-static／nonpublic-static／bridge／enumeration 探针。它验证字符串查找所需的方法及内部接口层级没有被混淆破坏；仅保留最早的 StaticOwner 不能保护后来增加的探针。该主机结果验证 Java 发布契约，不替代 ART 活帧与设备证明。
 
 
-`interface-symbols` 另覆盖普通类一层／两层继承静态方法的真实调用、null、对象身份、遮蔽与重载、跨加载器参数／返回类型、错误描述符和声明反射边界。private/protected 访问拒绝、非 public 父类 public 方法、接口 static 不被类继承与方法体异常独立断言。同批 Peer 的 static 方法改体，缓存与新建的子类查找句柄必须随成功事务更新，在失败和恢复后保留正确方法体；每种状态也在 GC 后验证。固定 JBR 共享夹具按解释器和 JIT 模式运行。主机查找保护现有 25 组测试另验缺少 `FindClassMethod`、未观察继承声明、证明异常、boot 声明与公开 ID 映射失败；R8 测试独立调用 virtual、static、inherited-static 、nonpublic-static 和 bridge 五种缩减后证明。冻结后补跑 API 33／36 完整普通／CheckJNI 功能矩阵，性能越线和历史停顿仍须单独记录。
+`interface-symbols` 另覆盖普通类一层／两层继承静态方法的真实调用、null、对象身份、遮蔽与重载、跨加载器参数／返回类型、错误描述符和声明反射边界。private/protected 访问拒绝、非 public 父类 public 方法、接口 static 不被类继承与方法体异常独立断言。同批 Peer 的 static 方法改体，缓存与新建的子类查找句柄必须随成功事务更新，在失败和恢复后保留正确方法体；每种状态也在 GC 后验证。固定 JBR 共享夹具按解释器和 JIT 模式运行。主机查找保护现有 25 组测试另验缺少 `FindClassMethod`、未观察继承声明、证明异常、boot 声明与公开 ID 映射失败；R8 测试独立调用 virtual、static、inherited-static、nonpublic-static、bridge 和 enumeration 六种缩减后证明。冻结后补跑 API 33／36 完整普通／CheckJNI 功能矩阵，性能越线和历史停顿仍须单独记录。
 
-`interface-symbols` 另在每轮失败、提交、恢复和 GC 后验证非 public 普通类的声明／继承静态方法：合法同包调用、null、对象身份、同名类型的加载器身份、错误描述符、普通反射不变，以及 publicLookup／无权限 Lookup／同包名不同加载器 Lookup 的拒绝。跨加载器 Lookup 必须来自实际 alias Class；独立检查 lookupClass 身份。非 public 子类的新旧句柄必须随同批父类改体更新。主机 25 组测试另验非 public 证明无观察、抛异常、只观察声明或只观察继承，以及未扩大到非 public 接口；五种 R8 缩减后证明（virtual/static/inherited-static/nonpublic-static/bridge）分别实际调用。
+`interface-symbols` 另在每轮失败、提交、恢复和 GC 后验证非 public 普通类的声明／继承静态方法：合法同包调用、null、对象身份、同名类型的加载器身份、错误描述符、普通反射不变，以及 publicLookup／无权限 Lookup／同包名不同加载器 Lookup 的拒绝。跨加载器 Lookup 必须来自实际 alias Class；独立检查 lookupClass 身份。非 public 子类的新旧句柄必须随同批父类改体更新。主机 25 组测试另验非 public 证明无观察、抛异常、只观察声明或只观察继承，以及未扩大到非 public 接口；六种 R8 缩减后证明（virtual/static/inherited-static/nonpublic-static/bridge/enumeration）分别实际调用。
 
 
-`interface-symbols` 的协变桥接矩阵使用同一固定 JBR／ART 夹具：普通类、继承类、接口、接口叶子和实现类分别查找 Object 与 String 返回类型，验证完整句柄类型、新建／缓存／invokeExact 调用、覆写接收者、null、目标异常、错误描述符及无权限 Lookup；同批 Peer 改体、失败回滚、恢复与 GC 后重复检查。声明存在性从实际声明类／接口独立枚举，不能把 ART 的继承桥接枚举差异伪装成已修复。主机 25 组另含桥接证明无观察、抛异常、缺类／直接接口／递归接口观察，以及 bootstrap、普通反射和加载器身份保护。R8 独立运行新增 bridge 证明。共享查找路径变更须冻结后完成双设备普通／CheckJNI 全矩阵；原性能与停顿问题单独保留。
+`interface-symbols` 的协变桥接矩阵使用同一固定 JBR／ART 夹具：普通类、继承类、接口、接口叶子和实现类分别查找 Object 与 String 返回类型，验证完整句柄类型、新建／缓存／invokeExact 调用、覆写接收者、null、目标异常、错误描述符及无权限 Lookup；同批 Peer 改体、失败回滚、恢复与 GC 后重复检查。声明存在性从实际声明类／接口独立枚举；后续公开枚举矩阵另验证继承视图中的最具体声明。主机 25 组另含桥接证明无观察、抛异常、缺类／直接接口／递归接口观察，以及 bootstrap、普通反射和加载器身份保护。R8 独立运行新增 bridge 证明。共享查找路径变更须冻结后完成双设备普通／CheckJNI 全矩阵；原性能与停顿问题单独保留。
+
+
+`interface-symbols` 的公开枚举矩阵另通过 `getMethods()` 独立寻找完整签名，拒绝重复条目，并检查真实 declaring Class、bridge/synthetic/default 标志。覆盖声明类、继承类、接口叶子、实现类、菱形的两种父接口顺序、类覆写优先、无关方法保留、普通实例覆盖、缓存／新 Method 的真实调用、null／目标异常，以及改体、失败事务、恢复与 GC。此组与固定 JBR 的解释器／JIT 共用夹具。`python3 tools/test-method-enumeration-host.py` 的 22 组生产路径验证覆盖命名入口别名、能力／方法身份／全局根／活参数缺失、四路部分证明、异常、失败安装／解除、重入、类优先、无关／boot／static 范围及类型身份。R8 用实际 consumer 规则运行新增 enumeration 证明。修改共享事务准备和反射入口后，冻结运行 API 33／36 完整普通／CheckJNI；新枚举性能未验收，旧性能与停顿证据不得改标通过。

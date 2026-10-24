@@ -581,3 +581,8 @@ Android 11–14 与 15–17 的 PointerSize 声明分别保留在版本 ABI 目�
 
 
 协变返回值桥接查找复用现有 declared-method Hook 和公开 JVMTI ID／反射转换。在已匹配的 `getInstanceMethod → Lookup.findVirtual` 或固定递归调用链上，参数／返回 Class 身份检查成功后，仅将完整描述符匹配的 ACC_BRIDGE 实例方法交回 libcore；不另建方法、转换返回值或修改 DEX。独立 `runBridge` 要求普通类、直接接口、递归接口三类 native 观察，以及真实调用和返回类型检查。证明异常或缺失任一路径均保留原查找行为，不禁用已有虚／静态查找保护；原访问控制与 ART 事务仍负责其既有工作，无新增命名服务、ABI 或 Hook 所有者。
+
+
+应用接口公开方法枚举使用独立 `method_enumeration` 通用模块与命名 `Class_getDeclaredMethodsUnchecked(JNIEnv*, jobject, jboolean)` FastNative 入口，单一 Hook 所有者。仅在 publicOnly 且精确 `getPublicMethodsInternal(List) → getMethods()` 帧标识匹配时，通过公开 JVMTI 读取当前 Class 和最后一个传入的 List；不推算对象字段、机器码地址或 DEX 寄存器偏移。固定源码和运行时证明共同约束该活参数契约。
+
+ART 仍负责生成／过滤 Method 数组。枚举保护以当前 Class 身份检查继承关系，按名称、返回 Class 和逐项参数 Class 匹配完整签名，将 List 中的严格祖先应用接口条目替换为当前更具体声明。类条目、无关接口、static、boot 和普通声明枚举不被替换；原排序去重保留。所有应用类／Method 根仅为本次 JNI 局部引用，不新增跨事务成员缓存。准备探针要求接口与实现类、bridge 与非 bridge 四种替换观察，并验证实际调用、类实现优先和声明枚举隔离；部分观察、异常、安装或解除临时 Hook 失败不发布能力。处理元数据时的重入委托原入口。该模块不参与迁移、引用替换、去优化或缓存失效；这些仍由 ART 原事务执行。
