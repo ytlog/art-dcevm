@@ -19,12 +19,12 @@ jmethodID collect = nullptr, get_methods = nullptr;
 jmethodID list_size = nullptr, list_get = nullptr, list_set = nullptr;
 jmethodID declaring = nullptr, name = nullptr, return_type = nullptr, parameters = nullptr, modifiers = nullptr;
 jint list_slot = -1;
-bool verified = false, static_verified = false, bootstrap_verified = false, override_verified = false;
-std::atomic<bool> enabled{false}, static_enabled{false}, bootstrap_enabled{false}, override_enabled{false};
+bool verified = false, static_verified = false, bootstrap_verified = false, override_verified = false, bootstrap_instance_verified = false;
+std::atomic<bool> enabled{false}, static_enabled{false}, bootstrap_enabled{false}, override_enabled{false}, bootstrap_instance_enabled{false};
 std::mutex install_mutex;
 thread_local bool preparing = false, probing = false, processing = false;
-thread_local unsigned observed = 0, static_observed = 0, bootstrap_observed = 0, override_observed = 0;
-thread_local bool static_probing = false, bootstrap_probing = false, override_probing = false;
+thread_local unsigned observed = 0, static_observed = 0, bootstrap_observed = 0, override_observed = 0, bootstrap_instance_observed = 0;
+thread_local bool static_probing = false, bootstrap_probing = false, override_probing = false, bootstrap_instance_probing = false;
 constexpr jint kPublic = 0x0001, kStatic = 0x0008, kBridge = 0x0040, kInterface = 0x0200;
 
 template<class T> struct Local {
@@ -92,7 +92,8 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   bool app = false;
   if (!AppClass(jni, static_cast<jclass>(klass), &app)) return false;
   const bool candidate_app = app;
-  if (!candidate_app && !(bootstrap_probing || bootstrap_enabled.load(std::memory_order_acquire))) return true;
+  const bool refine_bootstrap = bootstrap_instance_probing || bootstrap_instance_enabled.load(std::memory_order_acquire);
+  if (!candidate_app && !(refine_bootstrap || bootstrap_probing || bootstrap_enabled.load(std::memory_order_acquire))) return true;
   jvmtiFrameInfo frames[3]{};
   jint count = 0;
   if (environment->GetStackTrace(nullptr, 0, 3, frames, &count)) return Failure(jni);
@@ -112,7 +113,9 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   if (environment->GetClassModifiers(static_cast<jclass>(root.value), &root_flags)) return Failure(jni);
   const jint size = jni->CallIntMethod(list.value, list_size);
   if (jni->ExceptionCheck()) return false;
-  const bool filter_static = static_probing || bootstrap_probing || static_enabled.load(std::memory_order_acquire);
+  const bool filter_static = candidate_app
+      ? static_probing || bootstrap_probing || static_enabled.load(std::memory_order_acquire)
+      : bootstrap_probing || bootstrap_enabled.load(std::memory_order_acquire);
   const bool inherited = !jni->IsSameObject(root.value, klass);
   const jsize length = jni->GetArrayLength(*methods);
   std::vector<jsize> retained;
@@ -130,7 +133,7 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
       if (static_probing) static_observed |= 4u;
     }
     if (filter_static) retained.push_back(m);
-    if (!candidate_app || !(candidate.flags & kPublic) || (candidate.flags & kStatic)) continue;
+    if ((!candidate_app && !refine_bootstrap) || !(candidate.flags & kPublic) || (candidate.flags & kStatic)) continue;
     for (jint i = 0; i < size; ++i) {
       Local<jobject> previous{jni, jni->CallObjectMethod(list.value, list_get, i)};
       if (!previous.value || jni->ExceptionCheck()) return Failure(jni);
@@ -143,7 +146,9 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
       // original deduplication policy; only a strict ancestor is replaced.
       if (!(old_flags & kInterface) || !jni->IsAssignableFrom(candidate.owner.value, existing.owner.value)) continue;
       if (!AppClass(jni, existing.owner.value, &app)) return false;
-      if (!app && !(override_probing || override_enabled.load(std::memory_order_acquire))) continue;
+      if (!candidate_app && app) continue; // Never replace application declarations with bootstrap candidates.
+      if (!app && !(override_probing || override_enabled.load(std::memory_order_acquire) ||
+                    (!candidate_app && refine_bootstrap))) continue;
       if (!candidate.Signature(next.value) || !existing.Signature(previous.value)) return false;
       if (!SameSignature(jni, candidate, existing)) {
         if (jni->ExceptionCheck()) return false;
@@ -151,6 +156,8 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
       }
       Local<jobject> displaced{jni, jni->CallObjectMethod(list.value, list_set, i, next.value)};
       if (jni->ExceptionCheck()) return false;
+      if (bootstrap_instance_probing && !candidate_app && !app) bootstrap_instance_observed |= root_flags & kInterface
+          ? candidate.flags & kBridge ? 1u : 4u : candidate.flags & kBridge ? 2u : 8u;
       if (override_probing && !app) override_observed |= root_flags & kInterface
           ? candidate.flags & kBridge ? 1u : 4u : candidate.flags & kBridge ? 2u : 8u;
       if (probing) observed |= root_flags & kInterface
@@ -255,6 +262,8 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_bootstrap = nullptr; }
   jmethodID run_override = jni->GetStaticMethodID(probe.value, "runBootstrapOverride", "()V");
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_override = nullptr; }
+  jmethodID run_bootstrap_instance = jni->GetStaticMethodID(probe.value, "runBootstrapInstance", "()V");
+  if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_bootstrap_instance = nullptr; }
   { std::lock_guard<std::mutex> lock(install_mutex);
     hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethods), HookSlot(&original)); }
   if (!hook) return false;
@@ -287,6 +296,14 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     override_verified = override_observed == 15 && !jni->ExceptionCheck();
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
+  bootstrap_instance_verified = false;
+  if (passed && run_bootstrap_instance) {
+    bootstrap_instance_observed = 0; probing = true; bootstrap_instance_probing = true;
+    jni->CallStaticVoidMethod(probe.value, run_bootstrap_instance);
+    bootstrap_instance_probing = false; probing = false;
+    bootstrap_instance_verified = bootstrap_instance_observed == 15 && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
   { std::lock_guard<std::mutex> lock(install_mutex);
     if (shadowhook_unhook(hook)) return false;
     hook = nullptr; }
@@ -298,6 +315,7 @@ bool Enable() {
   std::lock_guard<std::mutex> lock(install_mutex);
   if (!hook) hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethods), HookSlot(&original));
   if (!hook) return false;
+  bootstrap_instance_enabled.store(bootstrap_instance_verified, std::memory_order_release);
   override_enabled.store(override_verified, std::memory_order_release);
   bootstrap_enabled.store(bootstrap_verified, std::memory_order_release);
   static_enabled.store(static_verified, std::memory_order_release);

@@ -72,6 +72,47 @@ public final class MethodEnumerationProbe {
                 || BootstrapOverrideLeaf.class.getDeclaredMethods().length!=0)
             throw new AssertionError("bootstrap own or declared view changed");
     }
+    public interface BootstrapList extends java.util.List<String> { }
+    public interface BootstrapListLeaf extends BootstrapList { }
+    public static class BootstrapListReceiver extends java.util.AbstractList<String> implements BootstrapListLeaf {
+        public int size(){return 1;}
+        public String get(int i){if(i!=0)throw new IndexOutOfBoundsException();return "proof";}
+    }
+    public static class BootstrapListOwn extends BootstrapListReceiver {
+        @Override public java.util.Spliterator<String> spliterator(){return java.util.Spliterators.emptySpliterator();}
+    }
+    public interface BootstrapPath extends java.nio.file.Path { }
+    public interface BootstrapPathLeaf extends BootstrapPath { }
+    public abstract static class BootstrapPathReceiver implements BootstrapPathLeaf { }
+    public static void runBootstrapInstance() throws Exception {
+        for(Class<?> boot:new Class<?>[]{java.util.List.class,java.nio.file.Path.class})
+            if(boot.getClassLoader()!=Object.class.getClassLoader())throw new AssertionError("bootstrap identity");
+        Class<?>[] owners={BootstrapListLeaf.class,BootstrapListReceiver.class,BootstrapPathLeaf.class,BootstrapPathReceiver.class};
+        for(int i=0;i<owners.length;++i){
+            boolean path=i>=2;int count=0;
+            for(Method m:owners[i].getMethods()){
+                if(path ? !m.getName().equals("compareTo") || m.getParameterTypes().length!=1 || m.getParameterTypes()[0]!=Object.class : !m.getName().equals("spliterator"))continue;
+                if(m.getDeclaringClass()!=(path?java.nio.file.Path.class:java.util.List.class)
+                        || m.isBridge()!=path || m.isSynthetic()!=path || !m.isDefault())throw new AssertionError("bootstrap ancestor retained");
+                if(path){
+                    java.nio.file.Path value=java.nio.file.Paths.get("proof");
+                    if(!Integer.valueOf(0).equals(m.invoke(value,value)))throw new AssertionError("bootstrap bridge call");
+                }else{
+                    java.util.ArrayList<String> values=new java.util.ArrayList<>();
+                    ((java.util.Spliterator<String>)m.invoke(new BootstrapListReceiver())).forEachRemaining(values::add);
+                    if(!values.equals(java.util.Collections.singletonList("proof")))throw new AssertionError("bootstrap default call");
+                }
+                ++count;
+            }
+            if(count!=1)throw new AssertionError("incomplete bootstrap specificity");
+        }
+        for(Method m:BootstrapListOwn.class.getMethods())if(m.getName().equals("spliterator"))
+            if(m.getDeclaringClass()!=BootstrapListOwn.class || ((java.util.Spliterator<?>)m.invoke(new BootstrapListOwn())).estimateSize()!=0)
+                throw new AssertionError("class priority changed");
+        if(BootstrapPathLeaf.class.getDeclaredMethods().length!=0
+                || java.nio.file.Path.class.getDeclaredMethod("compareTo",Object.class).getDeclaringClass()!=java.nio.file.Path.class)
+            throw new AssertionError("declared view changed");
+    }
     public static void runBootstrapStatic() throws Exception {
         if (java.util.Comparator.class.getClassLoader()!=Object.class.getClassLoader()
                 || java.util.function.Function.class.getClassLoader()!=Object.class.getClassLoader())

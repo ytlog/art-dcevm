@@ -205,3 +205,6 @@ API 30–32 的续接适配目前仅为关闭准入的候选实现：已核对�
 
 
 应用接口覆写 bootstrap 祖先的实例声明现在另经独立 `runBootstrapOverride` 证明：`getMethods()` 对完整签名保留应用子接口声明及其 bridge/synthetic/default 属性。固定 JBR 的最具体声明合并不按加载器区别祖先；ART 的父接口先收集与原守卫的 bootstrap 祖先跳过共同导致旧声明残留。证明要求接口／实现类的桥接／普通方法四路 native 观察及真实调用；不依赖 static 证明，缺失／部分观察／异常只关闭此扩展。标准库声明作为替换候选、标准库根枚举、无关接口去重、类实现优先及 ART 原生过滤保持原策略。API 33／36 验证 Supplier、IntSupplier、Comparator、多层和两种菱形顺序、类覆写、缓存调用、改体／回滚／恢复与 GC。其他设备未验证；API 30–32 续接 71 不变，新增路径性能未单独验收，旧性能／停顿问题仍开放。
+
+
+Bootstrap 接口作为最具体实例声明候选时，另经独立 `runBootstrapInstance` 证明后支持应用枚举根：List／SortedSet 的 default 和 Path 的桥接声明可替换其 bootstrap 祖先，保留真实 declaring Class 及 bridge/synthetic/default 属性。只使用 ART 已过滤并创建的 Method，不恢复隐藏成员，也不以 bootstrap 声明替换应用声明。标准库根枚举、类实现优先、普通 declared 和无关接口去重继续保持原策略。证明须观察接口／实现类、桥接／普通方法四路成功替换并真实调用，缺失／部分观察／异常不启用；该证明不依赖旧 static 或应用覆写证明。API 33／36 覆盖集合默认方法、真实 Path 实现、缓存调用、改体／恢复／GC 和类型异常。其他设备仍未验证；API 30–32 续接 71 与原性能／停顿问题不变，新路径性能未单独验收。

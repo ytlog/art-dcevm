@@ -595,3 +595,8 @@ Bootstrap 接口 static 的应用继承过滤仍复用同一 Hook、类型化 Me
 
 
 Bootstrap 祖先被应用接口覆写的修正沿用原严格祖先关系、完整签名与活 List 替换路径；仅将独立证明通过后的 bootstrap 祖先纳入被替换项，仍不以 bootstrap 声明作为替换候选。公开 JVMTI 识别加载器，JNI Class 身份比较保证返回／参数类型一致。`runBootstrapOverride` 在基础最具体声明证明后独立执行，要求接口／实现类各自桥接／普通方法的四路成功替换，并验证类实现优先、原 bootstrap 调用及 declared 边界。失败保留已有能力；证明与启用复用唯一 Hook、串行事务准备和进程生命周期，无新增命名服务、ABI 或应用成员全局根。
+
+
+Bootstrap 实例候选继续使用同一枚举 Hook、严格祖先关系、完整签名与活 List 替换路径；候选和被替换祖先均为 bootstrap，当前根仍必须是应用 Class。原 native 可见性过滤先执行；不添加新的反射对象构造或私有入口。`runBootstrapInstance` 另证接口／实现类各自桥接／普通方法四路观察及真实调用、类优先与 declared 边界。独立状态失败不会覆盖旧能力；准备和生存期仍服从串行事务 Native 阶段及成功后常驻，无新增 ELF 符号、ABI 或 Hook 所有者。
+
+Bootstrap static 过滤按候选来源单独检查其证明状态；实例最具体声明证明通过不能代替 static 证明。即使应用 static 与 bootstrap 实例能力已启用，缺失 bootstrap static 证明时仍保留原静态枚举行为。

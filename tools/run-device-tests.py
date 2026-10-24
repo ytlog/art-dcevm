@@ -1616,6 +1616,12 @@ def interface_symbol_checks(kind, changed, late=True):
                        _key+"Declared":_slot in (0,2,8)})
         if 2 <= _slot < 8: result.update({_key+"RankOwner":True, _key+"RankCall":7})
     result.update(enumerationExtraOwner=True, enumerationExtraCall=97)
+    for _slot in range(9):
+        _key="bootDefault"+str(_slot);_path=_slot>=6
+        _value=(61 if changed else 59) if _path else ("[after]" if changed else "[before]")
+        result.update({_key+"Owner":True,_key+"Bridge":_path,_key+"Synthetic":_path,_key+"Default":True,_key+"Call":_value,_key+"Cached":_value})
+    result.update(bootDefaultNull="java.lang.NullPointerException",bootDefaultWrongType="java.lang.ClassCastException",
+                  bootDefaultClassPriority=True,bootDefaultDeclared=0,bootDefaultBootOwn=True)
     for _slot in range(7):
         _own = _slot == 6
         for _method in range(4):

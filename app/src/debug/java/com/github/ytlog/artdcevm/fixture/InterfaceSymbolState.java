@@ -113,6 +113,82 @@ public final class InterfaceSymbolState {
         check.eq(prefix+"bootOverrideBootCall",changed ? "after" : "before",original.invoke(new BootSpecificReceiver()));
         check.eq(prefix+"bootOverrideDeclared",0,BootSpecificLeaf.class.getDeclaredMethods().length);
     }
+    public interface BootList extends java.util.List<String> { }
+    public interface BootListLeaf extends BootList { }
+    public static class BootListReceiver extends java.util.AbstractList<String> implements BootListLeaf {
+        public int size() { return 1; }
+        public String get(int i) { if(i!=0)throw new IndexOutOfBoundsException();return new InterfaceSymbolFixture.Peer().covariant(false); }
+    }
+    public interface BootSorted extends java.util.SortedSet<String> { }
+    public interface BootSortedLeaf extends BootSorted { }
+    public static class BootSortedReceiver extends java.util.AbstractSet<String> implements BootSortedLeaf {
+        private java.util.SortedSet<String> values() { return new java.util.TreeSet<String>(java.util.Collections.singleton(new InterfaceSymbolFixture.Peer().covariant(false))); }
+        public int size() { return 1; }
+        public java.util.Iterator<String> iterator() { return values().iterator(); }
+        public java.util.Comparator<? super String> comparator() { return null; }
+        public java.util.SortedSet<String> subSet(String a,String b) { return values().subSet(a,b); }
+        public java.util.SortedSet<String> headSet(String a) { return values().headSet(a); }
+        public java.util.SortedSet<String> tailSet(String a) { return values().tailSet(a); }
+        public String first() { return values().first(); }
+        public String last() { return values().last(); }
+    }
+    public interface BootPath extends java.nio.file.Path { }
+    public interface BootPathLeaf extends BootPath { }
+    public abstract static class BootPathBase implements BootPathLeaf { }
+    public static class BootPathReceiver extends BootPathBase {
+        private final java.nio.file.Path path=java.nio.file.Paths.get("sample");
+        public java.nio.file.FileSystem getFileSystem(){return path.getFileSystem();}
+        public boolean isAbsolute(){return path.isAbsolute();}
+        public java.nio.file.Path getRoot(){return path.getRoot();}
+        public java.nio.file.Path getFileName(){return path.getFileName();}
+        public java.nio.file.Path getParent(){return path.getParent();}
+        public int getNameCount(){return path.getNameCount();}
+        public java.nio.file.Path getName(int n){return path.getName(n);}
+        public java.nio.file.Path subpath(int a,int b){return path.subpath(a,b);}
+        public boolean startsWith(java.nio.file.Path p){return path.startsWith(p);}
+        public boolean startsWith(String p){return path.startsWith(p);}
+        public boolean endsWith(java.nio.file.Path p){return path.endsWith(p);}
+        public boolean endsWith(String p){return path.endsWith(p);}
+        public java.nio.file.Path normalize(){return path.normalize();}
+        public java.nio.file.Path resolve(java.nio.file.Path p){return path.resolve(p);}
+        public java.nio.file.Path resolve(String p){return path.resolve(p);}
+        public java.nio.file.Path resolveSibling(java.nio.file.Path p){return path.resolveSibling(p);}
+        public java.nio.file.Path resolveSibling(String p){return path.resolveSibling(p);}
+        public java.nio.file.Path relativize(java.nio.file.Path p){return path.relativize(p);}
+        public java.net.URI toUri(){return path.toUri();}
+        public java.nio.file.Path toAbsolutePath(){return path.toAbsolutePath();}
+        public java.nio.file.Path toRealPath(java.nio.file.LinkOption... o) throws java.io.IOException{return path.toRealPath(o);}
+        public java.io.File toFile(){return path.toFile();}
+        public java.nio.file.WatchKey register(java.nio.file.WatchService w,java.nio.file.WatchEvent.Kind<?>[] k,java.nio.file.WatchEvent.Modifier... m) throws java.io.IOException{return path.register(w,k,m);}
+        public java.nio.file.WatchKey register(java.nio.file.WatchService w,java.nio.file.WatchEvent.Kind<?>... k) throws java.io.IOException{return path.register(w,k);}
+        public java.util.Iterator<java.nio.file.Path> iterator(){return path.iterator();}
+        public int compareTo(java.nio.file.Path p){if(p==null)throw new NullPointerException();return InterfaceSymbolFixture.Peer.staticValue();}
+    }
+    private final Method[] bootDefaultCache=new Method[9];
+    private void verifyBootDefaults(Check check,String prefix,boolean changed) throws Exception {
+        Class<?>[] owners={BootList.class,BootListLeaf.class,BootListReceiver.class,BootSorted.class,BootSortedLeaf.class,BootSortedReceiver.class,BootPath.class,BootPathLeaf.class,BootPathBase.class};
+        for(int i=0;i<owners.length;++i){
+            boolean path=i>=6;Class<?> expectedOwner=path?java.nio.file.Path.class:i>=3?java.util.SortedSet.class:java.util.List.class;
+            Method m=path?enumerated(owners[i],"compareTo",int.class,Object.class):enumerated(owners[i],"spliterator",java.util.Spliterator.class);
+            String key=prefix+"bootDefault"+i;
+            check.eq(key+"Owner",true,m.getDeclaringClass()==expectedOwner);
+            check.eq(key+"Bridge",path,m.isBridge());check.eq(key+"Synthetic",path,m.isSynthetic());check.eq(key+"Default",true,m.isDefault());
+            Object receiver=path?new BootPathReceiver():i>=3?new BootSortedReceiver():new BootListReceiver();
+            if(bootDefaultCache[i]==null)bootDefaultCache[i]=m;
+            for(int cached=0;cached<2;++cached){
+                Method call=cached==0?m:bootDefaultCache[i];Object actual;
+                if(path)actual=call.invoke(receiver,java.nio.file.Paths.get("target"));
+                else {java.util.ArrayList<String> values=new java.util.ArrayList<>();((java.util.Spliterator<String>)call.invoke(receiver)).forEachRemaining(values::add);actual=values.toString();}
+                check.eq(key+(cached==0?"Call":"Cached"),path?(Object)(changed?61:59):changed?"[after]":"[before]",actual);
+            }
+        }
+        Method bridge=enumerated(BootPathBase.class,"compareTo",int.class,Object.class);
+        check.eq(prefix+"bootDefaultNull","java.lang.NullPointerException",result(() -> bridge.invoke(new BootPathReceiver(),new Object[]{null})));
+        check.eq(prefix+"bootDefaultWrongType","java.lang.ClassCastException",result(() -> bridge.invoke(new BootPathReceiver(),"wrong")));
+        check.eq(prefix+"bootDefaultClassPriority",true,enumerated(BootPathReceiver.class,"compareTo",int.class,Object.class).getDeclaringClass()==BootPathReceiver.class);
+        check.eq(prefix+"bootDefaultDeclared",0,BootPathLeaf.class.getDeclaredMethods().length);
+        check.eq(prefix+"bootDefaultBootOwn",true,enumerated(java.nio.file.Path.class,"compareTo",int.class,Object.class).getDeclaringClass()==java.nio.file.Path.class);
+    }
     private Method bootEnumerationCache;
     private void verifyBootEnumeration(Check check, String prefix, boolean changed) throws Exception {
         Class<?>[] owners = {BootComparator.class, BootFunction.class, BootCombined.class,
@@ -511,6 +587,7 @@ public final class InterfaceSymbolState {
         verifyStaticEnumeration(check,prefix,kind,changed);
         verifyBootEnumeration(check,prefix,changed);
         verifyBootOverride(check,prefix,changed);
+        verifyBootDefaults(check,prefix,changed);
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }
