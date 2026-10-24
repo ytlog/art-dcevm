@@ -52,11 +52,13 @@ jint Throw(JNIEnv*,jclass,const char*){Require(!pending,"overwrote pending excep
 jboolean Same(JNIEnv*,jobject a,jobject b){return a==b;}
 jboolean Instance(JNIEnv*,jobject o,jclass c){return !wrong_list&&num(o)==600&&num(c)==3;}
 jboolean Assignable(JNIEnv*,jclass sub,jclass sup){Require(num(sub)==40,"reversed assignability query");return num(sup)==41;}
+int root_calls = 0;
 jmethodID MethodId(JNIEnv*,jclass,const char* n,const char*){
+ if(!std::strcmp(n,"runBootstrapRootStatic")){if(mode==77){pending=true;return nullptr;}return mode>=76?id<jmethodID>(43):nullptr;}
  if(!std::strcmp(n,"runStatic"))return mode>=22&&mode!=23&&mode!=58&&mode!=73?id<jmethodID>(39):nullptr;
- if(!std::strcmp(n,"runBootstrapInstance")){if(mode==62){pending=true;return nullptr;}return mode>=61?id<jmethodID>(42):nullptr;}
+ if(!std::strcmp(n,"runBootstrapInstance")){if(mode==62||mode==90){pending=true;return nullptr;}return mode>=61?id<jmethodID>(42):nullptr;}
  if(!std::strcmp(n,"runBootstrapOverride")){if(mode==48){pending=true;return nullptr;}return mode>=47&&mode!=73?id<jmethodID>(41):nullptr;}
- if(!std::strcmp(n,"runBootstrapStatic")){if(mode==36||mode==75){pending=true;return nullptr;}return mode>=35?id<jmethodID>(40):nullptr;}
+ if(!std::strcmp(n,"runBootstrapStatic")){if(mode==36||mode==75||mode==89){pending=true;return nullptr;}return mode>=35?id<jmethodID>(40):nullptr;}
  const char* names[]={"size","get","set","getModifiers","getDeclaringClass","getName","getReturnType","getParameterTypes","run"};
  for(int i=0;i<9;++i)if(!std::strcmp(n,names[i]))return id<jmethodID>(30+i);
  return nullptr;
@@ -104,6 +106,21 @@ jvmtiError Stack(jvmtiEnv*,jthread t,jint start,jint max,jvmtiFrameInfo* f,jint*
 jvmtiError LocalInstance(jvmtiEnv*,jthread t,jint depth,jobject* out){Require(!t&&depth==1,"wrong instance frame");*out=id<jobject>(own_root?40:42);return opaque_instance?JVMTI_ERROR_OPAQUE_FRAME:JVMTI_ERROR_NONE;}
 jvmtiError LocalObject(jvmtiEnv*,jthread t,jint depth,jint slot,jobject* out){Require(!t&&depth==1&&slot==8,"wrong list local");*out=id<jobject>(600);return opaque_local?JVMTI_ERROR_OPAQUE_FRAME:JVMTI_ERROR_NONE;}
 void Run(JNIEnv* jni,jclass,jmethodID m,va_list){
+ if(num(m)==43){
+  ++root_calls;
+  if(mode==88)Require(!method_enumeration::Prepare(jni,active_env),"nested bootstrap root proof admitted");
+  boot_root=boot_candidate=static_candidate=mixed_array=true;
+  array_failure=mode==83;set_failure=mode==84;opaque_instance=mode==85;opaque_local=mode==86;wrong_list=mode==87;
+  for(int path=0;path<3;++path){
+   if(mode==78||(mode>=79&&mode<=81&&path==mode-79))continue;
+   root_interface=path!=1;own_root=path==2;selected=previous;
+   reinterpret_cast<Entry>(replacement)(jni,id<jobject>(40),JNI_TRUE);
+   if(pending)break;
+  }
+  if(mode==82)pending=true;
+  boot_root=boot_candidate=static_candidate=mixed_array=root_interface=own_root=array_failure=set_failure=opaque_instance=opaque_local=wrong_list=false;
+  return;
+ }
  if(num(m)==42){
   if(mode==71)Require(!method_enumeration::Prepare(jni,active_env),"nested bootstrap instance proof admitted");
   boot_candidate=boot_ancestor=true;pending_set=mode==69;alias_return=mode==70;opaque_instance=mode==72;opaque_local=mode==74;
@@ -183,6 +200,8 @@ int main(int argc,char** argv){try{
  bool ok=method_enumeration::Prepare(&jni,&env);
  const bool good=mode==0||mode==2||mode==19||mode>=22;
  Require(ok==good&&!pending,"incorrect proof decision or uncleared proof exception");
+ Require(root_calls==((mode>=76&&mode!=77&&mode!=89)?1:0),"bootstrap root proof prerequisite ignored");
+ const bool root_active=mode==76||mode==88||mode==90;
  if(!good){
   Require(!method_enumeration::Enable(),"failed proof enabled");
   if(mode==10){int old=installs;Require(!method_enumeration::Prepare(&jni,&env)&&installs==old,"duplicate owner after failed unhook");}
@@ -207,7 +226,7 @@ int main(int argc,char** argv){try{
   }
   boot_ancestor=false;
   if(mode>=61){
-   const bool active=mode==61||mode==71||mode==73||mode==75;
+   const bool active=mode==61||mode==71||mode==73||mode==75||(mode>=76&&mode!=90);
    boot_candidate=boot_ancestor=true;invoke(active);bridge=false;invoke(active);bridge=true;
    root_interface=true;invoke(active);root_interface=false;
    alias_return=true;invoke(false);alias_return=false;alias_parameter=true;invoke(false);alias_parameter=false;
@@ -238,18 +257,31 @@ int main(int argc,char** argv){try{
    static_candidate=true;filtered(active);mixed_array=true;filtered(active);
    own_root=true;filtered(false);own_root=false;
    wrong_stack=true;filtered(false);wrong_stack=false;
-   boot_root=true;filtered(false);boot_root=false;boot_candidate=true;filtered(mode==35||mode==44||(mode>=47&&mode!=58&&mode!=73&&mode!=75));boot_candidate=false;
+   boot_root=true;filtered(false);boot_root=false;boot_candidate=true;filtered(mode==35||mode==44||(mode>=47&&mode!=58&&mode!=73&&mode!=75&&mode!=89));boot_candidate=false;
    filtered(false,false,JNI_FALSE);
    if(active){array_failure=true;filtered(false,true);array_failure=false;set_failure=true;filtered(false,true);set_failure=false;opaque_local=true;filtered(false,true);opaque_local=false;}
    if(mode>=35){
-    const bool boot_active=mode==35||mode==44||(mode>=47&&mode!=58&&mode!=73&&mode!=75);
+    const bool boot_active=mode==35||mode==44||(mode>=47&&mode!=58&&mode!=73&&mode!=75&&mode!=89);
     boot_candidate=true;filtered(boot_active);
     root_interface=true;filtered(boot_active);root_interface=false;
-    own_root=true;opaque_local=true;filtered(false);opaque_local=false;own_root=false;
+    own_root=true;opaque_local=true;filtered(false,root_active);opaque_local=false;own_root=false;
     wrong_stack=true;filtered(false);wrong_stack=false;filtered(false,false,JNI_FALSE);
     if(boot_active){array_failure=true;filtered(false,true);array_failure=false;set_failure=true;filtered(false,true);set_failure=false;opaque_instance=true;filtered(false,true);opaque_instance=false;}
     static_candidate=false;filtered(false);Require(selected==previous,"bootstrap instance specificity was changed");
     boot_candidate=false;
+   }
+   if(mode>=76){
+    boot_candidate=boot_root=static_candidate=true;
+    for(int mix=0;mix<2;++mix){
+     mixed_array=mix;filtered(root_active);root_interface=true;filtered(root_active);root_interface=false;
+    }
+    own_root=true;filtered(false);own_root=false;
+    wrong_stack=true;filtered(false);wrong_stack=false;filtered(false,false,JNI_FALSE);
+    if(root_active){array_failure=true;filtered(false,true);array_failure=false;set_failure=true;filtered(false,true);set_failure=false;}
+    opaque_local=true;filtered(false,root_active);opaque_local=false;
+    static_candidate=false;boot_ancestor=true;filtered(false);
+    Require(selected==previous,"root static proof enabled instance replacement");
+    boot_candidate=boot_root=boot_ancestor=false;
    }
    static_candidate=mixed_array=false;
   }
@@ -270,7 +302,7 @@ def main():
         command=[shutil.which('clang++') or shutil.which('c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I'+str(work),'-I'+str(native),'-I'+str(include),'-I'+str(include/platform),'-I'+str(ROOT/'third_party/jvmti'),str(source),str(native/'platform/common/method_enumeration.cc'),'-o',str(binary)]
         result=subprocess.run(command,capture_output=True,text=True);(evidence/'compile.log').write_text(result.stdout+result.stderr)
         if result.returncode:raise RuntimeError('Enumeration compilation failed; inspect ignored evidence')
-        for mode in range(76):
+        for mode in range(91):
             result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True,timeout=30);(evidence/f'case-{mode}.log').write_text(result.stdout+result.stderr)
             if result.returncode:raise RuntimeError('Enumeration guard case failed; inspect ignored evidence')
             print(result.stdout.strip())

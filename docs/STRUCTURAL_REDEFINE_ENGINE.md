@@ -591,7 +591,7 @@ ART 仍负责生成／过滤 Method 数组。枚举保护以当前 Class 身份�
 接口 static 枚举过滤复用此模块、入口与活参数契约，没有新增 Hook 或私有 ABI。当前枚举根 Class 与被收集声明接口不同且独立 static 证明成功时，排除该数组中的 static 方法；使用公开 JNI 创建同类型 Method 数组，并保留其余 ART Method 的对象身份和顺序。自身声明、类静态继承、boot 和普通声明枚举保持原行为。数组分配／填充异常保留原异常，不能返回未完成过滤的结果。`runStatic` 与已有最具体声明证明独立，后者成功而前者失败仍可启用旧能力；新能力不接受仅部分路径观察。消费者规则覆盖新增探针内部类型，R8 单独执行真实调用。
 
 
-Bootstrap 接口 static 的应用继承过滤仍复用同一 Hook、类型化 Method 数组与活参数契约。先用公开 JVMTI 区分声明加载器，再读当前根 Class；bootstrap 根在读取应用 List 前委托原结果。仅独立 bootstrap 证明成功的应用根继续过滤，bootstrap 实例声明绝不参与最具体声明替换。`runBootstrapStatic` 依赖已有 static 证明，另要求应用接口／实现类过滤和自身 bootstrap 视图三路观察及实际调用；失败不影响旧两项能力。Java 探针以 Object.class 的加载器身份适配 Android/JBR 公开 API 差异，不用加载器名称、对象偏移或改动标准库。不存在新增 ELF 服务、ABI 或 Hook 所有者。
+Bootstrap 接口 static 的应用继承过滤仍复用同一 Hook、类型化 Method 数组与活参数契约。先用公开 JVMTI 区分声明加载器，再读当前根 Class；未通过下述根 static 证明的 bootstrap 根在读取 List 前委托原结果。仅独立 bootstrap 证明成功的应用根继续过滤，此 static 证明不授权 bootstrap 实例声明参与最具体声明替换。`runBootstrapStatic` 依赖已有 static 证明，另要求应用接口／实现类过滤和自身 bootstrap 视图三路观察及实际调用；失败不影响旧两项能力。Java 探针以 Object.class 的加载器身份适配 Android/JBR 公开 API 差异，不用加载器名称、对象偏移或改动标准库。不存在新增 ELF 服务、ABI 或 Hook 所有者。
 
 
 Bootstrap 祖先被应用接口覆写的修正沿用原严格祖先关系、完整签名与活 List 替换路径；仅将独立证明通过后的 bootstrap 祖先纳入被替换项，仍不以 bootstrap 声明作为替换候选。公开 JVMTI 识别加载器，JNI Class 身份比较保证返回／参数类型一致。`runBootstrapOverride` 在基础最具体声明证明后独立执行，要求接口／实现类各自桥接／普通方法的四路成功替换，并验证类实现优先、原 bootstrap 调用及 declared 边界。失败保留已有能力；证明与启用复用唯一 Hook、串行事务准备和进程生命周期，无新增命名服务、ABI 或应用成员全局根。
@@ -600,3 +600,5 @@ Bootstrap 祖先被应用接口覆写的修正沿用原严格祖先关系、完�
 Bootstrap 实例候选继续使用同一枚举 Hook、严格祖先关系、完整签名与活 List 替换路径；候选和被替换祖先均为 bootstrap，当前根仍必须是应用 Class。原 native 可见性过滤先执行；不添加新的反射对象构造或私有入口。`runBootstrapInstance` 另证接口／实现类各自桥接／普通方法四路观察及真实调用、类优先与 declared 边界。独立状态失败不会覆盖旧能力；准备和生存期仍服从串行事务 Native 阶段及成功后常驻，无新增 ELF 符号、ABI 或 Hook 所有者。
 
 Bootstrap static 过滤按候选来源单独检查其证明状态；实例最具体声明证明通过不能代替 static 证明。即使应用 static 与 bootstrap 实例能力已启用，缺失 bootstrap static 证明时仍保留原静态枚举行为。
+
+标准库根的继承接口 static 过滤复用相同收集入口：仅当 `runBootstrapRootStatic` 独立证明通过时，bootstrap 根继续读取已证明的活 List 和根 Class；仍仅处理 ART 原数组中的接口 static，不替换标准库根下任何实例声明。普通类 static 不经过接口过滤路径，自身接口 static 按 Class 身份保留。新证明在已有 bootstrap static 证明成功后执行，以独立观察掩码验证接口根／类根过滤和自身声明，另实际调用自身 static、继承的类 static、default 与 declared 方法。失败不覆盖任何旧能力；成功后与原 Hook 一起常驻，后续事务失败不撤销。实例证明成功不能代替该证明，实例证明缺失也不阻止本项独立成功。无新增 Hook 所有者、命名符号、私有 ABI、全局应用成员引用或 ART 事务实现。

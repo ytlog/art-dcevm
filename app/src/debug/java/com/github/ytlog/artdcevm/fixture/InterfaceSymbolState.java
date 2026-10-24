@@ -113,6 +113,46 @@ public final class InterfaceSymbolState {
         check.eq(prefix+"bootOverrideBootCall",changed ? "after" : "before",original.invoke(new BootSpecificReceiver()));
         check.eq(prefix+"bootOverrideDeclared",0,BootSpecificLeaf.class.getDeclaredMethods().length);
     }
+    private final Method[] bootRootStaticCache = new Method[4];
+    private void verifyBootRootStatics(Check check,String prefix,boolean changed) throws Exception {
+        Class<?>[] roots={java.util.function.UnaryOperator.class,java.text.Collator.class,java.text.RuleBasedCollator.class,java.util.function.BinaryOperator.class};
+        for(int i=0;i<roots.length;++i){
+            Class<?> root=roots[i];int inherited=0,count=0;
+            Class<?> owner=i==0?java.util.function.UnaryOperator.class:i==3?java.util.function.BinaryOperator.class:java.text.Collator.class;
+            String name=i==0?"identity":i==3?"minBy":"getInstance";
+            Class<?>[] args=i==0?new Class<?>[0]:new Class<?>[]{i==3?java.util.Comparator.class:java.util.Locale.class};
+            Method selected=null;
+            for(Method m:root.getMethods()){
+                if(java.lang.reflect.Modifier.isStatic(m.getModifiers()) && m.getDeclaringClass().isInterface() && m.getDeclaringClass()!=root)++inherited;
+                if(m.getName().equals(name) && java.util.Arrays.equals(m.getParameterTypes(),args) && m.getReturnType()==owner){selected=m;++count;}
+            }
+            String key=prefix+"bootRootStatic"+i;
+            check.eq(key+"Inherited",0,inherited);check.eq(key+"Count",1,count);
+            if(selected==null)throw new AssertionError("missing bootstrap root target");
+            check.eq(key+"Owner",true,selected.getDeclaringClass()==owner);
+            check.eq(key+"Static",true,java.lang.reflect.Modifier.isStatic(selected.getModifiers()));
+            check.eq(key+"Default",false,selected.isDefault());
+            if(bootRootStaticCache[i]==null)bootRootStaticCache[i]=selected;
+            for(int cached=0;cached<2;++cached){
+                Method call=cached==0?selected:bootRootStaticCache[i];Object actual,expected;
+                if(i==0){actual=((java.util.function.UnaryOperator<String>)call.invoke(null)).apply(new InterfaceSymbolFixture.Peer().covariant(false));expected=changed?"after":"before";}
+                else if(i==3){java.util.Comparator<String> order=(a,b)->InterfaceSymbolFixture.Peer.staticValue()>60?1:-1;actual=((java.util.function.BinaryOperator<String>)call.invoke(null,order)).apply("left","right");expected=changed?"right":"left";}
+                else {actual=((java.text.Collator)call.invoke(null,java.util.Locale.ROOT)).compare("a","b")<0;expected=true;}
+                check.eq(key+(cached==0?"Call":"Cached"),expected,actual);
+            }
+        }
+        Method reversed=enumerated(java.text.Collator.class,"reversed",java.util.Comparator.class);
+        check.eq(prefix+"bootRootStaticDefaultOwner",true,reversed.getDeclaringClass()==java.util.Comparator.class);
+        check.eq(prefix+"bootRootStaticDefaultFlag",true,reversed.isDefault());
+        check.eq(prefix+"bootRootStaticDefaultCall",true,((java.util.Comparator<String>)reversed.invoke(java.text.Collator.getInstance(java.util.Locale.ROOT))).compare("a","b")>0);
+        Method andThen=enumerated(java.util.function.UnaryOperator.class,"andThen",java.util.function.Function.class,java.util.function.Function.class);
+        java.util.function.UnaryOperator<String> operation=x->new InterfaceSymbolFixture.Peer().covariant(false);
+        check.eq(prefix+"bootRootStaticAndThen",changed?"after":"before",((java.util.function.Function<String,String>)andThen.invoke(operation,java.util.function.Function.identity())).apply("input"));
+        Object token=new Object();
+        check.eq(prefix+"bootRootStaticDeclared",true,((java.util.function.Function<Object,Object>)java.util.function.Function.class.getDeclaredMethod("identity").invoke(null)).apply(token)==token);
+        check.eq(prefix+"bootRootStaticClassDeclared","java.lang.NoSuchMethodException",result(()->java.text.RuleBasedCollator.class.getDeclaredMethod("getInstance",java.util.Locale.class)));
+        check.eq(prefix+"bootRootStaticNull","java.lang.NullPointerException",result(()->bootRootStaticCache[3].invoke(null,new Object[]{null})));
+    }
     public interface BootList extends java.util.List<String> { }
     public interface BootListLeaf extends BootList { }
     public static class BootListReceiver extends java.util.AbstractList<String> implements BootListLeaf {
@@ -588,6 +628,7 @@ public final class InterfaceSymbolState {
         verifyBootEnumeration(check,prefix,changed);
         verifyBootOverride(check,prefix,changed);
         verifyBootDefaults(check,prefix,changed);
+        verifyBootRootStatics(check,prefix,changed);
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }

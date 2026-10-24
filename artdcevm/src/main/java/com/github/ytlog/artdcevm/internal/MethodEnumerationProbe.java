@@ -113,6 +113,38 @@ public final class MethodEnumerationProbe {
                 || java.nio.file.Path.class.getDeclaredMethod("compareTo",Object.class).getDeclaringClass()!=java.nio.file.Path.class)
             throw new AssertionError("declared view changed");
     }
+    public static void runBootstrapRootStatic() throws Exception {
+        Class<?>[] roots={java.util.function.UnaryOperator.class,java.text.Collator.class,java.text.RuleBasedCollator.class};
+        Object token=new Object();
+        for(int i=0;i<roots.length;++i){
+            Class<?> root=roots[i];int own=0;
+            if(root.getClassLoader()!=Object.class.getClassLoader())throw new AssertionError("bootstrap root identity");
+            for(Method m:root.getMethods()){
+                boolean isStatic=java.lang.reflect.Modifier.isStatic(m.getModifiers());
+                if(isStatic && m.getDeclaringClass().isInterface() && m.getDeclaringClass()!=root)
+                    throw new AssertionError("inherited bootstrap root static");
+                if(i==0 && m.getName().equals("identity")){
+                    if(m.getDeclaringClass()!=root || !isStatic || ((java.util.function.UnaryOperator<Object>)m.invoke(null)).apply(token)!=token)
+                        throw new AssertionError("own bootstrap static changed");
+                    ++own;
+                }else if(i!=0 && m.getName().equals("getInstance") && java.util.Arrays.equals(m.getParameterTypes(),new Class<?>[]{java.util.Locale.class})){
+                    if(m.getDeclaringClass()!=java.text.Collator.class || !isStatic || ((java.text.Collator)m.invoke(null,java.util.Locale.ROOT)).compare("a","b")>=0)
+                        throw new AssertionError("inherited class static changed");
+                    ++own;
+                }
+            }
+            if(own!=1)throw new AssertionError("bootstrap root declaration lost");
+        }
+        int defaults=0;
+        for(Method m:java.text.Collator.class.getMethods())if(m.getName().equals("reversed")){
+            if(m.getDeclaringClass()!=java.util.Comparator.class || !m.isDefault()
+                    || ((java.util.Comparator<String>)m.invoke(java.text.Collator.getInstance(java.util.Locale.ROOT))).compare("a","b")<=0)
+                throw new AssertionError("bootstrap default changed");
+            ++defaults;
+        }
+        if(defaults!=1 || ((java.util.function.Function<Object,Object>)java.util.function.Function.class.getDeclaredMethod("identity").invoke(null)).apply(token)!=token)
+            throw new AssertionError("bootstrap declared view changed");
+    }
     public static void runBootstrapStatic() throws Exception {
         if (java.util.Comparator.class.getClassLoader()!=Object.class.getClassLoader()
                 || java.util.function.Function.class.getClassLoader()!=Object.class.getClassLoader())

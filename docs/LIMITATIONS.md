@@ -55,7 +55,7 @@
 
 `getMethods()` 的继承应用接口声明现在按完整签名保留更具体的接口声明，包含协变桥接和普通实例方法。原问题是父接口先收集、去重时留下祖先 abstract 声明，并非桥接方法从 native 数组中消失。独立运行时证明后，在固定的内部收集调用链中使用 ART 已创建的 Method 替换被覆盖条目；原过滤与最终去重保留。类实现优先、不同返回类型／参数 Class 身份、普通 `getDeclaredMethods()` 和 bootstrap 枚举保持原行为。API 33／36 验证桥接／synthetic／default 属性、声明类、两个方向的菱形父接口顺序、真实反射调用、缓存 Method、改体／回滚／恢复与 GC。其他运行库仅有入口名称覆盖，不代表设备验证。
 
-此扩展不改变无继承关系接口之间的同签名去重策略，也不扩大 ART 原生可见性过滤或 bootstrap 根枚举范围。准备期间缺入口、活列表／当前 Class 读取失败、部分证明或实际调用失败均不启用；启用后遇到不可读服务抛 InternalError 或保留原异常，不返回部分修正结果。首个可用接口事务的 Native 阶段准备，成功启用后驻留，包括随后事务失败的情况。新增枚举路径的性能尚未单独验收；原性能越线和停顿问题保持记录。
+此扩展不改变无继承关系接口之间的同签名去重策略，也不扩大 ART 原生可见性过滤；bootstrap 根的 static 例外见下文独立证明。准备期间缺入口、活列表／当前 Class 读取失败、部分证明或实际调用失败均不启用；启用后遇到不可读服务抛 InternalError 或保留原异常，不返回部分修正结果。首个可用接口事务的 Native 阶段准备，成功启用后驻留，包括随后事务失败的情况。新增枚举路径的性能尚未单独验收；原性能越线和停顿问题保持记录。
 
 
 `lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义。与 JBR 相同，新出现的 default 冲突照常接受，经冲突方法的调用抛 `IncompatibleClassChangeError`，之后消除冲突的事务恢复唯一的 default。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
@@ -201,10 +201,12 @@ API 30–32 的续接适配目前仅为关闭准入的候选实现：已核对�
 接口静态方法的公开枚举另经独立 `runStatic` 证明后对齐：应用子接口和实现类的 `getMethods()` 不再继承接口 static 声明；声明接口自身仍可枚举和调用，普通类的静态继承／隐藏不变。根因是 ART 收集所有 public 接口声明时没有排除 static，而固定 JBR 在合并父接口时明确排除。复用原枚举 Hook，仅在精确继承收集路径返回由真实 Method 组成的过滤数组，不改变方法本身或 `getDeclaredMethods()`。证明必须观察子接口、实现类、自身声明及空／混合过滤结果并实际调用；缺方法、全局根、部分观察或异常只关闭新扩展，已有最具体声明能力仍可启用。API 33／36 覆盖多层／菱形、类静态继承与隐藏、缓存调用、同批改体、接口方法变 static、失败事务、恢复与 GC。其他设备没有执行证明；API 30–32 续接仍保留 71。新增过滤性能未验收，旧性能和停顿问题不改标通过。
 
 
-标准库接口 static 的继承视图另由独立 `runBootstrapStatic` 证明：应用子接口／实现类不再从 `Comparator`、`Function` 等 bootstrap 接口枚举继承来的 static 声明。仅处理应用枚举根；标准库接口自身的 static 枚举／调用、普通声明枚举及 bootstrap 声明作为候选时的选择不变，仍以 ART 原生过滤后的 Method 数组为输入，不恢复被隐藏 API 规则排除的成员。证明必须观察应用接口与实现类上的实际过滤、bootstrap 自身视图的委托，并验证默认方法及自身静态方法的真实调用。Android 的公开 Class.getClassLoader 返回 BootClassLoader 而非 JBR 的 null，Java 证明按 Object.class 的加载器身份比较；native 使用公开 JVMTI 并要求独立观察。证明缺失／异常只关闭此扩展，应用接口 static 与桥接枚举继续可用。API 33／36 覆盖两个标准库接口、多层／双父接口顺序、应用自身 static、类 static 隐藏、默认方法、新建／缓存反射调用、改体／回滚／恢复与 GC。API 30–32 续接仍保留 71，性能越线和停顿仍未解决。
+标准库接口 static 的继承视图另由独立 `runBootstrapStatic` 证明：应用子接口／实现类不再从 `Comparator`、`Function` 等 bootstrap 接口枚举继承来的 static 声明。该证明仅处理应用枚举根（标准库根另见下文独立证明）；标准库接口自身的 static 枚举／调用、普通声明枚举及 bootstrap 声明作为候选时的选择不变，仍以 ART 原生过滤后的 Method 数组为输入，不恢复被隐藏 API 规则排除的成员。证明必须观察应用接口与实现类上的实际过滤、bootstrap 自身视图的委托，并验证默认方法及自身静态方法的真实调用。Android 的公开 Class.getClassLoader 返回 BootClassLoader 而非 JBR 的 null，Java 证明按 Object.class 的加载器身份比较；native 使用公开 JVMTI 并要求独立观察。证明缺失／异常只关闭此扩展，应用接口 static 与桥接枚举继续可用。API 33／36 覆盖两个标准库接口、多层／双父接口顺序、应用自身 static、类 static 隐藏、默认方法、新建／缓存反射调用、改体／回滚／恢复与 GC。API 30–32 续接仍保留 71，性能越线和停顿仍未解决。
 
 
-应用接口覆写 bootstrap 祖先的实例声明现在另经独立 `runBootstrapOverride` 证明：`getMethods()` 对完整签名保留应用子接口声明及其 bridge/synthetic/default 属性。固定 JBR 的最具体声明合并不按加载器区别祖先；ART 的父接口先收集与原守卫的 bootstrap 祖先跳过共同导致旧声明残留。证明要求接口／实现类的桥接／普通方法四路 native 观察及真实调用；不依赖 static 证明，缺失／部分观察／异常只关闭此扩展。标准库声明作为替换候选、标准库根枚举、无关接口去重、类实现优先及 ART 原生过滤保持原策略。API 33／36 验证 Supplier、IntSupplier、Comparator、多层和两种菱形顺序、类覆写、缓存调用、改体／回滚／恢复与 GC。其他设备未验证；API 30–32 续接 71 不变，新增路径性能未单独验收，旧性能／停顿问题仍开放。
+应用接口覆写 bootstrap 祖先的实例声明现在另经独立 `runBootstrapOverride` 证明：`getMethods()` 对完整签名保留应用子接口声明及其 bridge/synthetic/default 属性。固定 JBR 的最具体声明合并不按加载器区别祖先；ART 的父接口先收集与原守卫的 bootstrap 祖先跳过共同导致旧声明残留。证明要求接口／实现类的桥接／普通方法四路 native 观察及真实调用；不依赖 static 证明，缺失／部分观察／异常只关闭此扩展。标准库声明作为替换候选、标准库根的实例枚举、无关接口去重、类实现优先及 ART 原生过滤保持原策略。API 33／36 验证 Supplier、IntSupplier、Comparator、多层和两种菱形顺序、类覆写、缓存调用、改体／回滚／恢复与 GC。其他设备未验证；API 30–32 续接 71 不变，新增路径性能未单独验收，旧性能／停顿问题仍开放。
 
 
-Bootstrap 接口作为最具体实例声明候选时，另经独立 `runBootstrapInstance` 证明后支持应用枚举根：List／SortedSet 的 default 和 Path 的桥接声明可替换其 bootstrap 祖先，保留真实 declaring Class 及 bridge/synthetic/default 属性。只使用 ART 已过滤并创建的 Method，不恢复隐藏成员，也不以 bootstrap 声明替换应用声明。标准库根枚举、类实现优先、普通 declared 和无关接口去重继续保持原策略。证明须观察接口／实现类、桥接／普通方法四路成功替换并真实调用，缺失／部分观察／异常不启用；该证明不依赖旧 static 或应用覆写证明。API 33／36 覆盖集合默认方法、真实 Path 实现、缓存调用、改体／恢复／GC 和类型异常。其他设备仍未验证；API 30–32 续接 71 与原性能／停顿问题不变，新路径性能未单独验收。
+Bootstrap 接口作为最具体实例声明候选时，另经独立 `runBootstrapInstance` 证明后支持应用枚举根：List／SortedSet 的 default 和 Path 的桥接声明可替换其 bootstrap 祖先，保留真实 declaring Class 及 bridge/synthetic/default 属性。只使用 ART 已过滤并创建的 Method，不恢复隐藏成员，也不以 bootstrap 声明替换应用声明。标准库根的实例枚举、类实现优先、普通 declared 和无关接口去重继续保持原策略。证明须观察接口／实现类、桥接／普通方法四路成功替换并真实调用，缺失／部分观察／异常不启用；该证明不依赖旧 static 或应用覆写证明。API 33／36 覆盖集合默认方法、真实 Path 实现、缓存调用、改体／恢复／GC 和类型异常。其他设备仍未验证；API 30–32 续接 71 与原性能／停顿问题不变，新路径性能未单独验收。
+
+标准库根的接口 static 继承视图另经 `runBootstrapRootStatic` 证明后修正：UnaryOperator 自身的 identity 保留，继承的 Function.identity 排除；Collator／RuleBasedCollator 不再枚举 Comparator 的 static 工厂，但普通类 static 的继承与默认方法调用保留。此前守卫在 bootstrap 根处提前委托，与固定 JBR 排除所有父接口 static 的规则不符。新证明依赖已通过的 bootstrap static 证明，独立观察接口根、类根及自身声明三路并真实调用；不依赖实例最具体声明证明，也不授权标准库根的实例替换。缺失、部分观察或异常仅关闭此扩展。原生可见性过滤、普通 declared 枚举、类 static 继承和无关接口去重保持原行为。API 33／36 验证新建／缓存调用、改体／失败／恢复、GC 与 null 异常；其他设备未验证，API 30–32 续接 71 不变。新增路径性能未单独验收，原性能越线和停顿问题仍开放。
