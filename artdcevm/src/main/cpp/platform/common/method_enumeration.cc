@@ -19,12 +19,12 @@ jmethodID collect = nullptr, get_methods = nullptr;
 jmethodID list_size = nullptr, list_get = nullptr, list_set = nullptr;
 jmethodID declaring = nullptr, name = nullptr, return_type = nullptr, parameters = nullptr, modifiers = nullptr;
 jint list_slot = -1;
-bool verified = false, static_verified = false;
-std::atomic<bool> enabled{false}, static_enabled{false};
+bool verified = false, static_verified = false, bootstrap_verified = false;
+std::atomic<bool> enabled{false}, static_enabled{false}, bootstrap_enabled{false};
 std::mutex install_mutex;
 thread_local bool preparing = false, probing = false, processing = false;
-thread_local unsigned observed = 0, static_observed = 0;
-thread_local bool static_probing = false;
+thread_local unsigned observed = 0, static_observed = 0, bootstrap_observed = 0;
+thread_local bool static_probing = false, bootstrap_probing = false;
 constexpr jint kPublic = 0x0001, kStatic = 0x0008, kBridge = 0x0040, kInterface = 0x0200;
 
 template<class T> struct Local {
@@ -91,7 +91,8 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   if (!(flags & kInterface)) return true;
   bool app = false;
   if (!AppClass(jni, static_cast<jclass>(klass), &app)) return false;
-  if (!app) return true; // Keep original bootstrap discovery/filtering.
+  const bool candidate_app = app;
+  if (!candidate_app && !(bootstrap_probing || bootstrap_enabled.load(std::memory_order_acquire))) return true;
   jvmtiFrameInfo frames[3]{};
   jint count = 0;
   if (environment->GetStackTrace(nullptr, 0, 3, frames, &count)) return Failure(jni);
@@ -99,16 +100,19 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   Local<jobject> root{jni}, list{jni};
   // Fixed Class.java: getPublicMethodsInternal(List) retains the list as its
   // last incoming argument. Prove both live values before publishing the hook.
-  if (environment->GetLocalInstance(nullptr, 1, &root.value) || !root.value ||
-      environment->GetLocalObject(nullptr, 1, list_slot, &list.value) || !list.value ||
-      !jni->IsInstanceOf(list.value, list_class)) return Failure(jni);
+  if (environment->GetLocalInstance(nullptr, 1, &root.value) || !root.value) return Failure(jni);
   if (!AppClass(jni, static_cast<jclass>(root.value), &app)) return false;
-  if (!app) return true;
+  if (!app) {
+    if (bootstrap_probing && !candidate_app && jni->IsSameObject(root.value, klass)) bootstrap_observed |= 4u;
+    return true; // Preserve bootstrap roots before reading the application collection.
+  }
+  if (environment->GetLocalObject(nullptr, 1, list_slot, &list.value) || !list.value ||
+      !jni->IsInstanceOf(list.value, list_class)) return Failure(jni);
   jint root_flags = 0;
   if (environment->GetClassModifiers(static_cast<jclass>(root.value), &root_flags)) return Failure(jni);
   const jint size = jni->CallIntMethod(list.value, list_size);
   if (jni->ExceptionCheck()) return false;
-  const bool filter_static = static_probing || static_enabled.load(std::memory_order_acquire);
+  const bool filter_static = static_probing || bootstrap_probing || static_enabled.load(std::memory_order_acquire);
   const bool inherited = !jni->IsSameObject(root.value, klass);
   const jsize length = jni->GetArrayLength(*methods);
   std::vector<jsize> retained;
@@ -120,12 +124,13 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
     if (filter_static && (candidate.flags & kStatic)) {
       if (inherited) {
         if (static_probing) static_observed |= root_flags & kInterface ? 1u : 2u;
+        if (bootstrap_probing && !candidate_app) bootstrap_observed |= root_flags & kInterface ? 1u : 2u;
         continue;
       }
       if (static_probing) static_observed |= 4u;
     }
     if (filter_static) retained.push_back(m);
-    if (!(candidate.flags & kPublic) || (candidate.flags & kStatic)) continue;
+    if (!candidate_app || !(candidate.flags & kPublic) || (candidate.flags & kStatic)) continue;
     for (jint i = 0; i < size; ++i) {
       Local<jobject> previous{jni, jni->CallObjectMethod(list.value, list_get, i)};
       if (!previous.value || jni->ExceptionCheck()) return Failure(jni);
@@ -244,6 +249,8 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_static = nullptr; }
   if (run_static && !method_class) method_class = static_cast<jclass>(jni->NewGlobalRef(method.value));
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_static = nullptr; }
+  jmethodID run_bootstrap = jni->GetStaticMethodID(probe.value, "runBootstrapStatic", "()V");
+  if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_bootstrap = nullptr; }
   { std::lock_guard<std::mutex> lock(install_mutex);
     hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethods), HookSlot(&original)); }
   if (!hook) return false;
@@ -260,6 +267,14 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     static_verified = static_observed == 31 && !jni->ExceptionCheck();
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
+  bootstrap_verified = false;
+  if (static_verified && run_bootstrap) {
+    bootstrap_observed = 0; probing = true; bootstrap_probing = true;
+    jni->CallStaticVoidMethod(probe.value, run_bootstrap);
+    bootstrap_probing = false; probing = false;
+    bootstrap_verified = bootstrap_observed == 7 && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
   { std::lock_guard<std::mutex> lock(install_mutex);
     if (shadowhook_unhook(hook)) return false;
     hook = nullptr; }
@@ -271,6 +286,7 @@ bool Enable() {
   std::lock_guard<std::mutex> lock(install_mutex);
   if (!hook) hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethods), HookSlot(&original));
   if (!hook) return false;
+  bootstrap_enabled.store(bootstrap_verified, std::memory_order_release);
   static_enabled.store(static_verified, std::memory_order_release);
   enabled.store(true, std::memory_order_release);
   return true;

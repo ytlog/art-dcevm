@@ -589,3 +589,6 @@ ART 仍负责生成／过滤 Method 数组。枚举保护以当前 Class 身份�
 
 
 接口 static 枚举过滤复用此模块、入口与活参数契约，没有新增 Hook 或私有 ABI。当前枚举根 Class 与被收集声明接口不同且独立 static 证明成功时，排除该数组中的 static 方法；使用公开 JNI 创建同类型 Method 数组，并保留其余 ART Method 的对象身份和顺序。自身声明、类静态继承、boot 和普通声明枚举保持原行为。数组分配／填充异常保留原异常，不能返回未完成过滤的结果。`runStatic` 与已有最具体声明证明独立，后者成功而前者失败仍可启用旧能力；新能力不接受仅部分路径观察。消费者规则覆盖新增探针内部类型，R8 单独执行真实调用。
+
+
+Bootstrap 接口 static 的应用继承过滤仍复用同一 Hook、类型化 Method 数组与活参数契约。先用公开 JVMTI 区分声明加载器，再读当前根 Class；bootstrap 根在读取应用 List 前委托原结果。仅独立 bootstrap 证明成功的应用根继续过滤，bootstrap 实例声明绝不参与最具体声明替换。`runBootstrapStatic` 依赖已有 static 证明，另要求应用接口／实现类过滤和自身 bootstrap 视图三路观察及实际调用；失败不影响旧两项能力。Java 探针以 Object.class 的加载器身份适配 Android/JBR 公开 API 差异，不用加载器名称、对象偏移或改动标准库。不存在新增 ELF 服务、ABI 或 Hook 所有者。

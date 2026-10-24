@@ -1617,6 +1617,16 @@ def interface_symbol_checks(kind, changed, late=True):
         if 2 <= _slot < 8: result.update({_key+"RankOwner":True, _key+"RankCall":7})
     result.update(enumerationExtraOwner=True, enumerationExtraCall=97)
     for _slot in range(8):
+        _key = "bootEnumeration"+str(_slot)
+        result.update({_key+"Natural":1 if _slot==6 else 0, _key+"Identity":1 if _slot==7 else 0,
+                       _key+"DeclaredNatural":_slot==6})
+    result.update(bootEnumerationDefaultOwner=True, bootEnumerationDefault=True, bootEnumerationDefaultCall=1,
+                  bootEnumerationFunctionOwner=True, bootEnumerationFresh="after" if changed else "before",
+                  bootEnumerationCached="after" if changed else "before",bootEnumerationNull="java.lang.NullPointerException",
+                  bootEnumerationOwnOwner=True,bootEnumerationOwnCall="own",bootEnumerationHidingOwner=True,
+                  bootEnumerationHidingCall=107,bootEnumerationBootOwner=True,bootEnumerationBootCall=-1,
+                  bootEnumerationBootDeclared=True,bootEnumerationBootPublic=1)
+    for _slot in range(8):
         _key = "staticEnumeration" + str(_slot)
         result.update({_key+"Root":1 if _slot in (0,7) else 0,
                        _key+"Child":1 if _slot==1 else 0, _key+"Declared":_slot in (0,7)})

@@ -54,6 +54,7 @@ jboolean Instance(JNIEnv*,jobject o,jclass c){return !wrong_list&&num(o)==600&&n
 jboolean Assignable(JNIEnv*,jclass sub,jclass sup){Require(num(sub)==40,"reversed assignability query");return num(sup)==41;}
 jmethodID MethodId(JNIEnv*,jclass,const char* n,const char*){
  if(!std::strcmp(n,"runStatic"))return mode>=22&&mode!=23?id<jmethodID>(39):nullptr;
+ if(!std::strcmp(n,"runBootstrapStatic")){if(mode==36){pending=true;return nullptr;}return mode>=35?id<jmethodID>(40):nullptr;}
  const char* names[]={"size","get","set","getModifiers","getDeclaringClass","getName","getReturnType","getParameterTypes","run"};
  for(int i=0;i<9;++i)if(!std::strcmp(n,names[i]))return id<jmethodID>(30+i);
  return nullptr;
@@ -101,6 +102,20 @@ jvmtiError Stack(jvmtiEnv*,jthread t,jint start,jint max,jvmtiFrameInfo* f,jint*
 jvmtiError LocalInstance(jvmtiEnv*,jthread t,jint depth,jobject* out){Require(!t&&depth==1,"wrong instance frame");*out=id<jobject>(own_root?40:42);return opaque_instance?JVMTI_ERROR_OPAQUE_FRAME:JVMTI_ERROR_NONE;}
 jvmtiError LocalObject(jvmtiEnv*,jthread t,jint depth,jint slot,jobject* out){Require(!t&&depth==1&&slot==8,"wrong list local");*out=id<jobject>(600);return opaque_local?JVMTI_ERROR_OPAQUE_FRAME:JVMTI_ERROR_NONE;}
 void Run(JNIEnv* jni,jclass,jmethodID m,va_list){
+ if(num(m)==40){
+  if(mode==44)Require(!method_enumeration::Prepare(jni,active_env),"nested bootstrap proof admitted");
+  array_failure=mode==42;set_failure=mode==43;opaque_instance=mode==45;opaque_local=mode==46;
+  static_candidate=boot_candidate=mixed_array=true;
+  for(int path=0;path<3;++path){
+   if(mode==37||(mode==38&&path==1)||(mode==39&&path==0)||(mode==40&&path==2))continue;
+   root_interface=path!=1;own_root=path==2;selected=previous;
+   reinterpret_cast<Entry>(replacement)(jni,id<jobject>(40),JNI_TRUE);
+   if(pending)break;
+  }
+  if(mode==41)pending=true;
+  static_candidate=boot_candidate=mixed_array=root_interface=own_root=array_failure=set_failure=opaque_instance=opaque_local=false;
+  return;
+ }
  if(num(m)==39){
   if(mode==34)Require(!method_enumeration::Prepare(jni,active_env),"nested static proof admitted");
   array_failure=mode==32;set_failure=mode==33;static_candidate=true;
@@ -158,7 +173,7 @@ int main(int argc,char** argv){try{
   boot_candidate=true;invoke(false);boot_candidate=false;boot_root=true;invoke(false);boot_root=false;
   boot_ancestor=true;invoke(false);boot_ancestor=false;
   unrelated=true;invoke(false);unrelated=false;class_priority=true;invoke(false);class_priority=false;
-  if(mode!=22&&mode!=34){static_candidate=true;invoke(false);static_candidate=false;}static_old=true;invoke(false);static_old=false;
+  if(mode<35&&mode!=22&&mode!=34){static_candidate=true;invoke(false);static_candidate=false;}static_old=true;invoke(false);static_old=false;
   alias_return=true;invoke(false);alias_return=false;alias_parameter=true;invoke(false);alias_parameter=false;
   different_name=true;invoke(false);different_name=false;
   opaque_instance=true;invoke(false,true);opaque_instance=false;opaque_local=true;invoke(false,true);opaque_local=false;
@@ -167,7 +182,7 @@ int main(int argc,char** argv){try{
   original_failure=true;invoke(false,true);original_failure=false;
   nest=true;invoke(true);Require(nested_calls==1,"nested metadata enumeration not exercised");
   if(mode>=22){
-   bool active=mode==22||mode==34;
+   bool active=mode==22||mode==34||mode>=35;
    auto filtered=[&](bool filter,bool error=false,jboolean public_only=JNI_TRUE){
     selected=previous;pending=false;filtered_size=-1;array_sets=0;
     auto result=reinterpret_cast<Entry>(replacement)(&jni,id<jobject>(40),public_only);
@@ -178,9 +193,19 @@ int main(int argc,char** argv){try{
    static_candidate=true;filtered(active);mixed_array=true;filtered(active);
    own_root=true;filtered(false);own_root=false;
    wrong_stack=true;filtered(false);wrong_stack=false;
-   boot_root=true;filtered(false);boot_root=false;boot_candidate=true;filtered(false);boot_candidate=false;
+   boot_root=true;filtered(false);boot_root=false;boot_candidate=true;filtered(mode==35||mode==44);boot_candidate=false;
    filtered(false,false,JNI_FALSE);
    if(active){array_failure=true;filtered(false,true);array_failure=false;set_failure=true;filtered(false,true);set_failure=false;opaque_local=true;filtered(false,true);opaque_local=false;}
+   if(mode>=35){
+    const bool boot_active=mode==35||mode==44;
+    boot_candidate=true;filtered(boot_active);
+    root_interface=true;filtered(boot_active);root_interface=false;
+    own_root=true;opaque_local=true;filtered(false);opaque_local=false;own_root=false;
+    wrong_stack=true;filtered(false);wrong_stack=false;filtered(false,false,JNI_FALSE);
+    if(boot_active){array_failure=true;filtered(false,true);array_failure=false;set_failure=true;filtered(false,true);set_failure=false;opaque_instance=true;filtered(false,true);opaque_instance=false;}
+    static_candidate=false;filtered(false);Require(selected==previous,"bootstrap instance specificity was changed");
+    boot_candidate=false;
+   }
    static_candidate=mixed_array=false;
   }
  }
@@ -200,7 +225,7 @@ def main():
         command=[shutil.which('clang++') or shutil.which('c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I'+str(work),'-I'+str(native),'-I'+str(include),'-I'+str(include/platform),'-I'+str(ROOT/'third_party/jvmti'),str(source),str(native/'platform/common/method_enumeration.cc'),'-o',str(binary)]
         result=subprocess.run(command,capture_output=True,text=True);(evidence/'compile.log').write_text(result.stdout+result.stderr)
         if result.returncode:raise RuntimeError('Enumeration compilation failed; inspect ignored evidence')
-        for mode in range(35):
+        for mode in range(47):
             result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True,timeout=30);(evidence/f'case-{mode}.log').write_text(result.stdout+result.stderr)
             if result.returncode:raise RuntimeError('Enumeration guard case failed; inspect ignored evidence')
             print(result.stdout.strip())

@@ -53,6 +53,54 @@ public final class InterfaceSymbolState {
     public static class StaticOwnImplementor extends StaticLeafImplementor {
         public static int interfaceOnly() { return 101; }
     }
+    public interface BootComparator extends java.util.Comparator<String> { }
+    public interface BootFunction extends java.util.function.Function<String,String> { }
+    public interface BootCombined extends BootComparator, BootFunction { }
+    public interface BootReverse extends BootFunction, BootComparator { }
+    public static class BootReceiver extends PeerStaticChild implements BootCombined, BootReverse {
+        public int compare(String a, String b) { return a.compareTo(b); }
+        public String apply(String value) { return new InterfaceSymbolFixture.Peer().covariant(false); }
+    }
+    public static class BootSubclass extends BootReceiver { }
+    public static class BootHiding extends BootReceiver { public static int naturalOrder() { return 107; } }
+    public interface BootOwn extends BootFunction { static String identity() { return "own"; } }
+    private Method bootEnumerationCache;
+    private void verifyBootEnumeration(Check check, String prefix, boolean changed) throws Exception {
+        Class<?>[] owners = {BootComparator.class, BootFunction.class, BootCombined.class,
+                BootReverse.class, BootReceiver.class, BootSubclass.class, BootHiding.class, BootOwn.class};
+        for (int i = 0; i < owners.length; ++i) {
+            Class<?> owner = owners[i]; String key = prefix+"bootEnumeration"+i;
+            check.eq(key+"Natural",i == 6 ? 1 : 0,enumeratedCount(owner,"naturalOrder"));
+            check.eq(key+"Identity",i == 7 ? 1 : 0,enumeratedCount(owner,"identity"));
+            check.eq(key+"DeclaredNatural",i == 6,
+                    java.util.Arrays.stream(owner.getDeclaredMethods()).anyMatch(m -> m.getName().equals("naturalOrder")));
+        }
+        BootReceiver receiver = new BootReceiver();
+        Method reversed = enumerated(BootCombined.class,"reversed",java.util.Comparator.class);
+        check.eq(prefix+"bootEnumerationDefaultOwner",true,reversed.getDeclaringClass()==java.util.Comparator.class);
+        check.eq(prefix+"bootEnumerationDefault",true,reversed.isDefault());
+        check.eq(prefix+"bootEnumerationDefaultCall",1,((java.util.Comparator<String>)reversed.invoke(receiver)).compare("a","b"));
+        Method then = enumerated(BootCombined.class,"andThen",java.util.function.Function.class,java.util.function.Function.class);
+        check.eq(prefix+"bootEnumerationFunctionOwner",true,then.getDeclaringClass()==java.util.function.Function.class);
+        if (bootEnumerationCache==null) bootEnumerationCache=then;
+        java.util.function.Function<String,String> identity = java.util.function.Function.identity();
+        check.eq(prefix+"bootEnumerationFresh",changed ? "after" : "before",((java.util.function.Function<String,String>)then.invoke(receiver,identity)).apply("input"));
+        check.eq(prefix+"bootEnumerationCached",changed ? "after" : "before",((java.util.function.Function<String,String>)bootEnumerationCache.invoke(receiver,identity)).apply("input"));
+        check.eq(prefix+"bootEnumerationNull", "java.lang.NullPointerException",result(() -> then.invoke(receiver,new Object[]{null})));
+        Method own = enumerated(BootOwn.class,"identity",String.class);
+        check.eq(prefix+"bootEnumerationOwnOwner",true,own.getDeclaringClass()==BootOwn.class);
+        check.eq(prefix+"bootEnumerationOwnCall","own",own.invoke(null));
+        Method hiding = enumerated(BootHiding.class,"naturalOrder",int.class);
+        check.eq(prefix+"bootEnumerationHidingOwner",true,hiding.getDeclaringClass()==BootHiding.class);
+        check.eq(prefix+"bootEnumerationHidingCall",107,hiding.invoke(null));
+        Method natural = enumerated(java.util.Comparator.class,"naturalOrder",java.util.Comparator.class);
+        check.eq(prefix+"bootEnumerationBootOwner",true,natural.getDeclaringClass()==java.util.Comparator.class);
+        check.eq(prefix+"bootEnumerationBootCall",-1,((java.util.Comparator<String>)natural.invoke(null)).compare("a","b"));
+        Object token = new Object();
+        Method function = java.util.function.Function.class.getDeclaredMethod("identity");
+        check.eq(prefix+"bootEnumerationBootDeclared",true,((java.util.function.Function<Object,Object>)function.invoke(null)).apply(token)==token);
+        check.eq(prefix+"bootEnumerationBootPublic",1,enumeratedCount(java.util.function.Function.class,"identity"));
+    }
     private Method staticEnumerationCache;
     private static int enumeratedCount(Class<?> owner, String name) {
         int count = 0;
@@ -412,6 +460,7 @@ public final class InterfaceSymbolState {
         }));
         verifyEnumeration(check,prefix,changed);
         verifyStaticEnumeration(check,prefix,kind,changed);
+        verifyBootEnumeration(check,prefix,changed);
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }

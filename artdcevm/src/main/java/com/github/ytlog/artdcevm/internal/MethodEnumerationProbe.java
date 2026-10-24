@@ -25,6 +25,47 @@ public final class MethodEnumerationProbe {
     public static class StaticReceiver implements StaticLeaf { }
     public static class StaticOwn extends StaticReceiver { public static int hidden() { return 23; } }
     public static class StaticSubclass extends StaticOwn { }
+    public interface BootstrapLeaf extends java.util.Comparator<String>, java.util.function.Function<String,String> { }
+    public static class BootstrapReceiver implements BootstrapLeaf {
+        public int compare(String a, String b) { return a.compareTo(b); }
+        public String apply(String a) { return a; }
+    }
+    public static void runBootstrapStatic() throws Exception {
+        if (java.util.Comparator.class.getClassLoader()!=Object.class.getClassLoader()
+                || java.util.function.Function.class.getClassLoader()!=Object.class.getClassLoader())
+            throw new AssertionError("standard interfaces are not bootstrap declarations");
+        for (Class<?> owner : new Class<?>[]{BootstrapLeaf.class,BootstrapReceiver.class}) {
+            int reverse = 0, then = 0;
+            for (Method method : owner.getMethods()) {
+                if (method.getDeclaringClass().getClassLoader()==Object.class.getClassLoader()
+                        && method.getDeclaringClass().isInterface()
+                        && java.lang.reflect.Modifier.isStatic(method.getModifiers()))
+                    throw new AssertionError("inherited bootstrap static");
+                if (method.getName().equals("reversed")) {
+                    if (method.getDeclaringClass()!=java.util.Comparator.class
+                            || ((java.util.Comparator<String>)method.invoke(new BootstrapReceiver())).compare("a","b")!=1)
+                        throw new AssertionError("bootstrap default changed");
+                    ++reverse;
+                }
+                if (method.getName().equals("andThen")) {
+                    Object value = ((java.util.function.Function<String,String>)method.invoke(new BootstrapReceiver(),
+                            java.util.function.Function.identity())).apply("value");
+                    if (!"value".equals(value)) throw new AssertionError("bootstrap function changed");
+                    ++then;
+                }
+            }
+            if (reverse!=1 || then!=1) throw new AssertionError("bootstrap instance declaration lost");
+        }
+        int own = 0;
+        for (Method method : java.util.Comparator.class.getMethods()) {
+            if (method.getName().equals("naturalOrder")
+                    && ((java.util.Comparator<String>)method.invoke(null)).compare("a","b")==-1) ++own;
+        }
+        Object token = new Object();
+        if (own!=1 || ((java.util.function.Function<Object,Object>)java.util.function.Function.class
+                .getDeclaredMethod("identity").invoke(null)).apply(token)!=token)
+            throw new AssertionError("bootstrap own declarations changed");
+    }
     public static void runStatic() throws Exception {
         for (Class<?> owner : new Class<?>[]{StaticLeaf.class, StaticReceiver.class, StaticOwn.class, StaticSubclass.class}) {
             int own = 0, live = 0;
