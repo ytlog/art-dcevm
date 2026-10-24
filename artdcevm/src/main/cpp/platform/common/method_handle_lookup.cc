@@ -30,6 +30,9 @@ void* find_interface = nullptr;
 void* find_class = nullptr;
 bool inherited_static_verified = false;
 bool nonpublic_static_verified = false;
+bool bridge_verified = false;
+thread_local bool probing_bridge = false;
+thread_local unsigned observed_bridge = 0;
 thread_local bool probing_nonpublic_static = false;
 thread_local unsigned observed_nonpublic_static = 0;
 thread_local bool probing_inherited_static = false, observed_inherited_static = false;
@@ -249,6 +252,17 @@ bool ResolveLookup(JNIEnv* jni, jobject klass, jstring name, jobjectArray args, 
       jni->ThrowNew(access_error, "method type has a different class-loader identity");
       return true;
     }
+    // JVMTI method modifiers retain ACC_BRIDGE (dex/modifiers.h, fixed 11--17).
+    // Class's parameter-only getter otherwise prefers the covariant body and
+    // libcore rejects the requested erased return type before creating a handle.
+    constexpr jint kAccBridge = 0x0040;
+    if (virtual_lookup && (modifiers & kAccBridge) && (probing_bridge || bridge_verified)) {
+      if (probing_bridge)
+        observed_bridge |= !(flags & evolution::kAccInterface) ? 1u : recursive_lookup ? 4u : 2u;
+      *result = reflected.value;
+      reflected.value = nullptr;
+      return true;
+    }
     const bool inherited = class_resolution && !jni->IsSameObject(klass, declaring.value);
     if (class_resolution && probing_nonpublic_static && !(flags & evolution::kAccPublic))
       observed_nonpublic_static |= inherited ? 2u : 1u;
@@ -373,6 +387,19 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   probing = false;
   const bool passed = observed && observed_recursive && !jni->ExceptionCheck();
   if (jni->ExceptionCheck()) jni->ExceptionClear();
+  // Optional exact bridge selection must observe class, direct-interface and
+  // recursive-interface paths and perform actual calls before publication.
+  bridge_verified = false;
+  jmethodID run_bridge = jni->GetStaticMethodID(probe.value, "runBridge", "()V");
+  if (jni->ExceptionCheck()) jni->ExceptionClear();
+  if (passed && run_bridge) {
+    observed_bridge = 0;
+    probing = probing_bridge = true;
+    jni->CallStaticVoidMethod(probe.value, run_bridge);
+    probing = probing_bridge = false;
+    bridge_verified = observed_bridge == 7 && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
   // Optional static resolution proof must not disable the existing virtual guard.
   static_verified = false;
   jmethodID run_static = jni->GetStaticMethodID(probe.value, "runStatic", "()V");

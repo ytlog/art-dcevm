@@ -18,6 +18,28 @@ public final class MethodHandleLookupProbe {
     }
     static class PackageOwner { public static int value() { return 7; } }
     static class PackageLeaf extends PackageOwner { }
+    public static class BridgeBase { public Object bridge() { return "base"; } }
+    public static class BridgeClass extends BridgeBase {
+        @Override public String bridge() { return "class"; }
+    }
+    public interface BridgeRoot { Object bridge(); }
+    public interface BridgeInterface extends BridgeRoot {
+        @Override default String bridge() { return "interface"; }
+    }
+    public interface BridgeLeaf extends BridgeInterface { }
+    public static class BridgeReceiver implements BridgeLeaf { }
+    public static void runBridge() throws Throwable {
+        Class<?>[] owners = {BridgeClass.class, BridgeInterface.class, BridgeLeaf.class, BridgeReceiver.class};
+        Object[] receivers = {new BridgeClass(), new BridgeReceiver(), new BridgeReceiver(), new BridgeReceiver()};
+        for (int i = 0; i < owners.length; ++i) {
+            java.lang.invoke.MethodHandle handle = MethodHandles.publicLookup().findVirtual(
+                    owners[i], "bridge", MethodType.methodType(Object.class));
+            Object value = handle.invokeWithArguments(receivers[i]);
+            if (!(i == 0 ? "class" : "interface").equals(value)
+                    || handle.type().returnType() != Object.class)
+                throw new AssertionError("covariant bridge lookup changed target or type");
+        }
+    }
     public static void runNonpublicStatic() throws Throwable {
         for (Class<?> owner : new Class<?>[]{PackageOwner.class, PackageLeaf.class}) {
             int value = (int) MethodHandles.lookup().findStatic(

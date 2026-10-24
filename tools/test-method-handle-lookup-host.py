@@ -22,6 +22,7 @@ SOURCE = r'''
 #include <vector>
 using namespace artdcevm;
 int mode, installs, calls, access_throws, internal_throws, missing_throws, allocations, frees, local_reads, unhooks;
+bool bridge_method=false;
 bool inherited_target=false, declaring_boot=false, missing_selected=false;
 bool lookup_static=false, stack_failure=false, malformed_chain=false, nonpublic=false;
 int recursive_levels=0;
@@ -100,8 +101,19 @@ jobject ObjectMethod(JNIEnv*,jobject o,jmethodID m,va_list){Require(o==actual_me
 const char* Utf(JNIEnv*,jstring s,jboolean*){Require(s==name,"wrong lookup name");return requested_name;}
 void Release(JNIEnv*,jstring,const char*){}
 jint Throw(JNIEnv*,jclass c,const char*){if(reinterpret_cast<uintptr_t>(c)==7)internal_throws++;else if(reinterpret_cast<uintptr_t>(c)==8)missing_throws++;else access_throws++;pending=true;return 0;}
-jmethodID StaticID(JNIEnv*,jclass,const char* n,const char*) {return reinterpret_cast<jmethodID>(!std::strcmp(n,"runStatic")?19:!std::strcmp(n,"runInheritedStatic")?25:!std::strcmp(n,"runNonpublicStatic")?26:14);}
+jmethodID StaticID(JNIEnv*,jclass,const char* n,const char*) {return reinterpret_cast<jmethodID>(!std::strcmp(n,"runStatic")?19:!std::strcmp(n,"runInheritedStatic")?25:!std::strcmp(n,"runNonpublicStatic")?26:!std::strcmp(n,"runBridge")?27:14);}
 void Run(JNIEnv* jni,jclass,jmethodID method,va_list) {
+  if(reinterpret_cast<uintptr_t>(method)==27){
+    if(mode==20){pending=false;return;}
+    bool saved=static_method;static_method=false;bridge_method=true;
+    for(int path=0;path<3;path++){
+      if((mode==22&&path==0)||(mode==23&&path==1)||(mode==24&&path==2))continue;
+      interface_class=path!=0;recursive_levels=path==2?3:0;
+      Require(reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments)==actual_method,
+              "probe did not select actual reflected bridge");
+    }
+    pending=mode==21;bridge_method=false;static_method=saved;interface_class=true;recursive_levels=0;return;
+  }
   if(reinterpret_cast<uintptr_t>(method)==26){
     if(mode==16){pending=false;return;}
     lookup_static=true;static_method=true;interface_class=false;public_class=false;
@@ -157,7 +169,7 @@ jvmtiError Name(jvmtiEnv*,jmethodID m,char** n,char** s,char**){
 jvmtiError Fields(jvmtiEnv*,jclass c,jint* count,jfieldID** out){*count=1;*out=static_cast<jfieldID*>(malloc(sizeof(jfieldID)));allocations++;**out=reinterpret_cast<uintptr_t>(c)==1?flags_field:return_field;return JVMTI_ERROR_NONE;}
 jvmtiError FieldName(jvmtiEnv*,jclass,jfieldID f,char** n,char** s,char**){*n=Copy(f==return_field?"rtype":"accessFlags");*s=Copy(f==return_field?"Ljava/lang/Class;":"I");return JVMTI_ERROR_NONE;}
 jvmtiError Locals(jvmtiEnv*,jmethodID,jint* n){*n=9;return JVMTI_ERROR_NONE;}
-jvmtiError Modifiers(jvmtiEnv*,jmethodID m,jint* f){*f=reinterpret_cast<uintptr_t>(m)==100?(nonpublic?2:static_method?9:1):1;return JVMTI_ERROR_NONE;}
+jvmtiError Modifiers(jvmtiEnv*,jmethodID m,jint* f){*f=reinterpret_cast<uintptr_t>(m)==100?((nonpublic?2:static_method?9:1)|(bridge_method?0x40:0)):1;return JVMTI_ERROR_NONE;}
 jvmtiError Loader(jvmtiEnv*,jclass c,jobject* out){Require(c==owner||c==reinterpret_cast<jclass>(41),"wrong declaring interface");*out=(boot||(declaring_boot&&c==reinterpret_cast<jclass>(41)))?nullptr:reinterpret_cast<jobject>(90);return JVMTI_ERROR_NONE;}
 jvmtiError Stack(jvmtiEnv*,jthread t,jint start,jint max,jvmtiFrameInfo* f,jint* count){
  Require(!t&&start>=0&&max==4,"wrong public stack request");
@@ -229,7 +241,7 @@ int main(int argc,char** argv){try{
  Require(!invoke()&&pending,"ordinary static double alias fell through");
  scope=false;Require(invoke()==reflected&&!pending,"ordinary static reflection intercepted");scope=true;
  public_class=false;
- if(mode>=13)Require(invoke()==reflected&&!pending,"unproved nonpublic static owner intercepted");
+ if(mode>=13&&mode<=19)Require(invoke()==reflected&&!pending,"unproved nonpublic static owner intercepted");
  else Require(!invoke()&&pending,"proved nonpublic static alias escaped");
  public_class=true;
  boot=true;Require(invoke()==reflected&&!pending,"boot static filtering bypassed");boot=false;
@@ -244,7 +256,7 @@ int main(int argc,char** argv){try{
  else {
   Require(invoke()==actual_method&&!pending,"inherited static did not return actual reflected declaration");
   public_class=false;
-  if(mode>=16)Require(invoke()==reflected&&!pending,"failed nonpublic proof enabled inherited resolution");
+  if(mode>=16&&mode<=19)Require(invoke()==reflected&&!pending,"failed nonpublic proof enabled inherited resolution");
   else Require(invoke()==actual_method&&!pending,"proved nonpublic inherited target not returned");
   interface_class=true;Require(invoke()==reflected&&!pending,"nonpublic interface scope widened");interface_class=false;
   public_class=true;
@@ -260,6 +272,15 @@ int main(int argc,char** argv){try{
  inherited_target=false;
  interface_class=true;
  }
+ lookup_static=false;static_method=false;bridge_method=true;requested=reinterpret_cast<jclass>(70);
+ for(int path=0;path<3;path++){
+  interface_class=path!=0;recursive_levels=path==2?9:0;
+  Require(invoke()==(mode>=20?reflected:actual_method)&&!pending,"bridge proof did not control exact selection");
+  scope=false;Require(invoke()==reflected&&!pending,"ordinary bridge reflection intercepted");scope=true;
+  boot=true;Require(invoke()==reflected&&!pending,"bootstrap bridge filtering bypassed");boot=false;
+  requested=reinterpret_cast<jclass>(71);Require(!invoke()&&pending,"bridge loader identity escaped");requested=reinterpret_cast<jclass>(70);
+ }
+ bridge_method=false;recursive_levels=0;interface_class=true;
  lookup_static=false;parameters.clear();actual_parameters.clear();member_signature="()LResult;";
  static_method=false; requested=reinterpret_cast<jclass>(71);
  for(int levels:{1,3,9}){
@@ -292,7 +313,7 @@ def main():
         command=[shutil.which('clang++') or shutil.which('c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I'+str(work),'-I'+str(native),'-I'+str(include),'-I'+str(include/platform),'-I'+str(ROOT/'third_party/jvmti'),str(source),str(native/'platform/common/method_handle_lookup.cc'),'-o',str(binary)]
         result=subprocess.run(command,capture_output=True,text=True);(evidence/'compile.log').write_text(result.stdout+result.stderr)
         if result.returncode:raise RuntimeError('Lookup compilation failed; inspect ignored evidence')
-        for mode in range(20):
+        for mode in range(25):
             result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True,timeout=30);(evidence/f'case-{mode}.log').write_text(result.stdout+result.stderr)
             if result.returncode:raise RuntimeError('Lookup guard case failed; inspect ignored evidence')
             print(result.stdout.strip())

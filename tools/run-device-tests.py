@@ -1598,6 +1598,13 @@ def interface_symbol_checks(kind, changed, late=True):
                        _owner+"ReflectionAlias":"java.lang.NoSuchMethodException"})
     result.update(packageForeignLookupClass=True, packagePeerFresh=61 if changed else 59,
                   packagePeerCached=61 if changed else 59)
+    for _slot in range(5):
+        _key = "covariant" + str(_slot)
+        result.update({_key+"Call":"after" if changed else "before", _key+"Cached":"after" if changed else "before",
+                       _key+"NarrowCall":"after" if changed else "before", _key+"Type":True,
+                       _key+"Null":"java.lang.NullPointerException", _key+"BodyException":"java.lang.IllegalStateException",
+                       _key+"WrongReturn":"java.lang.NoSuchMethodException", _key+"AccessDenied":"java.lang.IllegalAccessException", _key+"BridgePresent":True, _key+"Reflection":True})
+    result.update(covariantOverride="override", covariantExact="after" if changed else "before")
     result.update(childStaticResolution="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else "java.lang.IllegalAccessException",
                   childStaticWrongReturn="java.lang.NoSuchMethodException",parentStaticWrongReturn="java.lang.NoSuchMethodException",
                   parentStaticAliasedParameter="java.lang.IllegalAccessException",childStaticAliasedReturn="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException",

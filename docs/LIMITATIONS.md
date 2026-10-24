@@ -51,6 +51,11 @@
 
 通过独立非 public 类证明后，普通应用类的 static 查找不再仅限 public 类：同一运行时包的合法 Lookup 可以查找其声明或继承的静态方法，完整描述符匹配但参数／返回 Class 属于另一加载器时抛 IllegalAccessException。查找保护不授予访问权，libcore 继续检查 Lookup；publicLookup、无访问权限的 Lookup，以及包名相同但加载器不同的 Lookup 仍被拒绝。证明分别要求观察声明与继承两条路径、实际调用成功和受限查找被拒绝；任一缺失只关闭此扩展，原 public 类静态查找保留。bootstrap 与非 public 接口仍委托原入口。
 
+通过独立桥接调用证明后，`findVirtual` 对普通应用类和接口的协变返回值桥接方法按完整描述符选择真实声明。例如同时存在 `String value()` 与编译器生成的 `Object value()` 时，合法的 Object 句柄不再被参数式反射查找错误拒绝。仅接管精确匹配的 ACC_BRIDGE 实例声明，原 libcore 仍检查访问权限并创建句柄；普通反射、非桥接声明和 bootstrap 路径保持原处理。证明必须观察普通类、直接接口及递归接口三条路径并实际调用成功，否则只禁用此扩展。API 33／36 覆盖继承类、接口多层继承、实现类、子类覆写、null、方法体异常、完整句柄类型、精确调用，以及父类改体后新旧句柄、失败事务、恢复与 GC。
+
+反射枚举仍有独立差异：在本次固定夹具中，ART 的 `getMethods()` 未在继承接口／实现类视图中列出 JBR 返回的协变桥接成员。桥接声明本身及 MethodHandle 调用已单独验证；本次查找修复不声称对齐该枚举行为。
+
+
 `lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义。与 JBR 相同，新出现的 default 冲突照常接受，经冲突方法的调用抛 `IncompatibleClassChangeError`，之后消除冲突的事务恢复唯一的 default。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
 
 接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。切换模式不会清除历史 pointer-id 准入标记。普通类仍按 ART 原有规则验收；声明在另一接口上的生成 copy，其保留指针缓存另见[移除接口](#移除接口的语义)。

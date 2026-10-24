@@ -18,8 +18,10 @@ RUNNER = '''public class Runner {
       com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe.runStatic();
     else if (args[0].equals("inherited-static"))
       com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe.runInheritedStatic();
-    else
+    else if (args[0].equals("nonpublic-static"))
       com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe.runNonpublicStatic();
+    else
+      com.github.ytlog.artdcevm.internal.MethodHandleLookupProbe.runBridge();
     System.out.println("Lookup probe " + args[0] + " PASS");
   }
 }
@@ -55,17 +57,17 @@ def main():
     run('jar', [java / 'bin/jar', 'cf', out / 'input.jar', '-C', original, '.'])
     run('r8', [java / 'bin/java', '-cp', r8, 'com.android.tools.r8.R8', '--classfile', '--release',
                '--lib', java, '--pg-conf', out / 'keep.pro', '--output', shrunk, out / 'input.jar'])
-    for mode in ('virtual', 'static', 'inherited-static', 'nonpublic-static'):
+    for mode in ('virtual', 'static', 'inherited-static', 'nonpublic-static', 'bridge'):
         output = run(mode, [java / 'bin/java', '-cp', shrunk, 'Runner', mode])
         if 'Lookup probe ' + mode + ' PASS' not in output:
             raise RuntimeError('Missing actual shrunk probe call result')
-    manifest = {'passed': True, 'modes': ['virtual', 'static', 'inherited-static', 'nonpublic-static'],
+    manifest = {'passed': True, 'modes': ['virtual', 'static', 'inherited-static', 'nonpublic-static', 'bridge'],
                 'scope': 'Shrunk Java probe behavior; not ART live-frame or device proof',
                 'inputs': {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
                            for p in (source, rules, Path(__file__).resolve())},
                 'r8Sha256': hashlib.sha256(r8.read_bytes()).hexdigest()}
     (out / 'summary.json').write_text(json.dumps(manifest, indent=2) + '\n')
-    print('R8 lookup probe PASS: virtual, static, inherited-static and nonpublic-static real calls')
+    print('R8 lookup probe PASS: virtual, static, inherited-static, nonpublic-static and bridge real calls')
     print('Evidence: ' + str(out.relative_to(ROOT)))
 
 

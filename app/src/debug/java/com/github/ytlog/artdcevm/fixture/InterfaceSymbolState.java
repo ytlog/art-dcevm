@@ -63,6 +63,17 @@ public final class InterfaceSymbolState {
     public interface LookupMiddle extends InterfaceSymbolFixture.Parent {}
     public interface LookupLeaf extends LookupMiddle {}
     public static class LookupReceiver implements LookupLeaf {}
+    public static class CovariantLeaf extends InterfaceSymbolFixture.Peer { }
+    public static class CovariantOverride extends InterfaceSymbolFixture.Peer {
+        @Override public String covariant(boolean fail) { return "override"; }
+    }
+    public interface CovariantRoot { Object covariant(boolean fail); }
+    public interface CovariantInterface extends CovariantRoot {
+        @Override default String covariant(boolean fail) { return new InterfaceSymbolFixture.Peer().covariant(fail); }
+    }
+    public interface CovariantInterfaceLeaf extends CovariantInterface { }
+    public static class CovariantReceiver implements CovariantInterfaceLeaf { }
+    private final MethodHandle[] covariantHandles = new MethodHandle[5];
     public Class<?> aliasReturn;
     private Method lateChild, lateParent;
     public InterfaceSymbolState() throws Exception { }
@@ -244,6 +255,50 @@ public final class InterfaceSymbolState {
         check.eq(prefix+"packagePeerCached", changed ? 61 : 59, result(() -> {
             if (packagePeerHandle == null) packagePeerHandle = MethodHandles.lookup().findStatic(PackagePeerChild.class,"staticValue",type);
             return (int) packagePeerHandle.invokeExact();
+        }));
+        Class<?>[] bridgeOwners = {InterfaceSymbolFixture.Peer.class, CovariantLeaf.class,
+                CovariantInterface.class, CovariantInterfaceLeaf.class, CovariantReceiver.class};
+        Object[] bridgeReceivers = {peer, new CovariantLeaf(), new CovariantReceiver(),
+                new CovariantReceiver(), new CovariantReceiver()};
+        for (int i = 0; i < bridgeOwners.length; ++i) {
+            final int slot = i;
+            Class<?> owner = bridgeOwners[i]; Object target = bridgeReceivers[i];
+            String key = prefix + "covariant" + i;
+            MethodType bridgeType = MethodType.methodType(Object.class, boolean.class);
+            check.eq(key+"Call", changed ? "after" : "before", result(() -> MethodHandles.publicLookup()
+                    .findVirtual(owner,"covariant",bridgeType).invokeWithArguments(target,false)));
+            check.eq(key+"Cached", changed ? "after" : "before", result(() -> {
+                if (covariantHandles[slot] == null) covariantHandles[slot] = MethodHandles.publicLookup()
+                        .findVirtual(owner,"covariant",bridgeType);
+                return covariantHandles[slot].invokeWithArguments(target,false);
+            }));
+            check.eq(key+"NarrowCall", changed ? "after" : "before", result(() -> MethodHandles.publicLookup()
+                    .findVirtual(owner,"covariant",MethodType.methodType(String.class,boolean.class))
+                    .invokeWithArguments(target,false)));
+            check.eq(key+"Type", true, result(() -> MethodHandles.publicLookup().findVirtual(owner,"covariant",bridgeType)
+                    .type().equals(bridgeType.insertParameterTypes(0,owner))));
+            check.eq(key+"Null", "java.lang.NullPointerException", result(() -> MethodHandles.publicLookup()
+                    .findVirtual(owner,"covariant",bridgeType).invokeWithArguments(null,false)));
+            check.eq(key+"BodyException", "java.lang.IllegalStateException", result(() -> MethodHandles.publicLookup()
+                    .findVirtual(owner,"covariant",bridgeType).invokeWithArguments(target,true)));
+            check.eq(key+"WrongReturn", "java.lang.NoSuchMethodException", result(() -> MethodHandles.publicLookup()
+                    .findVirtual(owner,"covariant",MethodType.methodType(Number.class,boolean.class))));
+            boolean hasBridge = false;
+            for (Method method : (i < 2 ? InterfaceSymbolFixture.Peer.class : CovariantInterface.class).getDeclaredMethods())
+                hasBridge |= method.getName().equals("covariant") && method.isBridge()
+                        && method.getReturnType() == Object.class;
+            check.eq(key+"BridgePresent", true, hasBridge);
+            check.eq(key+"AccessDenied", "java.lang.IllegalAccessException", result(() -> MethodHandles.publicLookup()
+                    .in(PackageStaticOwner.class).findVirtual(owner,"covariant",bridgeType)));
+            check.eq(key+"Reflection", true, owner.getMethod("covariant",boolean.class).getReturnType() == String.class);
+        }
+        check.eq(prefix+"covariantOverride", "override", result(() -> MethodHandles.publicLookup()
+                .findVirtual(InterfaceSymbolFixture.Peer.class,"covariant",MethodType.methodType(Object.class,boolean.class))
+                .invokeWithArguments(new CovariantOverride(),false)));
+        check.eq(prefix+"covariantExact", changed ? "after" : "before", result(() -> {
+            MethodHandle handle = MethodHandles.publicLookup().findVirtual(InterfaceSymbolFixture.Peer.class,
+                    "covariant",MethodType.methodType(Object.class,boolean.class));
+            return (Object) handle.invokeExact(peer,false);
         }));
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));

@@ -578,3 +578,6 @@ public 应用类的精确 `getDeclaredMethodInternal → getMethod → getDeclar
 Android 11–14 与 15–17 的 PointerSize 声明分别保留在版本 ABI 目录。命名解析器缺失、独立证明异常或未观察到实际继承声明时，不开启此扩展，已有静态／虚查找证明独立保留。证明必须实际调用两层继承目标和遮蔽目标，并验证错误返回描述符与普通声明反射不被放宽。运行中解析出的成员无法对应公开 method ID 时抛 InternalError；bootstrap／obsolete 声明继续交回原入口。API 33／36 验证包含父类方法体更新、旧句柄、新句柄、失败批次、两轮恢复与 GC；SO 名称覆盖不是其他版本的设备证明。
 
 非 public 普通类复用同一命名解析器和反射转换路径，不新增 ELF 服务或 Hook。独立 `runNonpublicStatic` 证明在查找帧中分别观察声明与继承目标，验证同包合法调用返回值以及 publicLookup 的 IllegalAccessException；异常或任一观察缺失时只保留原 public 类能力。JNI 守卫只选择成员与核对 Class 身份，实际引用类的可见性、Lookup 权限与运行时包关系仍由 libcore 的 `checkAccess`／`VerifyAccess` 判定。API 33／36 回归另用同名包、不同定义加载器的真实 Lookup 验证拒绝，父类改体的新旧句柄、失败事务、恢复与 GC 继续覆盖。
+
+
+协变返回值桥接查找复用现有 declared-method Hook 和公开 JVMTI ID／反射转换。在已匹配的 `getInstanceMethod → Lookup.findVirtual` 或固定递归调用链上，参数／返回 Class 身份检查成功后，仅将完整描述符匹配的 ACC_BRIDGE 实例方法交回 libcore；不另建方法、转换返回值或修改 DEX。独立 `runBridge` 要求普通类、直接接口、递归接口三类 native 观察，以及真实调用和返回类型检查。证明异常或缺失任一路径均保留原查找行为，不禁用已有虚／静态查找保护；原访问控制与 ART 事务仍负责其既有工作，无新增命名服务、ABI 或 Hook 所有者。
