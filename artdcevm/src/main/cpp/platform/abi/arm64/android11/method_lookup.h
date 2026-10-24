@@ -6,5 +6,6 @@
 // base/pointer_size.h and mirror/class.h, fixed Android 11--14 (including 12L): PointerSize : size_t.
 namespace artdcevm::abi::arm64::android11 {
 enum class PointerSize : size_t { k64 = 8 };
+using FindClassMethod = ArtMethodPrefix* (*)(void*, std::string_view, std::string_view, PointerSize);
 using FindInterfaceMethod = ArtMethodPrefix* (*)(void*, std::string_view, std::string_view, PointerSize);
 }  // namespace artdcevm::abi::arm64::android11

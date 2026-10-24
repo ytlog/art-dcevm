@@ -1572,6 +1572,20 @@ def interface_symbol_checks(kind, changed, late=True):
                        _owner+"WrongReturn":"java.lang.NoSuchMethodException"})
         if _owner in ("middle", "leaf", "inheritedClass"):
             result.update({_owner+"MatchingCall":7, _owner+"ReflectionAlias":"java.lang.NoSuchMethodException"})
+    for _owner in ("staticMiddle", "staticLeaf", "staticHiding"):
+        result.update({_owner+"MatchingCall":43 if _owner=="staticHiding" else 29,
+                       _owner+"NullCall":47 if _owner=="staticHiding" else 41,
+                       _owner+"IdentityCall":True,
+                       _owner+"AliasedReturn":"java.lang.IllegalAccessException",
+                       _owner+"AliasedParameter":"java.lang.IllegalAccessException",
+                       _owner+"WrongReturn":"java.lang.NoSuchMethodException",
+                       _owner+"Overload":53 if _owner=="staticHiding" else "java.lang.NoSuchMethodException",
+                       _owner+"DeclaredReflection":"java.lang.NoSuchMethodException"})
+    result.update(inheritedPrivateAccess="java.lang.IllegalAccessException",
+                  inheritedProtectedAccess="java.lang.IllegalAccessException",
+                  inheritedBodyException="java.lang.IllegalStateException", hiddenDeclaringClassCall=73,
+                  interfaceStaticNotInherited="java.lang.NoSuchMethodException",
+                  inheritedPeerFresh=61 if changed else 59, inheritedPeerCached=61 if changed else 59)
     result.update(childStaticResolution="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else "java.lang.IllegalAccessException",
                   childStaticWrongReturn="java.lang.NoSuchMethodException",parentStaticWrongReturn="java.lang.NoSuchMethodException",
                   parentStaticAliasedParameter="java.lang.IllegalAccessException",childStaticAliasedReturn="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException",

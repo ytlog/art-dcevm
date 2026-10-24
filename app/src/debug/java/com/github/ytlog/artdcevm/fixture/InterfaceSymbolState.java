@@ -34,6 +34,21 @@ public final class InterfaceSymbolState {
         public int echo(InterfaceSymbolFixture.Result value) { return 7; }
         public static InterfaceSymbolFixture.Result staticObject(InterfaceSymbolFixture.Result value) { return value; }
         public static int staticEcho(InterfaceSymbolFixture.Result value) { return value == null ? 41 : 29; }
+        private static int privateStatic() { return 67; }
+        protected static int protectedStatic() { return 71; }
+        public static int throwingStatic() { throw new IllegalStateException(); }
+    }
+    static class HiddenStaticBase { public static int publicStatic() { return 73; } }
+    public static class PublicStaticChild extends HiddenStaticBase { }
+    public interface StaticInterface { static int interfaceOnly() { return 79; } }
+    public static class StaticImplementor implements StaticInterface { }
+    public static class PeerStaticChild extends InterfaceSymbolFixture.Peer { }
+    private MethodHandle inheritedPeerHandle;
+    public static class StaticMiddle extends OrdinaryLookup { }
+    public static class StaticLeaf extends StaticMiddle { }
+    public static class StaticHiding extends StaticMiddle {
+        public static int staticEcho(InterfaceSymbolFixture.Result value) { return value == null ? 47 : 43; }
+        public static int staticEcho(String value) { return 53; }
     }
     // A distinct multi-level hierarchy keeps recursive lookup independent of
     // the Child declarations being changed by the transaction matrix.
@@ -146,6 +161,48 @@ public final class InterfaceSymbolState {
                 result(() -> MethodHandles.publicLookup().findStatic(OrdinaryLookup.class,"staticObject",
                         MethodType.methodType(InterfaceSymbolFixture.Result.class,InterfaceSymbolFixture.Result.class))
                         .invokeWithArguments(argument) == argument));
+        for (Class<?> owner : new Class<?>[]{StaticMiddle.class, StaticLeaf.class, StaticHiding.class}) {
+            String key = prefix + (owner == StaticMiddle.class ? "staticMiddle" : owner == StaticLeaf.class ? "staticLeaf" : "staticHiding");
+            check.eq(key+"MatchingCall", owner == StaticHiding.class ? 43 : 29,
+                    result(() -> MethodHandles.publicLookup().findStatic(owner,"staticEcho",
+                            MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class)).invokeWithArguments(argument)));
+            check.eq(key+"NullCall", owner == StaticHiding.class ? 47 : 41,
+                    result(() -> MethodHandles.publicLookup().findStatic(owner,"staticEcho",
+                            MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class)).invokeWithArguments((Object)null)));
+            check.eq(key+"IdentityCall", true,
+                    result(() -> MethodHandles.publicLookup().findStatic(owner,"staticObject",
+                            MethodType.methodType(InterfaceSymbolFixture.Result.class,InterfaceSymbolFixture.Result.class))
+                            .invokeWithArguments(argument) == argument));
+            check.eq(key+"AliasedReturn", "java.lang.IllegalAccessException",
+                    result(() -> MethodHandles.publicLookup().findStatic(owner,"staticObject",
+                            MethodType.methodType(aliasReturn,InterfaceSymbolFixture.Result.class))));
+            check.eq(key+"AliasedParameter", "java.lang.IllegalAccessException",
+                    result(() -> MethodHandles.publicLookup().findStatic(owner,"staticEcho",MethodType.methodType(int.class,aliasReturn))));
+            check.eq(key+"WrongReturn", "java.lang.NoSuchMethodException",
+                    result(() -> MethodHandles.publicLookup().findStatic(owner,"staticEcho",
+                            MethodType.methodType(String.class,InterfaceSymbolFixture.Result.class))));
+            check.eq(key+"Overload", owner == StaticHiding.class ? 53 : "java.lang.NoSuchMethodException",
+                    result(() -> MethodHandles.publicLookup().findStatic(owner,"staticEcho",
+                            MethodType.methodType(int.class,String.class)).invokeWithArguments("argument")));
+            check.eq(key+"DeclaredReflection", "java.lang.NoSuchMethodException",
+                    result(() -> owner.getDeclaredMethod("staticObject",InterfaceSymbolFixture.Result.class)));
+        }
+        check.eq(prefix+"inheritedPrivateAccess", "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(StaticLeaf.class,"privateStatic",type)));
+        check.eq(prefix+"inheritedProtectedAccess", "java.lang.IllegalAccessException",
+                result(() -> MethodHandles.publicLookup().findStatic(StaticLeaf.class,"protectedStatic",type)));
+        check.eq(prefix+"inheritedBodyException", "java.lang.IllegalStateException",
+                result(() -> MethodHandles.publicLookup().findStatic(StaticLeaf.class,"throwingStatic",type).invokeWithArguments()));
+        check.eq(prefix+"hiddenDeclaringClassCall", 73,
+                result(() -> MethodHandles.publicLookup().findStatic(PublicStaticChild.class,"publicStatic",type).invokeWithArguments()));
+        check.eq(prefix+"interfaceStaticNotInherited", "java.lang.NoSuchMethodException",
+                result(() -> MethodHandles.publicLookup().findStatic(StaticImplementor.class,"interfaceOnly",type)));
+        check.eq(prefix+"inheritedPeerFresh", changed ? 61 : 59,
+                result(() -> MethodHandles.publicLookup().findStatic(PeerStaticChild.class,"staticValue",type).invokeWithArguments()));
+        check.eq(prefix+"inheritedPeerCached", changed ? 61 : 59, result(() -> {
+            if (inheritedPeerHandle == null) inheritedPeerHandle = MethodHandles.publicLookup().findStatic(PeerStaticChild.class,"staticValue",type);
+            return (int) inheritedPeerHandle.invokeExact();
+        }));
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }

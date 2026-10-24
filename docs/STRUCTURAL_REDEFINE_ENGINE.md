@@ -569,3 +569,10 @@ Android 11–12L 的命名 `MoveToExceptionHandler` 接收 `const Instrumentatio
 `privateSelfContinuationDirectBoundary` 报告选中的 `throwing-access`、`dex-pc-direct`、`modern-selector` 或 `unavailable`；选中仍不代表证明或准入。`…DirectAccessProofs` 的 1／2 表示类／接口真实 direct 成功，8 表示精确 DexPc direct 调用实际完成（旧观察位 4 不再产生）。API 33 Debug 可屏蔽 throwing 入口验证受限替代，禁用替代则必须在自证明前失败、应用返回 71。API 36 保留现代选择及 BindTo 入口。API 30–32 的候选证明与设备准入相互独立，没有设备证据仍保持 71；API 33 强制路径不能证明旧版异常 ABI 或 OEM 调用边界。
 
 查找探针的完整内部类、接口层级与方法名由库的 consumer 规则保留。Native 通过稳定入口执行探针，探针又用字符串名称查找成员；仅保留外部探针类不足以阻止 R8 改名内部成员，可能使运行时证明拒绝准入。发布规则以实际缩减后探针调用验证。
+
+
+### 继承静态方法的 MethodHandle 查找
+
+public 应用类的精确 `getDeclaredMethodInternal → getMethod → getDeclaredMethod → Lookup.findStatic` 链在独立证明后复用命名 `Class::FindClassMethod`。该服务依据完整名称／描述符选择声明；增强库通过声明 Class 的公开 JVMTI method ID 和 `ToReflectedMethod` 检查参数／返回 Class 身份，并将继承静态方法的真实反射对象交回原 libcore。匹配的自身声明仍委托原入口，访问控制和句柄创建继续由 libcore 完成；不增加 Hook 所有者、层级解析器或实例迁移逻辑。
+
+Android 11–14 与 15–17 的 PointerSize 声明分别保留在版本 ABI 目录。命名解析器缺失、独立证明异常或未观察到实际继承声明时，不开启此扩展，已有静态／虚查找证明独立保留。证明必须实际调用两层继承目标和遮蔽目标，并验证错误返回描述符与普通声明反射不被放宽。运行中解析出的成员无法对应公开 method ID 时抛 InternalError；bootstrap／obsolete 声明继续交回原入口。API 33／36 验证包含父类方法体更新、旧句柄、新句柄、失败批次、两轮恢复与 GC；SO 名称覆盖不是其他版本的设备证明。

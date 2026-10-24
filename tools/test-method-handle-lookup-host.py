@@ -22,6 +22,7 @@ SOURCE = r'''
 #include <vector>
 using namespace artdcevm;
 int mode, installs, calls, access_throws, internal_throws, missing_throws, allocations, frees, local_reads, unhooks;
+bool inherited_target=false, declaring_boot=false, missing_selected=false;
 bool lookup_static=false, stack_failure=false, malformed_chain=false, nonpublic=false;
 int recursive_levels=0;
 jmethodID public_recursive=reinterpret_cast<jmethodID>(23), interface_recursive=reinterpret_cast<jmethodID>(24);
@@ -57,7 +58,12 @@ artdcevm::abi::arm64::ArtMethodPrefix* FindInterface(void* klass,std::string_vie
  if(n!=requested_name||signature!=member_signature)return nullptr;
  resolved_method.declaring_class=40;resolved_method.access_flags.store(static_method?9:1);return &resolved_method;
 }
-jobject NativeLocal(JNIEnv*,void* value){Require(value==owner,"wrong nonmoving declaring class");return owner;}
+jobject NativeLocal(JNIEnv*,void* value){Require(value==owner||value==reinterpret_cast<void*>(41),"wrong nonmoving declaring class");return static_cast<jobject>(value);}
+artdcevm::abi::arm64::ArtMethodPrefix* FindClass(void* c,std::string_view n,std::string_view s,size_t size){
+ auto* method=FindInterface(c,n,s,size);if(method&&inherited_target)method->declaring_class=41;return method;
+}
+artdcevm::abi::arm64::ArtMethodPrefix* FindClassLegacy(void* c,std::string_view n,std::string_view s,artdcevm::abi::arm64::android11::PointerSize size){return FindClass(c,n,s,static_cast<size_t>(size));}
+artdcevm::abi::arm64::ArtMethodPrefix* FindClassModern(void* c,std::string_view n,std::string_view s,artdcevm::abi::arm64::android15::PointerSize size){return FindClass(c,n,s,static_cast<size_t>(size));}
 artdcevm::abi::arm64::ArtMethodPrefix* FindLegacy(void* c,std::string_view n,std::string_view s,artdcevm::abi::arm64::android11::PointerSize size){return FindInterface(c,n,s,static_cast<size_t>(size));}
 artdcevm::abi::arm64::ArtMethodPrefix* FindModern(void* c,std::string_view n,std::string_view s,artdcevm::abi::arm64::android15::PointerSize size){return FindInterface(c,n,s,static_cast<size_t>(size));}
 jint VM(JNIEnv*,JavaVM** out){*out=reinterpret_cast<JavaVM*>(88);return JNI_OK;}
@@ -66,6 +72,7 @@ extern "C" void shadowhook_dlclose(void*) {}
 extern "C" void* shadowhook_dlsym(void*,const char* n) {
   std::string symbol=n;
   if(mode==1) return nullptr;
+  if(symbol.find("FindClassMethod")!=std::string::npos)return mode==13?nullptr:test_api>=35?HookAddress(FindClassModern):HookAddress(FindClassLegacy);
   if(symbol.find("FindInterfaceMethod")!=std::string::npos)return mode==8?nullptr:test_api>=35?HookAddress(FindModern):HookAddress(FindLegacy);
   if(symbol.find("DecodeGlobal")!=std::string::npos)return HookAddress(DecodeGlobal);
   if(symbol.find("NewLocalRef")!=std::string::npos)return HookAddress(NativeLocal);
@@ -82,19 +89,25 @@ void Delete(JNIEnv*,jobject){}
 jboolean Exception(JNIEnv*){return pending;}
 void Clear(JNIEnv*){pending=false;}
 jboolean Instance(JNIEnv*,jobject o,jclass){return o==type&&type_valid;}
-jint IntField(JNIEnv*,jobject o,jfieldID f){Require(o==owner&&f==flags_field,"wrong Class flag field");return (interface_class?0x200:0)|(public_class?1:0)|(obsolete?0x00200000:0);}
+jint IntField(JNIEnv*,jobject o,jfieldID f){Require((o==owner||o==reinterpret_cast<jobject>(41))&&f==flags_field,"wrong Class flag field");return (interface_class?0x200:0)|(public_class?1:0)|(obsolete?0x00200000:0);}
 jobject ObjectField(JNIEnv*,jobject o,jfieldID f){Require(o==type&&f==return_field,"wrong MethodType field");return requested;}
 jsize Length(JNIEnv*,jarray a){Require(a==arguments||a==actual_arguments,"wrong parameter array");return a==arguments?parameters.size():actual_parameters.size();}
 jobject Element(JNIEnv*,jobjectArray a,jsize i){auto& list=a==arguments?parameters:actual_parameters;Require((a==arguments||a==actual_arguments)&&i>=0&&size_t(i)<list.size(),"wrong parameter element");return list[i];}
 jboolean Same(JNIEnv*,jobject a,jobject b){return a==b;}
-jobject Reflect(JNIEnv*,jclass c,jmethodID m,jboolean st){Require(c==owner&&(reinterpret_cast<uintptr_t>(m)==100||reinterpret_cast<uintptr_t>(m)==101)&&bool(st)==(reinterpret_cast<uintptr_t>(m)==100&&static_method),"wrong reflected instance target");return actual_method;}
+jobject Reflect(JNIEnv*,jclass c,jmethodID m,jboolean st){Require((c==owner||c==reinterpret_cast<jclass>(41))&&(reinterpret_cast<uintptr_t>(m)==100||reinterpret_cast<uintptr_t>(m)==101)&&bool(st)==(reinterpret_cast<uintptr_t>(m)==100&&static_method),"wrong reflected instance target");return actual_method;}
 jmethodID MethodID(JNIEnv*,jclass,const char* n,const char*){return !std::strcmp(n,"getReturnType")?reflected_return:reflected_parameters;}
 jobject ObjectMethod(JNIEnv*,jobject o,jmethodID m,va_list){Require(o==actual_method,"wrong reflected receiver");return m==reflected_return?static_cast<jobject>(actual_return):static_cast<jobject>(actual_arguments);}
 const char* Utf(JNIEnv*,jstring s,jboolean*){Require(s==name,"wrong lookup name");return requested_name;}
 void Release(JNIEnv*,jstring,const char*){}
 jint Throw(JNIEnv*,jclass c,const char*){if(reinterpret_cast<uintptr_t>(c)==7)internal_throws++;else if(reinterpret_cast<uintptr_t>(c)==8)missing_throws++;else access_throws++;pending=true;return 0;}
-jmethodID StaticID(JNIEnv*,jclass,const char* n,const char*) {return reinterpret_cast<jmethodID>(!std::strcmp(n,"runStatic")?19:14);}
+jmethodID StaticID(JNIEnv*,jclass,const char* n,const char*) {return reinterpret_cast<jmethodID>(!std::strcmp(n,"runStatic")?19:!std::strcmp(n,"runInheritedStatic")?25:14);}
 void Run(JNIEnv* jni,jclass,jmethodID method,va_list) {
+  if(reinterpret_cast<uintptr_t>(method)==25){
+    if(mode==14){pending=false;return;}
+    lookup_static=true;static_method=true;interface_class=false;inherited_target=true;
+    reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments);
+    pending=mode==15; inherited_target=false;interface_class=true;lookup_static=false;return;
+  }
   if(mode==9&&reinterpret_cast<uintptr_t>(method)==19){pending=false;return;} // Stock IAE caught without live-argument observation.
   bool saved=static_method;
   if(reinterpret_cast<uintptr_t>(method)==19){lookup_static=true;static_method=false;}
@@ -116,10 +129,10 @@ void Run(JNIEnv* jni,jclass,jmethodID method,va_list) {
 }
 jvmtiError Caps(jvmtiEnv*,const jvmtiCapabilities* c){Require(c->can_access_local_variables,"missing local capability");return mode==3?JVMTI_ERROR_NOT_AVAILABLE:JVMTI_ERROR_NONE;}
 jvmtiError Methods(jvmtiEnv*,jclass c,jint* count,jmethodID** out){
- *count=c==owner?2:reinterpret_cast<uintptr_t>(c)==1?5:2;*out=static_cast<jmethodID*>(malloc(sizeof(jmethodID)*(*count)));allocations++;
- if(c==owner){(*out)[0]=reinterpret_cast<jmethodID>(101);(*out)[1]=reinterpret_cast<jmethodID>(100);}
+ *count=(c==owner||c==reinterpret_cast<jclass>(41))?(missing_selected?0:2):reinterpret_cast<uintptr_t>(c)==1?5:2;*out=static_cast<jmethodID*>(malloc(sizeof(jmethodID)*(*count)));allocations++;
+ if((c==owner||c==reinterpret_cast<jclass>(41))&&*count){(*out)[0]=reinterpret_cast<jmethodID>(101);(*out)[1]=reinterpret_cast<jmethodID>(100);}
  else if(reinterpret_cast<uintptr_t>(c)==1){(*out)[0]=instance;(*out)[1]=declared_method;(*out)[2]=class_get_method;(*out)[3]=public_recursive;(*out)[4]=interface_recursive;}
- else {(*out)[0]=virtual_method;(*out)[1]=static_lookup;}
+ else if(*count) {(*out)[0]=virtual_method;(*out)[1]=static_lookup;}
  return JVMTI_ERROR_NONE;
 }
 jvmtiError Name(jvmtiEnv*,jmethodID m,char** n,char** s,char**){
@@ -135,7 +148,7 @@ jvmtiError Fields(jvmtiEnv*,jclass c,jint* count,jfieldID** out){*count=1;*out=s
 jvmtiError FieldName(jvmtiEnv*,jclass,jfieldID f,char** n,char** s,char**){*n=Copy(f==return_field?"rtype":"accessFlags");*s=Copy(f==return_field?"Ljava/lang/Class;":"I");return JVMTI_ERROR_NONE;}
 jvmtiError Locals(jvmtiEnv*,jmethodID,jint* n){*n=9;return JVMTI_ERROR_NONE;}
 jvmtiError Modifiers(jvmtiEnv*,jmethodID m,jint* f){*f=reinterpret_cast<uintptr_t>(m)==100?(nonpublic?2:static_method?9:1):1;return JVMTI_ERROR_NONE;}
-jvmtiError Loader(jvmtiEnv*,jclass c,jobject* out){Require(c==owner,"wrong declaring interface");*out=boot?nullptr:reinterpret_cast<jobject>(90);return JVMTI_ERROR_NONE;}
+jvmtiError Loader(jvmtiEnv*,jclass c,jobject* out){Require(c==owner||c==reinterpret_cast<jclass>(41),"wrong declaring interface");*out=(boot||(declaring_boot&&c==reinterpret_cast<jclass>(41)))?nullptr:reinterpret_cast<jobject>(90);return JVMTI_ERROR_NONE;}
 jvmtiError Stack(jvmtiEnv*,jthread t,jint start,jint max,jvmtiFrameInfo* f,jint* count){
  Require(!t&&start>=0&&max==4,"wrong public stack request");
  if(stack_failure&&start>0)return JVMTI_ERROR_OPAQUE_FRAME;
@@ -209,7 +222,24 @@ int main(int argc,char** argv){try{
  boot=true;Require(invoke()==reflected&&!pending,"boot static filtering bypassed");boot=false;
  missing_local=true;Require(!invoke()&&pending,"unreadable ordinary static local accepted");missing_local=false;
  requested=reinterpret_cast<jclass>(70); parameters.clear(); actual_parameters.clear();member_signature="()LResult;";
- requested_kind=1;Require(invoke()==reflected&&!pending,"wrong ordinary static descriptor did not delegate");requested_kind=0;
+ requested_kind=1;
+ if(mode==13||mode==14||mode==15)Require(invoke()==reflected&&!pending,"unproved class resolver intercepted descriptor");
+ else Require(!invoke()&&pending,"missing full class descriptor not rejected");
+ requested_kind=0;
+ inherited_target=true;
+ if(mode==13||mode==14||mode==15)Require(invoke()==reflected&&!pending,"unproved inherited resolver activated");
+ else {
+  Require(invoke()==actual_method&&!pending,"inherited static did not return actual reflected declaration");
+  requested=reinterpret_cast<jclass>(71);Require(!invoke()&&pending,"inherited return loader alias escaped");requested=reinterpret_cast<jclass>(70);
+  member_signature="(LParam;)LResult;";parameters={reinterpret_cast<jclass>(81)};actual_parameters={reinterpret_cast<jclass>(80)};
+  Require(!invoke()&&pending,"inherited parameter loader alias escaped");
+  parameters.clear();actual_parameters.clear();member_signature="()LResult;";
+  static_method=false;Require(!invoke()&&pending,"inherited instance accepted as static");static_method=true;
+  declaring_boot=true;Require(invoke()==reflected&&!pending,"boot declaring member bypassed filtering");declaring_boot=false;
+  missing_selected=true;Require(!invoke()&&pending,"selected method missing from public IDs ignored");missing_selected=false;
+  scope=false;Require(invoke()==reflected&&!pending,"inherited ordinary reflection intercepted");scope=true;
+ }
+ inherited_target=false;
  interface_class=true;
  }
  lookup_static=false;parameters.clear();actual_parameters.clear();member_signature="()LResult;";
@@ -244,7 +274,7 @@ def main():
         command=[shutil.which('clang++') or shutil.which('c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I'+str(work),'-I'+str(native),'-I'+str(include),'-I'+str(include/platform),'-I'+str(ROOT/'third_party/jvmti'),str(source),str(native/'platform/common/method_handle_lookup.cc'),'-o',str(binary)]
         result=subprocess.run(command,capture_output=True,text=True);(evidence/'compile.log').write_text(result.stdout+result.stderr)
         if result.returncode:raise RuntimeError('Lookup compilation failed; inspect ignored evidence')
-        for mode in range(13):
+        for mode in range(16):
             result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True,timeout=30);(evidence/f'case-{mode}.log').write_text(result.stdout+result.stderr)
             if result.returncode:raise RuntimeError('Lookup guard case failed; inspect ignored evidence')
             print(result.stdout.strip())

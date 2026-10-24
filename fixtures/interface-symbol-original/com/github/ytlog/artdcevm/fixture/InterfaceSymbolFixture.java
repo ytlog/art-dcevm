@@ -13,5 +13,5 @@ public final class InterfaceSymbolFixture {
     public static class Receiver implements Child, Parent { public int marker = 31; }
     public static class Lost implements Child { public int marker = 37; }
     public static class Override extends Receiver { public int value() { return 17; } }
-    public static class Peer { public int value() { return 3; } }
+    public static class Peer { public int value() { return 3; } public static int staticValue() { return 59; } }
 }

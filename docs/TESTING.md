@@ -325,8 +325,11 @@ JIT 预热现在通过独立 JNI 循环真实调用 workload：三个 `*Mega` �
 
 `run-hook-overhead-benchmark.py --summarize` 仅重新汇总完整成功的原运行：必须提供 `run.json`，其预定轮次／模式／状态的每一格和原始报告须全部存在且成功，不能跳过失败格、纳入未登记报告或重复计算同一目录。汇总须显式复用原 CPU、前台、JNI 时钟和选定单元条件，并重新执行与现场相同的报告校验。`test-benchmark-summary.py` 覆盖这些负例；汇总不会追加设备运行或改变原性能判定。
 
-`interface-symbols` 同时覆盖两层父接口和实现类的跨加载器参数／返回类型、错误完整描述符、匹配类型的真实调用及普通反射负例，贯穿失败批次、提交、恢复与 GC。共享 `InterfaceSymbolState` 也用于固定 JBR 的解释器／JIT 对照。`test-method-handle-lookup-host.py` 的 13 组验证另含 1／3／9 层调用链、不同调用方、非 public 声明、分段栈读取失败、缺递归方法标识与缺活参数观察；报告验证器拒绝省略递归检查。此路径改变共享查找守卫，冻结后在 API 33／36 运行完整普通／CheckJNI 功能矩阵。其他运行库的 SO／ABI 分析仅标为静态验证，不能写成设备实测，API 30–32 的续接 71 不变。
+`interface-symbols` 同时覆盖两层父接口和实现类的跨加载器参数／返回类型、错误完整描述符、匹配类型的真实调用及普通反射负例，贯穿失败批次、提交、恢复与 GC。共享 `InterfaceSymbolState` 也用于固定 JBR 的解释器／JIT 对照。`test-method-handle-lookup-host.py` 的 16 组验证另含 1／3／9 层调用链、不同调用方、非 public 声明、分段栈读取失败、缺递归方法标识与缺活参数观察；报告验证器拒绝省略递归检查。此路径改变共享查找守卫，冻结后在 API 33／36 运行完整普通／CheckJNI 功能矩阵。其他运行库的 SO／ABI 分析仅标为静态验证，不能写成设备实测，API 30–32 的续接 71 不变。
 
 `interface-symbols` 另验普通类已声明静态方法的参数／返回类型加载器别名（含两者同时不同）、错误描述符、匹配参数的真实调用、null、返回对象身份及普通反射负例；失败批次、提交、恢复和 GC 前后均必须有证据。共享 JBR 探针使用相同用例。主机回归另验证普通类静态活参数缺失时不发布 static 证明，以及 bootstrap／非 public 类与不匹配调用方继续委托。
 
 `python3 tools/test-lookup-probe-shrinking.py [--java-home <jdk>]` 用实际 consumer 规则执行 R8，再在 JVM 中分别运行缩减后的 virtual／static 探针。它验证字符串查找所需的方法及内部接口层级没有被混淆破坏；仅保留最早的 StaticOwner 不能保护后来增加的探针。该主机结果验证 Java 发布契约，不替代 ART 活帧与设备证明。
+
+
+`interface-symbols` 另覆盖普通类一层／两层继承静态方法的真实调用、null、对象身份、遮蔽与重载、跨加载器参数／返回类型、错误描述符和声明反射边界。private/protected 访问拒绝、非 public 父类 public 方法、接口 static 不被类继承与方法体异常独立断言。同批 Peer 的 static 方法改体，缓存与新建的子类查找句柄必须随成功事务更新，在失败和恢复后保留正确方法体；每种状态也在 GC 后验证。固定 JBR 共享夹具按解释器和 JIT 模式运行。主机查找保护现有 16 组测试另验缺少 `FindClassMethod`、未观察继承声明、证明异常、boot 声明与公开 ID 映射失败；R8 测试独立调用 virtual、static 和 inherited-static 三种缩减后证明。冻结后补跑 API 33／36 完整普通／CheckJNI 功能矩阵，性能越线和历史停顿仍须单独记录。

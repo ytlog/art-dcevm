@@ -47,6 +47,8 @@
 
 同一查找保护也覆盖 public 应用普通类的已声明静态方法：`findStatic` 的完整描述符匹配、但参数或返回 Class 来自另一加载器时抛 `IllegalAccessException`。匹配类型的调用、对象身份、null 参数、错误描述符和普通反射保留原路径。static 准备另要求观察普通类活 `MethodType` 并实际调用内部静态方法成功；bootstrap 与非 public 类仍交回原入口。
 
+通过独立继承静态调用证明后，public 应用类的 `findStatic` 还支持通过子类查找父类静态方法。命名 `Class::FindClassMethod` 按完整描述符选择声明，公开 JVMTI method ID 转成真实反射对象，再交回 libcore 检查访问权限与创建句柄；不改变普通 `getDeclaredMethod` 的声明范围。类内遮蔽、重载、类型加载器身份、private/protected 访问拒绝、非 public 父类的 public 方法，以及父类改体后的新旧句柄在 API 33／36 已验证。缺少命名解析器或独立调用证明时保留原查找路径；bootstrap 声明继续由原入口过滤。其他已存运行库仅核对命名符号，不能视作设备验证；API 30–32 的旧帧续接 71 不变。
+
 `lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义。与 JBR 相同，新出现的 default 冲突照常接受，经冲突方法的调用抛 `IncompatibleClassChangeError`，之后消除冲突的事务恢复唯一的 default。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
 
 接口事务要求 ART 可以改写已有成员的 JNI ID。纯 pointer 模式可能没有 ClassExt 的 pointer-id 标记，因此在 Native 快照阶段还检查公开 JVMTI 返回的方法或字段 ID 表示；指针 ID 在进入 ART 事务前以 79 拒绝。切换模式不会清除历史 pointer-id 准入标记。普通类仍按 ART 原有规则验收；声明在另一接口上的生成 copy，其保留指针缓存另见[移除接口](#移除接口的语义)。

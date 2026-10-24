@@ -11,6 +11,26 @@ public final class MethodHandleLookupProbe {
     public interface Child extends Parent { }
     public interface Leaf extends Child { }
     public static class OrdinaryOwner { public static int value() { return 3; } }
+    public static class OrdinaryMiddle extends OrdinaryOwner { }
+    public static class OrdinaryLeaf extends OrdinaryMiddle { }
+    public static class OrdinaryHiding extends OrdinaryLeaf {
+        public static int value() { return 5; }
+    }
+    public static void runInheritedStatic() throws Throwable {
+        int inherited = (int) MethodHandles.publicLookup().findStatic(
+                OrdinaryLeaf.class, "value", MethodType.methodType(int.class)).invokeExact();
+        int hidden = (int) MethodHandles.publicLookup().findStatic(
+                OrdinaryHiding.class, "value", MethodType.methodType(int.class)).invokeExact();
+        if (inherited != 3 || hidden != 5) throw new AssertionError("class static resolution changed target");
+        try {
+            MethodHandles.publicLookup().findStatic(OrdinaryLeaf.class, "value", MethodType.methodType(String.class));
+            throw new AssertionError("inherited wrong descriptor accepted");
+        } catch (NoSuchMethodException expected) { }
+        try {
+            OrdinaryLeaf.class.getDeclaredMethod("value");
+            throw new AssertionError("ordinary declared reflection changed");
+        } catch (NoSuchMethodException expected) { }
+    }
     public static void runStatic() throws Throwable {
         try {
             MethodHandles.publicLookup().findStatic(Child.class, "inherited", MethodType.methodType(int.class));

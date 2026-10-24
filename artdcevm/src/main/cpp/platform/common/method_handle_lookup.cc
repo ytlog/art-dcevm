@@ -27,6 +27,9 @@ JavaVM* runtime_vm = nullptr;
 // base/pointer_size.h, fixed 11--17: the helper runs under the FastNative
 // caller's shared mutator access and does not allocate or suspend.
 void* find_interface = nullptr;
+void* find_class = nullptr;
+bool inherited_static_verified = false;
+thread_local bool probing_inherited_static = false, observed_inherited_static = false;
 int runtime_api = 0;
 void* (*decode_global)(JavaVM*, jobject) = nullptr;
 jobject (*new_local)(JNIEnv*, void*) = nullptr;
@@ -97,7 +100,7 @@ jint RecursiveVirtualDepth(jvmtiFrameInfo (&frames)[4], jint count) {
 // libcore's parameter/return Class identity checks. A descriptor match with a
 // foreign-loader Class is an access/linkage failure on JBR, not a missing member.
 // Interface static hiding retains its earlier invocation-kind precedence.
-bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
+bool ResolveLookup(JNIEnv* jni, jobject klass, jstring name, jobjectArray args, jobject* result) {
   if (!name || !args) return false;  // Preserve the original null checks.
   const jint flags = jni->GetIntField(klass, class_flags_field);
   // dex/modifiers.h, fixed 11--17: leave obsolete mirrors to the original check.
@@ -142,7 +145,10 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
     if (probing && static_lookup && !(flags & evolution::kAccInterface)) observed_static_class = true;
     return true;
   };
-  if (static_lookup && (flags & evolution::kAccInterface)) {
+  const bool class_resolution = static_lookup && !(flags & evolution::kAccInterface) &&
+      find_class && (probing_inherited_static || inherited_static_verified);
+  Local<jclass> declaring{jni};
+  if (static_lookup && ((flags & evolution::kAccInterface) || class_resolution)) {
     if (!read_type()) return true;
     std::string descriptor("(");
     for (jsize i = 0, n = jni->GetArrayLength(args); i < n; ++i) {
@@ -159,27 +165,28 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
     if (!root.value) return ServiceFailure(jni);
     void* owner = decode_global(runtime_vm, root.value);
     if (!owner) return ServiceFailure(jni);
+    void* resolver = class_resolution ? find_class : find_interface;
     auto* method = runtime_api >= 35
-        ? reinterpret_cast<abi::arm64::android15::FindInterfaceMethod>(find_interface)(
+        ? reinterpret_cast<abi::arm64::android15::FindClassMethod>(resolver)(
             owner, requested_name.chars, descriptor, abi::arm64::android15::PointerSize::k64)
-        : reinterpret_cast<abi::arm64::android11::FindInterfaceMethod>(find_interface)(
+        : reinterpret_cast<abi::arm64::android11::FindClassMethod>(resolver)(
             owner, requested_name.chars, descriptor, abi::arm64::android11::PointerSize::k64);
     if (!method) {
-      jni->ThrowNew(missing_error, "no interface method with the requested descriptor");
+      jni->ThrowNew(missing_error, "no method with the requested descriptor");
       return true;
     }
     // Class objects are nonmoving (Class::Alloc, fixed 11--17). Root the
     // resolved declaration through ART's JNI bridge before public inspection;
     // a boot declaration must retain libcore's hidden-API filtering.
-    Local<jclass> declaring{jni, static_cast<jclass>(new_local(jni,
-        reinterpret_cast<void*>(static_cast<uintptr_t>(method->declaring_class))))};
+    declaring.value = static_cast<jclass>(new_local(jni,
+        reinterpret_cast<void*>(static_cast<uintptr_t>(method->declaring_class))));
     if (!declaring.value) return ServiceFailure(jni);
     Local<jobject> declaring_loader{jni};
     if (environment->GetClassLoader(declaring.value, &declaring_loader.value)) return ServiceFailure(jni);
     if (!declaring_loader.value || (jni->GetIntField(declaring.value, class_flags_field) & kAccObsoleteObject)) return false;
     if (!(method->access_flags.load(std::memory_order_relaxed) & evolution::kAccStatic)) {
-      if (probing) observed_static = true;
-      jni->ThrowNew(access_error, "interface method is not static");
+      if (probing && !class_resolution) observed_static = true;
+      jni->ThrowNew(access_error, "method is not static");
       return true;
     }
   }
@@ -187,7 +194,10 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
     jmethodID* value = nullptr;
     ~Methods() { if (value) environment->Deallocate(reinterpret_cast<unsigned char*>(value)); }
   } methods;
-  if (environment->GetClassMethods(static_cast<jclass>(klass), &count, &methods.value)) return ServiceFailure(jni);
+  // ART selected the complete descriptor. Use the public method ID for that
+  // declaration; never reinterpret an ArtMethod pointer as a JNI method ID.
+  jclass methods_owner = class_resolution ? declaring.value : static_cast<jclass>(klass);
+  if (environment->GetClassMethods(methods_owner, &count, &methods.value)) return ServiceFailure(jni);
   for (jint i = 0; i < count; ++i) {
     jint modifiers = 0;
     if (environment->GetMethodModifiers(methods.value[i], &modifiers)) return ServiceFailure(jni);
@@ -217,7 +227,7 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
     }
     // Use ART's reflection conversion for actual Class identities; do not
     // resolve descriptor strings through a second class-loader search.
-    Local<jobject> reflected{jni, jni->ToReflectedMethod(static_cast<jclass>(klass), methods.value[i], (modifiers & evolution::kAccStatic) ? JNI_TRUE : JNI_FALSE)};
+    Local<jobject> reflected{jni, jni->ToReflectedMethod(methods_owner, methods.value[i], (modifiers & evolution::kAccStatic) ? JNI_TRUE : JNI_FALSE)};
     if (!reflected.value || jni->ExceptionCheck()) return ServiceFailure(jni);
     Local<jobject> actual_return{jni, jni->CallObjectMethod(reflected.value, reflected_return)};
     if (!actual_return.value || jni->ExceptionCheck()) return ServiceFailure(jni);
@@ -235,11 +245,23 @@ bool Reject(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) {
       jni->ThrowNew(access_error, "method type has a different class-loader identity");
       return true;
     }
+    if (class_resolution && !jni->IsSameObject(klass, declaring.value)) {
+      // Return the genuine reflected declaration to findStatic. Its existing
+      // return-type and lookup-owner access checks still run before a handle
+      // is created. Ordinary getDeclaredMethod never enters this stack chain.
+      if (probing_inherited_static) observed_inherited_static = true;
+      *result = reflected.value;
+      reflected.value = nullptr;
+      return true;
+    }
+    if (class_resolution) return false;  // Matching declared methods retain the original entry.
   }
-  return false;
+  return class_resolution ? ServiceFailure(jni) : false;
 }
 jobject DeclaredMethod(JNIEnv* jni, jobject klass, jstring name, jobjectArray args) noexcept try {
-  if ((probing || enabled.load(std::memory_order_acquire)) && !jni->ExceptionCheck() && Reject(jni, klass, name, args)) return nullptr;
+  jobject result = nullptr;
+  if ((probing || enabled.load(std::memory_order_acquire)) && !jni->ExceptionCheck() &&
+      ResolveLookup(jni, klass, name, args, &result)) return result;
   return original(jni, klass, name, args);
 } catch (...) {
   ServiceFailure(jni);
@@ -290,6 +312,7 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   if (env->AddCapabilities(&capabilities)) return false;
   environment = env;
   find_interface = symbols::Find(kFindInterfaceMethod);
+  find_class = symbols::Find(kFindClassMethod);
   runtime_api = android_get_device_api_level();
   decode_global = reinterpret_cast<decltype(decode_global)>(symbols::Find(kDecodeGlobal));
   new_local = reinterpret_cast<decltype(new_local)>(symbols::Find(kNewLocalRef));
@@ -352,6 +375,19 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     jni->CallStaticVoidMethod(probe.value, run_static);
     probing = false;
     static_verified = observed_static && observed_static_class && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
+  // A separately observed inherited declaration and actual call are required;
+  // absence/failure preserves the independently proved existing static path.
+  inherited_static_verified = false;
+  jmethodID run_inherited = jni->GetStaticMethodID(probe.value, "runInheritedStatic", "()V");
+  if (jni->ExceptionCheck()) jni->ExceptionClear();
+  if (static_verified && find_class && run_inherited) {
+    observed_inherited_static = false;
+    probing = probing_inherited_static = true;
+    jni->CallStaticVoidMethod(probe.value, run_inherited);
+    probing = probing_inherited_static = false;
+    inherited_static_verified = observed_inherited_static && !jni->ExceptionCheck();
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
   {
