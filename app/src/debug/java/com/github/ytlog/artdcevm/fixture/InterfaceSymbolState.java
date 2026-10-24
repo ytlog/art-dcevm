@@ -42,6 +42,58 @@ public final class InterfaceSymbolState {
     public static class PublicStaticChild extends HiddenStaticBase { }
     public interface StaticInterface { static int interfaceOnly() { return 79; } }
     public static class StaticImplementor implements StaticInterface { }
+    public interface StaticChildInterface extends StaticInterface {
+        static int childOnly() { return InterfaceSymbolFixture.Peer.staticValue(); }
+    }
+    public interface StaticLeafInterface extends StaticChildInterface { }
+    public interface StaticOtherInterface extends StaticInterface { }
+    public interface StaticDiamond extends StaticLeafInterface, StaticOtherInterface { }
+    public interface StaticReverse extends StaticOtherInterface, StaticLeafInterface { }
+    public static class StaticLeafImplementor extends PeerStaticChild implements StaticDiamond { }
+    public static class StaticOwnImplementor extends StaticLeafImplementor {
+        public static int interfaceOnly() { return 101; }
+    }
+    private Method staticEnumerationCache;
+    private static int enumeratedCount(Class<?> owner, String name) {
+        int count = 0;
+        for (Method method : owner.getMethods()) if (method.getName().equals(name)) ++count;
+        return count;
+    }
+    private void verifyStaticEnumeration(Check check, String prefix, String kind, boolean changed) throws Exception {
+        Class<?>[] owners = {StaticInterface.class, StaticChildInterface.class, StaticLeafInterface.class,
+                StaticDiamond.class, StaticReverse.class, StaticImplementor.class,
+                StaticLeafImplementor.class, StaticOwnImplementor.class};
+        for (int i = 0; i < owners.length; ++i) {
+            Class<?> owner = owners[i]; String key = prefix + "staticEnumeration" + i;
+            check.eq(key+"Root", i == 0 || i == 7 ? 1 : 0, enumeratedCount(owner,"interfaceOnly"));
+            check.eq(key+"Child", i == 1 ? 1 : 0, enumeratedCount(owner,"childOnly"));
+            check.eq(key+"Declared", i == 0 || i == 7,
+                    java.util.Arrays.stream(owner.getDeclaredMethods()).anyMatch(m -> m.getName().equals("interfaceOnly")));
+        }
+        Method own = enumerated(StaticInterface.class,"interfaceOnly",int.class);
+        check.eq(prefix+"staticEnumerationOwnOwner",true,own.getDeclaringClass()==StaticInterface.class);
+        check.eq(prefix+"staticEnumerationOwnCall",79,own.invoke(null));
+        check.eq(prefix+"staticEnumerationOwnDeclared",79,StaticInterface.class.getDeclaredMethod("interfaceOnly").invoke(null));
+        Method childStatic = enumerated(StaticChildInterface.class,"childOnly",int.class);
+        check.eq(prefix+"staticEnumerationChildOwner",true,childStatic.getDeclaringClass()==StaticChildInterface.class);
+        check.eq(prefix+"staticEnumerationChildCall",changed ? 61 : 59,childStatic.invoke(null));
+        if (staticEnumerationCache == null) staticEnumerationCache = childStatic;
+        check.eq(prefix+"staticEnumerationCached",changed ? 61 : 59,staticEnumerationCache.invoke(null));
+        Method classStatic = enumerated(StaticLeafImplementor.class,"staticValue",int.class);
+        check.eq(prefix+"staticEnumerationClassOwner",true,classStatic.getDeclaringClass()==InterfaceSymbolFixture.Peer.class);
+        check.eq(prefix+"staticEnumerationClassCall",changed ? 61 : 59,classStatic.invoke(null));
+        Method hidden = enumerated(StaticOwnImplementor.class,"interfaceOnly",int.class);
+        check.eq(prefix+"staticEnumerationClassHiding",true,hidden.getDeclaringClass()==StaticOwnImplementor.class);
+        check.eq(prefix+"staticEnumerationClassHidingCall",101,hidden.invoke(null));
+        Class<?>[] changing = {InterfaceSymbolFixture.Child.class,InterfaceSymbolFixture.Receiver.class,
+                InterfaceSymbolFixture.Override.class,InterfaceSymbolFixture.Lost.class};
+        for (int i = 0; i < changing.length; ++i) {
+            int staticValues = 0;
+            for (Method method : changing[i].getMethods())
+                if (method.getName().equals("value") && java.lang.reflect.Modifier.isStatic(method.getModifiers())) ++staticValues;
+            check.eq(prefix+"staticEnumerationTransition"+i, i == 0 && changed && kind.equals("static") ? 1 : 0,staticValues);
+        }
+    }
     static class PackageStaticOwner {
         public static InterfaceSymbolFixture.Result object(InterfaceSymbolFixture.Result value) { return value; }
         public static int echo(InterfaceSymbolFixture.Result value) { return value == null ? 83 : 89; }
@@ -359,6 +411,7 @@ public final class InterfaceSymbolState {
             return (Object) handle.invokeExact(peer,false);
         }));
         verifyEnumeration(check,prefix,changed);
+        verifyStaticEnumeration(check,prefix,kind,changed);
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }

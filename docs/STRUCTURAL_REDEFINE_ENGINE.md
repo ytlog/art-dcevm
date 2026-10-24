@@ -586,3 +586,6 @@ Android 11–14 与 15–17 的 PointerSize 声明分别保留在版本 ABI 目�
 应用接口公开方法枚举使用独立 `method_enumeration` 通用模块与命名 `Class_getDeclaredMethodsUnchecked(JNIEnv*, jobject, jboolean)` FastNative 入口，单一 Hook 所有者。仅在 publicOnly 且精确 `getPublicMethodsInternal(List) → getMethods()` 帧标识匹配时，通过公开 JVMTI 读取当前 Class 和最后一个传入的 List；不推算对象字段、机器码地址或 DEX 寄存器偏移。固定源码和运行时证明共同约束该活参数契约。
 
 ART 仍负责生成／过滤 Method 数组。枚举保护以当前 Class 身份检查继承关系，按名称、返回 Class 和逐项参数 Class 匹配完整签名，将 List 中的严格祖先应用接口条目替换为当前更具体声明。类条目、无关接口、static、boot 和普通声明枚举不被替换；原排序去重保留。所有应用类／Method 根仅为本次 JNI 局部引用，不新增跨事务成员缓存。准备探针要求接口与实现类、bridge 与非 bridge 四种替换观察，并验证实际调用、类实现优先和声明枚举隔离；部分观察、异常、安装或解除临时 Hook 失败不发布能力。处理元数据时的重入委托原入口。该模块不参与迁移、引用替换、去优化或缓存失效；这些仍由 ART 原事务执行。
+
+
+接口 static 枚举过滤复用此模块、入口与活参数契约，没有新增 Hook 或私有 ABI。当前枚举根 Class 与被收集声明接口不同且独立 static 证明成功时，排除该数组中的 static 方法；使用公开 JNI 创建同类型 Method 数组，并保留其余 ART Method 的对象身份和顺序。自身声明、类静态继承、boot 和普通声明枚举保持原行为。数组分配／填充异常保留原异常，不能返回未完成过滤的结果。`runStatic` 与已有最具体声明证明独立，后者成功而前者失败仍可启用旧能力；新能力不接受仅部分路径观察。消费者规则覆盖新增探针内部类型，R8 单独执行真实调用。

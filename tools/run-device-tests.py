@@ -1616,6 +1616,17 @@ def interface_symbol_checks(kind, changed, late=True):
                        _key+"Declared":_slot in (0,2,8)})
         if 2 <= _slot < 8: result.update({_key+"RankOwner":True, _key+"RankCall":7})
     result.update(enumerationExtraOwner=True, enumerationExtraCall=97)
+    for _slot in range(8):
+        _key = "staticEnumeration" + str(_slot)
+        result.update({_key+"Root":1 if _slot in (0,7) else 0,
+                       _key+"Child":1 if _slot==1 else 0, _key+"Declared":_slot in (0,7)})
+    result.update(staticEnumerationOwnOwner=True, staticEnumerationOwnCall=79, staticEnumerationOwnDeclared=79,
+                  staticEnumerationChildOwner=True, staticEnumerationChildCall=61 if changed else 59,
+                  staticEnumerationCached=61 if changed else 59, staticEnumerationClassOwner=True,
+                  staticEnumerationClassCall=61 if changed else 59, staticEnumerationClassHiding=True,
+                  staticEnumerationClassHidingCall=101)
+    for _slot in range(4):
+        result["staticEnumerationTransition"+str(_slot)] = 1 if _slot==0 and changed and kind=="static" else 0
     result.update(childStaticResolution="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else "java.lang.IllegalAccessException",
                   childStaticWrongReturn="java.lang.NoSuchMethodException",parentStaticWrongReturn="java.lang.NoSuchMethodException",
                   parentStaticAliasedParameter="java.lang.IllegalAccessException",childStaticAliasedReturn="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException",

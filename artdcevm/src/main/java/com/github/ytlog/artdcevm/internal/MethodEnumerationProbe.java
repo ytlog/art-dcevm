@@ -16,6 +16,42 @@ public final class MethodEnumerationProbe {
         @Override public String value() { return "class"; }
         @Override public int rank() { return 9; }
     }
+    public interface StaticRoot { static int hidden() { return 13; } }
+    public interface StaticMixed extends StaticRoot {
+        static int mixed() { return 17; }
+        default int live() { return 19; }
+    }
+    public interface StaticLeaf extends StaticMixed { }
+    public static class StaticReceiver implements StaticLeaf { }
+    public static class StaticOwn extends StaticReceiver { public static int hidden() { return 23; } }
+    public static class StaticSubclass extends StaticOwn { }
+    public static void runStatic() throws Exception {
+        for (Class<?> owner : new Class<?>[]{StaticLeaf.class, StaticReceiver.class, StaticOwn.class, StaticSubclass.class}) {
+            int own = 0, live = 0;
+            boolean hasOwn = owner == StaticOwn.class || owner == StaticSubclass.class;
+            for (Method method : owner.getMethods()) {
+                if (method.getName().equals("mixed")) throw new AssertionError("inherited interface static");
+                if (method.getName().equals("hidden")) {
+                    if (!hasOwn || method.getDeclaringClass() != StaticOwn.class
+                            || !Integer.valueOf(23).equals(method.invoke(null))) throw new AssertionError("class static changed");
+                    ++own;
+                }
+                if (method.getName().equals("live")) {
+                    if (!Integer.valueOf(19).equals(method.invoke(new StaticReceiver()))) throw new AssertionError("instance method lost");
+                    ++live;
+                }
+            }
+            if (own != (hasOwn ? 1 : 0) || live != 1) throw new AssertionError("incomplete static filtering");
+        }
+        int declarations = 0;
+        for (Method method : StaticRoot.class.getMethods()) {
+            if (method.getName().equals("hidden") && method.getDeclaringClass() == StaticRoot.class
+                    && Integer.valueOf(13).equals(method.invoke(null))) ++declarations;
+        }
+        if (declarations != 1 || !Integer.valueOf(13).equals(StaticRoot.class.getDeclaredMethod("hidden").invoke(null))
+                || !Integer.valueOf(17).equals(StaticMixed.class.getDeclaredMethod("mixed").invoke(null)))
+            throw new AssertionError("own static declaration lost");
+    }
     public static void run() throws Exception {
         for (Class<?> owner : new Class<?>[]{Leaf.class, Receiver.class, Own.class}) {
             boolean own = owner == Own.class;

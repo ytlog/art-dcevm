@@ -55,7 +55,7 @@
 
 `getMethods()` 的继承应用接口声明现在按完整签名保留更具体的接口声明，包含协变桥接和普通实例方法。原问题是父接口先收集、去重时留下祖先 abstract 声明，并非桥接方法从 native 数组中消失。独立运行时证明后，在固定的内部收集调用链中使用 ART 已创建的 Method 替换被覆盖条目；原过滤与最终去重保留。类实现优先、不同返回类型／参数 Class 身份、普通 `getDeclaredMethods()` 和 bootstrap 枚举保持原行为。API 33／36 验证桥接／synthetic／default 属性、声明类、两个方向的菱形父接口顺序、真实反射调用、缓存 Method、改体／回滚／恢复与 GC。其他运行库仅有入口名称覆盖，不代表设备验证。
 
-此扩展不改变无继承关系接口之间的同签名去重策略，也不扩大静态接口方法继承或 bootstrap 过滤范围。准备期间缺入口、活列表／当前 Class 读取失败、部分证明或实际调用失败均不启用；启用后遇到不可读服务抛 InternalError 或保留原异常，不返回部分修正结果。首个可用接口事务的 Native 阶段准备，成功启用后驻留，包括随后事务失败的情况。新增枚举路径的性能尚未单独验收；原性能越线和停顿问题保持记录。
+此扩展不改变无继承关系接口之间的同签名去重策略，也不扩大 bootstrap 过滤范围。准备期间缺入口、活列表／当前 Class 读取失败、部分证明或实际调用失败均不启用；启用后遇到不可读服务抛 InternalError 或保留原异常，不返回部分修正结果。首个可用接口事务的 Native 阶段准备，成功启用后驻留，包括随后事务失败的情况。新增枚举路径的性能尚未单独验收；原性能越线和停顿问题保持记录。
 
 
 `lastRejection` 给出被拒类名和原因；失败不改变旧行为。 新 default 对已有实例立即生效，没有提交 DEX 的实现类也获得 copied default；类链 public 实现与更具体的子接口仍优先。static/private 退役沿用普通类的字节码、JNI、反射与 MethodHandle 语义。与 JBR 相同，新出现的 default 冲突照常接受，经冲突方法的调用抛 `IncompatibleClassChangeError`，之后消除冲突的事务恢复唯一的 default。插入 lambda 可能改变合成类序号，热重载端须像处理普通类一样隔离旧闭包或保留旧桥，见[接口成员演进](STRUCTURAL_REDEFINE_ENGINE.md#接口成员演进)。
@@ -196,3 +196,6 @@ API 33 在真实运行时续接自证明通过后，另行开放普通类和接�
 API 30–32 的续接适配目前仅为关闭准入的候选实现：已核对固定 Android 11／12／12L 源码与已存 ELF 名称，并加入 legacy 异常 ABI、DEX 方法身份和 signed root 服务。三版均没有本功能的设备证据，仍保留 71；内部 Debug 自证明也不能开放应用守卫。缺少 throwing direct access 入口的模块改用受限的精确 DexPc direct 调用适配，必须通过类／接口实际调用完成证明。API 33 可在 Debug 强制验证该路径，但不能据此宣称 API 30–32 已通过设备验收；不放宽共享成员访问检查，构造器不在适配范围。
 
 新增诊断：`privateSelfContinuationDeviceValidated` 表示版本是否列入已验收的续接准入范围（当前仅 API 33），不能代替本进程 `…Proven`；`…ExceptionAbi` 为 `legacy-instrumentation`、`skip-flags` 或 `unavailable`；`…IdentityService` 为 `unverified`、`named-method-and-fixed-source` 或 `fixed-source`；`…DirectAccessProofs` 的位值 1／2 分别表示内部类／接口旧 private direct 帧真实通过，位值 8 另表示精确 DexPc direct 调用实际完成，旧观察位 4 不再产生。`…DirectBoundary` 报告选中的 `throwing-access`、`dex-pc-direct`、`modern-selector` 或 `unavailable`，与证明及准入相互独立；被续接的 direct 调用沿用跳过 move-result 调试事件的策略。
+
+
+接口静态方法的公开枚举另经独立 `runStatic` 证明后对齐：应用子接口和实现类的 `getMethods()` 不再继承接口 static 声明；声明接口自身仍可枚举和调用，普通类的静态继承／隐藏不变。根因是 ART 收集所有 public 接口声明时没有排除 static，而固定 JBR 在合并父接口时明确排除。复用原枚举 Hook，仅在精确继承收集路径返回由真实 Method 组成的过滤数组，不改变方法本身或 `getDeclaredMethods()`。证明必须观察子接口、实现类、自身声明及空／混合过滤结果并实际调用；缺方法、全局根、部分观察或异常只关闭新扩展，已有最具体声明能力仍可启用。API 33／36 覆盖多层／菱形、类静态继承与隐藏、缓存调用、同批改体、接口方法变 static、失败事务、恢复与 GC。其他设备没有执行证明；API 30–32 续接仍保留 71。新增过滤性能未验收，旧性能和停顿问题不改标通过。

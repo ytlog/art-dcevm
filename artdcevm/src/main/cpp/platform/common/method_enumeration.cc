@@ -3,6 +3,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <vector>
 #include "platform/common/art_hook.h"
 #include "platform/symbols/method_enumeration_symbols.h"
 
@@ -13,16 +14,17 @@ Entry original = nullptr;
 void* target = nullptr;
 void* hook = nullptr;
 jvmtiEnv* environment = nullptr;
-jclass list_class = nullptr, error_class = nullptr;
+jclass list_class = nullptr, error_class = nullptr, method_class = nullptr;
 jmethodID collect = nullptr, get_methods = nullptr;
 jmethodID list_size = nullptr, list_get = nullptr, list_set = nullptr;
 jmethodID declaring = nullptr, name = nullptr, return_type = nullptr, parameters = nullptr, modifiers = nullptr;
 jint list_slot = -1;
-bool verified = false;
-std::atomic<bool> enabled{false};
+bool verified = false, static_verified = false;
+std::atomic<bool> enabled{false}, static_enabled{false};
 std::mutex install_mutex;
 thread_local bool preparing = false, probing = false, processing = false;
-thread_local unsigned observed = 0;
+thread_local unsigned observed = 0, static_observed = 0;
+thread_local bool static_probing = false;
 constexpr jint kPublic = 0x0001, kStatic = 0x0008, kBridge = 0x0040, kInterface = 0x0200;
 
 template<class T> struct Local {
@@ -83,7 +85,7 @@ bool SameSignature(JNIEnv* jni, const Method& a, const Method& b) {
   }
   return true;
 }
-bool Refine(JNIEnv* jni, jobject klass, jobjectArray methods) {
+bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   jint flags = 0;
   if (environment->GetClassModifiers(static_cast<jclass>(klass), &flags)) return Failure(jni);
   if (!(flags & kInterface)) return true;
@@ -106,11 +108,23 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray methods) {
   if (environment->GetClassModifiers(static_cast<jclass>(root.value), &root_flags)) return Failure(jni);
   const jint size = jni->CallIntMethod(list.value, list_size);
   if (jni->ExceptionCheck()) return false;
-  for (jsize m = 0, n = jni->GetArrayLength(methods); m < n; ++m) {
-    Local<jobject> next{jni, jni->GetObjectArrayElement(methods, m)};
+  const bool filter_static = static_probing || static_enabled.load(std::memory_order_acquire);
+  const bool inherited = !jni->IsSameObject(root.value, klass);
+  const jsize length = jni->GetArrayLength(*methods);
+  std::vector<jsize> retained;
+  for (jsize m = 0; m < length; ++m) {
+    Local<jobject> next{jni, jni->GetObjectArrayElement(*methods, m)};
     if (!next.value || jni->ExceptionCheck()) return Failure(jni);
     Method candidate(jni);
     if (!candidate.Read(next.value)) return false;
+    if (filter_static && (candidate.flags & kStatic)) {
+      if (inherited) {
+        if (static_probing) static_observed |= root_flags & kInterface ? 1u : 2u;
+        continue;
+      }
+      if (static_probing) static_observed |= 4u;
+    }
+    if (filter_static) retained.push_back(m);
     if (!(candidate.flags & kPublic) || (candidate.flags & kStatic)) continue;
     for (jint i = 0; i < size; ++i) {
       Local<jobject> previous{jni, jni->CallObjectMethod(list.value, list_get, i)};
@@ -136,6 +150,22 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray methods) {
           ? candidate.flags & kBridge ? 1u : 4u : candidate.flags & kBridge ? 2u : 8u;
     }
   }
+  if (filter_static && retained.size() != static_cast<size_t>(length)) {
+    // Keep ART's Method objects and order. Only the inherited public view gets
+    // a new array; own declarations and ordinary declared enumeration retain it.
+    Local<jobjectArray> filtered{jni, jni->NewObjectArray(static_cast<jsize>(retained.size()), method_class, nullptr)};
+    if (!filtered.value || jni->ExceptionCheck()) return Failure(jni);
+    for (jsize i = 0; i < static_cast<jsize>(retained.size()); ++i) {
+      Local<jobject> method{jni, jni->GetObjectArrayElement(*methods, retained[i])};
+      if (!method.value || jni->ExceptionCheck()) return Failure(jni);
+      jni->SetObjectArrayElement(filtered.value, i, method.value);
+      if (jni->ExceptionCheck()) return false;
+    }
+    if (static_probing) static_observed |= retained.empty() ? 8u : 16u;
+    jni->DeleteLocalRef(*methods);
+    *methods = filtered.value;
+    filtered.value = nullptr;
+  }
   return true;
 }
 jobjectArray DeclaredMethods(JNIEnv* jni, jobject klass, jboolean public_only) noexcept try {
@@ -143,7 +173,7 @@ jobjectArray DeclaredMethods(JNIEnv* jni, jobject klass, jboolean public_only) n
   if (!result || jni->ExceptionCheck() || public_only == JNI_FALSE || processing ||
       !(probing || enabled.load(std::memory_order_acquire))) return result;
   struct Processing { Processing() { processing = true; } ~Processing() { processing = false; } } scope;
-  if (Refine(jni, klass, result)) return result;
+  if (Refine(jni, klass, &result)) return result;
   jni->DeleteLocalRef(result);
   return nullptr;
 } catch (...) {
@@ -209,6 +239,11 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
       !list_size || !list_get || !list_set || !declaring || !name || !return_type || !parameters || !modifiers || !run || !methods_ready) {
     jni->ExceptionClear(); return false;
   }
+  // Optional proof: failure must not disable the already supported specificity.
+  jmethodID run_static = jni->GetStaticMethodID(probe.value, "runStatic", "()V");
+  if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_static = nullptr; }
+  if (run_static && !method_class) method_class = static_cast<jclass>(jni->NewGlobalRef(method.value));
+  if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_static = nullptr; }
   { std::lock_guard<std::mutex> lock(install_mutex);
     hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethods), HookSlot(&original)); }
   if (!hook) return false;
@@ -217,6 +252,14 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   probing = false;
   const bool passed = observed == 15 && !jni->ExceptionCheck();
   if (jni->ExceptionCheck()) jni->ExceptionClear();
+  static_verified = false;
+  if (passed && run_static && method_class) {
+    static_observed = 0; probing = true; static_probing = true;
+    jni->CallStaticVoidMethod(probe.value, run_static);
+    static_probing = false; probing = false;
+    static_verified = static_observed == 31 && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
   { std::lock_guard<std::mutex> lock(install_mutex);
     if (shadowhook_unhook(hook)) return false;
     hook = nullptr; }
@@ -228,6 +271,7 @@ bool Enable() {
   std::lock_guard<std::mutex> lock(install_mutex);
   if (!hook) hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethods), HookSlot(&original));
   if (!hook) return false;
+  static_enabled.store(static_verified, std::memory_order_release);
   enabled.store(true, std::memory_order_release);
   return true;
 }
