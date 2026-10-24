@@ -25,6 +25,10 @@ bool root_static_verified = false;
 std::atomic<bool> root_static_enabled{false};
 thread_local bool root_static_probing = false;
 thread_local unsigned root_static_observed = 0;
+bool root_instance_verified = false;
+std::atomic<bool> root_instance_enabled{false};
+thread_local bool root_instance_probing = false;
+thread_local unsigned root_instance_observed = 0;
 std::mutex install_mutex;
 thread_local bool preparing = false, probing = false, processing = false;
 thread_local unsigned observed = 0, static_observed = 0, bootstrap_observed = 0, override_observed = 0, bootstrap_instance_observed = 0;
@@ -96,7 +100,8 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   bool app = false;
   if (!AppClass(jni, static_cast<jclass>(klass), &app)) return false;
   const bool candidate_app = app;
-  const bool refine_bootstrap = bootstrap_instance_probing || bootstrap_instance_enabled.load(std::memory_order_acquire);
+  const bool refine_root = root_instance_probing || root_instance_enabled.load(std::memory_order_acquire);
+  const bool refine_bootstrap = refine_root || bootstrap_instance_probing || bootstrap_instance_enabled.load(std::memory_order_acquire);
   const bool filter_bootstrap = bootstrap_probing || root_static_probing || bootstrap_enabled.load(std::memory_order_acquire);
   if (!candidate_app && !(refine_bootstrap || filter_bootstrap)) return true;
   jvmtiFrameInfo frames[3]{};
@@ -109,9 +114,10 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   if (environment->GetLocalInstance(nullptr, 1, &root.value) || !root.value) return Failure(jni);
   if (!AppClass(jni, static_cast<jclass>(root.value), &app)) return false;
   const bool app_root = app;
+  const bool filter_root = root_static_probing || root_static_enabled.load(std::memory_order_acquire);
   if (!app_root) {
     if (bootstrap_probing && !candidate_app && jni->IsSameObject(root.value, klass)) bootstrap_observed |= 4u;
-    if (candidate_app || !(root_static_probing || root_static_enabled.load(std::memory_order_acquire))) return true;
+    if (candidate_app || !(filter_root || refine_root)) return true;
   }
   if (environment->GetLocalObject(nullptr, 1, list_slot, &list.value) || !list.value ||
       !jni->IsInstanceOf(list.value, list_class)) return Failure(jni);
@@ -121,7 +127,7 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
   if (jni->ExceptionCheck()) return false;
   const bool filter_static = candidate_app
       ? static_probing || bootstrap_probing || static_enabled.load(std::memory_order_acquire)
-      : filter_bootstrap;
+      : filter_bootstrap && (app_root || filter_root);
   const bool inherited = !jni->IsSameObject(root.value, klass);
   const jsize length = jni->GetArrayLength(*methods);
   std::vector<jsize> retained;
@@ -141,8 +147,8 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
       if (static_probing) static_observed |= 4u;
     }
     if (filter_static) retained.push_back(m);
-    // Bootstrap-root static proof does not authorize instance replacement.
-    if (!app_root || (!candidate_app && !refine_bootstrap) || !(candidate.flags & kPublic) || (candidate.flags & kStatic)) continue;
+    // Each root capability requires its own proof, independent of static filtering.
+    if ((!app_root && !refine_root) || (!candidate_app && !refine_bootstrap) || !(candidate.flags & kPublic) || (candidate.flags & kStatic)) continue;
     for (jint i = 0; i < size; ++i) {
       Local<jobject> previous{jni, jni->CallObjectMethod(list.value, list_get, i)};
       if (!previous.value || jni->ExceptionCheck()) return Failure(jni);
@@ -165,6 +171,7 @@ bool Refine(JNIEnv* jni, jobject klass, jobjectArray* methods) {
       }
       Local<jobject> displaced{jni, jni->CallObjectMethod(list.value, list_set, i, next.value)};
       if (jni->ExceptionCheck()) return false;
+      if (root_instance_probing && !app_root && !candidate_app && !app) root_instance_observed |= root_flags & kInterface ? 1u : 2u;
       if (bootstrap_instance_probing && !candidate_app && !app) bootstrap_instance_observed |= root_flags & kInterface
           ? candidate.flags & kBridge ? 1u : 4u : candidate.flags & kBridge ? 2u : 8u;
       if (override_probing && !app) override_observed |= root_flags & kInterface
@@ -275,6 +282,8 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_bootstrap_instance = nullptr; }
   jmethodID run_root_static = jni->GetStaticMethodID(probe.value, "runBootstrapRootStatic", "()V");
   if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_root_static = nullptr; }
+  jmethodID run_root_instance = jni->GetStaticMethodID(probe.value, "runBootstrapRootInstance", "()V");
+  if (jni->ExceptionCheck()) { jni->ExceptionClear(); run_root_instance = nullptr; }
   { std::lock_guard<std::mutex> lock(install_mutex);
     hook = shadowhook_hook_sym_addr(target, HookAddress(DeclaredMethods), HookSlot(&original)); }
   if (!hook) return false;
@@ -323,6 +332,14 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     root_static_verified = root_static_observed == 7 && !jni->ExceptionCheck();
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
+  root_instance_verified = false;
+  if (bootstrap_instance_verified && run_root_instance) {
+    root_instance_observed = 0; probing = true; root_instance_probing = true;
+    jni->CallStaticVoidMethod(probe.value, run_root_instance);
+    root_instance_probing = false; probing = false;
+    root_instance_verified = root_instance_observed == 3 && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
   { std::lock_guard<std::mutex> lock(install_mutex);
     if (shadowhook_unhook(hook)) return false;
     hook = nullptr; }
@@ -339,6 +356,7 @@ bool Enable() {
   bootstrap_enabled.store(bootstrap_verified, std::memory_order_release);
   static_enabled.store(static_verified, std::memory_order_release);
   root_static_enabled.store(root_static_verified, std::memory_order_release);
+  root_instance_enabled.store(root_instance_verified, std::memory_order_release);
   enabled.store(true, std::memory_order_release);
   return true;
 }

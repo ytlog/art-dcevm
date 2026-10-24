@@ -113,6 +113,36 @@ public final class MethodEnumerationProbe {
                 || java.nio.file.Path.class.getDeclaredMethod("compareTo",Object.class).getDeclaringClass()!=java.nio.file.Path.class)
             throw new AssertionError("declared view changed");
     }
+    public static void runBootstrapRootInstance() throws Exception {
+        Class<?>[] roots={java.util.NavigableSet.class,java.util.AbstractList.class,java.util.AbstractSet.class,java.util.AbstractCollection.class};
+        Class<?>[] owners={java.util.SortedSet.class,java.util.List.class,java.util.Set.class,java.util.Collection.class};
+        Object[] receivers={new java.util.TreeSet<String>(java.util.Collections.singleton("proof")),new BootstrapListReceiver(),
+                new java.util.HashSet<String>(java.util.Collections.singleton("proof")),new BootstrapListReceiver()};
+        for(int i=0;i<roots.length;++i){
+            if(roots[i].getClassLoader()!=Object.class.getClassLoader())throw new AssertionError("bootstrap root identity");
+            int count=0;
+            for(Method m:roots[i].getMethods())if(m.getName().equals("spliterator")){
+                if(m.getDeclaringClass()!=owners[i] || m.isBridge() || m.isSynthetic() || !m.isDefault())
+                    throw new AssertionError("bootstrap root ancestor retained");
+                java.util.ArrayList<String> values=new java.util.ArrayList<>();
+                ((java.util.Spliterator<String>)m.invoke(receivers[i])).forEachRemaining(values::add);
+                if(!values.equals(java.util.Collections.singletonList("proof")))throw new AssertionError("bootstrap root call");
+                ++count;
+            }
+            if(count!=1)throw new AssertionError("incomplete bootstrap root specificity");
+        }
+        int own=0;
+        for(Method m:java.util.ArrayList.class.getMethods())if(m.getName().equals("spliterator")){
+            if(m.getDeclaringClass()!=java.util.ArrayList.class || m.isDefault()
+                    || ((java.util.Spliterator<?>)m.invoke(new java.util.ArrayList<>())).estimateSize()!=0)
+                throw new AssertionError("bootstrap class priority changed");
+            ++own;
+        }
+        if(own!=1 || java.util.List.class.getDeclaredMethod("spliterator").getDeclaringClass()!=java.util.List.class)
+            throw new AssertionError("bootstrap declared view changed");
+        try{java.util.AbstractList.class.getDeclaredMethod("spliterator");throw new AssertionError("inherited method became declared");}
+        catch(NoSuchMethodException expected){ }
+    }
     public static void runBootstrapRootStatic() throws Exception {
         Class<?>[] roots={java.util.function.UnaryOperator.class,java.text.Collator.class,java.text.RuleBasedCollator.class};
         Object token=new Object();

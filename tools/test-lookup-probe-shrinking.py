@@ -10,7 +10,7 @@ import subprocess
 from evidence_paths import new_evidence_directory
 
 ROOT = Path(__file__).resolve().parents[1]
-MODES = ('virtual', 'static', 'inherited-static', 'nonpublic-static', 'bridge', 'enumeration', 'static-enumeration', 'bootstrap-static-enumeration', 'bootstrap-override-enumeration', 'bootstrap-instance-enumeration', 'bootstrap-root-static-enumeration')
+MODES = ('virtual', 'static', 'inherited-static', 'nonpublic-static', 'bridge', 'enumeration', 'static-enumeration', 'bootstrap-static-enumeration', 'bootstrap-override-enumeration', 'bootstrap-instance-enumeration', 'bootstrap-root-static-enumeration', 'bootstrap-root-instance-enumeration')
 RUNNER = '''public class Runner {
   public static void main(String[] args) throws Throwable {
     if (args[0].equals("virtual"))
@@ -33,8 +33,10 @@ RUNNER = '''public class Runner {
       com.github.ytlog.artdcevm.internal.MethodEnumerationProbe.runBootstrapOverride();
     else if (args[0].equals("bootstrap-instance-enumeration"))
       com.github.ytlog.artdcevm.internal.MethodEnumerationProbe.runBootstrapInstance();
-    else
+    else if (args[0].equals("bootstrap-root-static-enumeration"))
       com.github.ytlog.artdcevm.internal.MethodEnumerationProbe.runBootstrapRootStatic();
+    else
+      com.github.ytlog.artdcevm.internal.MethodEnumerationProbe.runBootstrapRootInstance();
     System.out.println("Lookup probe " + args[0] + " PASS");
   }
 }

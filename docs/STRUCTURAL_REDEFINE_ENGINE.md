@@ -601,4 +601,6 @@ Bootstrap 实例候选继续使用同一枚举 Hook、严格祖先关系、完�
 
 Bootstrap static 过滤按候选来源单独检查其证明状态；实例最具体声明证明通过不能代替 static 证明。即使应用 static 与 bootstrap 实例能力已启用，缺失 bootstrap static 证明时仍保留原静态枚举行为。
 
-标准库根的继承接口 static 过滤复用相同收集入口：仅当 `runBootstrapRootStatic` 独立证明通过时，bootstrap 根继续读取已证明的活 List 和根 Class；仍仅处理 ART 原数组中的接口 static，不替换标准库根下任何实例声明。普通类 static 不经过接口过滤路径，自身接口 static 按 Class 身份保留。新证明在已有 bootstrap static 证明成功后执行，以独立观察掩码验证接口根／类根过滤和自身声明，另实际调用自身 static、继承的类 static、default 与 declared 方法。失败不覆盖任何旧能力；成功后与原 Hook 一起常驻，后续事务失败不撤销。实例证明成功不能代替该证明，实例证明缺失也不阻止本项独立成功。无新增 Hook 所有者、命名符号、私有 ABI、全局应用成员引用或 ART 事务实现。
+标准库根的继承接口 static 过滤复用相同收集入口：仅当 `runBootstrapRootStatic` 独立证明通过时，bootstrap 根继续读取已证明的活 List 和根 Class；仍仅处理 ART 原数组中的接口 static，该 static 证明不授权标准库根实例替换（见下文独立实例证明）。普通类 static 不经过接口过滤路径，自身接口 static 按 Class 身份保留。新证明在已有 bootstrap static 证明成功后执行，以独立观察掩码验证接口根／类根过滤和自身声明，另实际调用自身 static、继承的类 static、default 与 declared 方法。失败不覆盖任何旧能力；成功后与原 Hook 一起常驻，后续事务失败不撤销。实例证明成功不能代替该证明，实例证明缺失也不阻止本项独立成功。无新增 Hook 所有者、命名符号、私有 ABI、全局应用成员引用或 ART 事务实现。
+
+标准库根的实例选择继续复用唯一枚举 Hook、活 Class／List 契约、完整 Class 签名与严格祖先替换，不增加反射对象或成员缓存。`runBootstrapRootInstance` 在 bootstrap 实例证明通过后执行；独立掩码 1／2 分别要求标准库接口根／类根已完成 List 替换，并验证实际调用、类实现优先及 declared 边界。新证明期间允许相应 bootstrap 候选进入公共替换路径；启用后仅由独立根实例状态授权。根 static 过滤仍单独检查根 static 状态，因此实例证明成功不会借用旧应用根 static 能力。反过来，根 static 成功也不授权实例替换。部分观察、活参数／类型身份／List 写入失败或 Java 异常不发布新能力；前置 bootstrap 实例证明缺失则不运行新证明。事务准备串行、成功后常驻及后续失败保留策略不变；ART 仍负责原事务的迁移、引用改写、去优化与缓存失效，无新增命名服务、ABI 或 Hook 所有者。

@@ -113,6 +113,44 @@ public final class InterfaceSymbolState {
         check.eq(prefix+"bootOverrideBootCall",changed ? "after" : "before",original.invoke(new BootSpecificReceiver()));
         check.eq(prefix+"bootOverrideDeclared",0,BootSpecificLeaf.class.getDeclaredMethods().length);
     }
+    public static class BootRootOwn extends BootListReceiver {
+        @Override public java.util.Spliterator<String> spliterator() {
+            return java.util.Arrays.asList(new InterfaceSymbolFixture.Peer().covariant(false),"override").spliterator();
+        }
+    }
+    private final Method[] bootRootInstanceCache=new Method[9];
+    private void verifyBootRootInstances(Check check,String prefix,boolean changed) throws Exception {
+        Class<?>[] roots={java.util.NavigableSet.class,java.util.AbstractList.class,java.util.AbstractSequentialList.class,
+                java.util.AbstractSet.class,java.util.List.class,java.util.SortedSet.class,java.util.AbstractCollection.class,
+                java.util.ArrayList.class,java.util.TreeSet.class};
+        Class<?>[] owners={java.util.SortedSet.class,java.util.List.class,java.util.List.class,java.util.Set.class,
+                java.util.List.class,java.util.SortedSet.class,java.util.Collection.class,java.util.ArrayList.class,java.util.TreeSet.class};
+        java.util.List<String> value=java.util.Collections.singletonList(new InterfaceSymbolFixture.Peer().covariant(false));
+        Object[] receivers={new java.util.TreeSet<String>(value),new BootListReceiver(),new java.util.LinkedList<String>(value),
+                new BootSortedReceiver(),new BootListReceiver(),new BootSortedReceiver(),new BootListReceiver(),
+                new java.util.ArrayList<String>(value),new java.util.TreeSet<String>(value)};
+        for(int i=0;i<roots.length;++i){
+            Method m=enumerated(roots[i],"spliterator",java.util.Spliterator.class);String key=prefix+"bootRootInstance"+i;
+            check.eq(key+"Count",1,enumeratedCount(roots[i],"spliterator"));
+            check.eq(key+"Owner",true,m.getDeclaringClass()==owners[i]);
+            check.eq(key+"Bridge",false,m.isBridge());check.eq(key+"Synthetic",false,m.isSynthetic());
+            check.eq(key+"Default",i<7,m.isDefault());
+            if(bootRootInstanceCache[i]==null)bootRootInstanceCache[i]=m;
+            for(int cached=0;cached<2;++cached){
+                Method call=cached==0?m:bootRootInstanceCache[i];java.util.ArrayList<String> values=new java.util.ArrayList<>();
+                ((java.util.Spliterator<String>)call.invoke(receivers[i])).forEachRemaining(values::add);
+                check.eq(key+(cached==0?"Call":"Cached"),changed?"[after]":"[before]",values.toString());
+            }
+        }
+        Method inherited=enumerated(java.util.AbstractList.class,"spliterator",java.util.Spliterator.class);
+        check.eq(prefix+"bootRootInstanceNull","java.lang.NullPointerException",result(()->inherited.invoke(null)));
+        check.eq(prefix+"bootRootInstanceWrongReceiver","java.lang.IllegalArgumentException",result(()->inherited.invoke(new Object())));
+        check.eq(prefix+"bootRootInstanceDeclared","java.lang.NoSuchMethodException",result(()->java.util.AbstractList.class.getDeclaredMethod("spliterator")));
+        check.eq(prefix+"bootRootInstanceOwnDeclared",true,java.util.SortedSet.class.getDeclaredMethod("spliterator").getDeclaringClass()==java.util.SortedSet.class);
+        java.util.ArrayList<String> values=new java.util.ArrayList<>();
+        ((java.util.Spliterator<String>)inherited.invoke(new BootRootOwn())).forEachRemaining(values::add);
+        check.eq(prefix+"bootRootInstanceOverrideCall",changed?"[after, override]":"[before, override]",values.toString());
+    }
     private final Method[] bootRootStaticCache = new Method[4];
     private void verifyBootRootStatics(Check check,String prefix,boolean changed) throws Exception {
         Class<?>[] roots={java.util.function.UnaryOperator.class,java.text.Collator.class,java.text.RuleBasedCollator.class,java.util.function.BinaryOperator.class};
@@ -629,6 +667,7 @@ public final class InterfaceSymbolState {
         verifyBootOverride(check,prefix,changed);
         verifyBootDefaults(check,prefix,changed);
         verifyBootRootStatics(check,prefix,changed);
+        verifyBootRootInstances(check,prefix,changed);
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }
