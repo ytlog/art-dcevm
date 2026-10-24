@@ -2,7 +2,7 @@ package com.github.ytlog.artdcevm.fixture;
 
 /** The symbolic child owner and the canonical parent declaration are distinct. */
 public final class InterfaceSymbolFixture {
-    public static class Result { }
+    public static class Result { public static java.lang.invoke.MethodHandles.Lookup lookup() { return java.lang.invoke.MethodHandles.lookup(); } }
     public interface Parent {
         default Result objectValue() { return null; }
         default int echo(Result value) { return 7; }

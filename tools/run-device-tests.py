@@ -1586,6 +1586,18 @@ def interface_symbol_checks(kind, changed, late=True):
                   inheritedBodyException="java.lang.IllegalStateException", hiddenDeclaringClassCall=73,
                   interfaceStaticNotInherited="java.lang.NoSuchMethodException",
                   inheritedPeerFresh=61 if changed else 59, inheritedPeerCached=61 if changed else 59)
+    for _owner in ("packageDeclared", "packageInherited"):
+        result.update({_owner+"Call":89, _owner+"NullCall":83, _owner+"IdentityCall":True,
+                       _owner+"AliasedReturn":"java.lang.IllegalAccessException",
+                       _owner+"AliasedParameter":"java.lang.IllegalAccessException",
+                       _owner+"WrongReturn":"java.lang.NoSuchMethodException",
+                       _owner+"WrongParameter":"java.lang.NoSuchMethodException",
+                       _owner+"PublicDenied":"java.lang.IllegalAccessException",
+                       _owner+"NoAccessDenied":"java.lang.IllegalAccessException",
+                       _owner+"ForeignPackageDenied":"java.lang.IllegalAccessException",
+                       _owner+"ReflectionAlias":"java.lang.NoSuchMethodException"})
+    result.update(packageForeignLookupClass=True, packagePeerFresh=61 if changed else 59,
+                  packagePeerCached=61 if changed else 59)
     result.update(childStaticResolution="java.lang.NoSuchMethodException" if changed and kind=="drop" else 11 if changed and kind=="static" else "java.lang.IllegalAccessException",
                   childStaticWrongReturn="java.lang.NoSuchMethodException",parentStaticWrongReturn="java.lang.NoSuchMethodException",
                   parentStaticAliasedParameter="java.lang.IllegalAccessException",childStaticAliasedReturn="java.lang.NoSuchMethodException" if changed and kind=="drop" else "java.lang.IllegalAccessException",

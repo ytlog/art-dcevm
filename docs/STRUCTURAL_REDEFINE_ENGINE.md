@@ -576,3 +576,5 @@ Android 11–12L 的命名 `MoveToExceptionHandler` 接收 `const Instrumentatio
 public 应用类的精确 `getDeclaredMethodInternal → getMethod → getDeclaredMethod → Lookup.findStatic` 链在独立证明后复用命名 `Class::FindClassMethod`。该服务依据完整名称／描述符选择声明；增强库通过声明 Class 的公开 JVMTI method ID 和 `ToReflectedMethod` 检查参数／返回 Class 身份，并将继承静态方法的真实反射对象交回原 libcore。匹配的自身声明仍委托原入口，访问控制和句柄创建继续由 libcore 完成；不增加 Hook 所有者、层级解析器或实例迁移逻辑。
 
 Android 11–14 与 15–17 的 PointerSize 声明分别保留在版本 ABI 目录。命名解析器缺失、独立证明异常或未观察到实际继承声明时，不开启此扩展，已有静态／虚查找证明独立保留。证明必须实际调用两层继承目标和遮蔽目标，并验证错误返回描述符与普通声明反射不被放宽。运行中解析出的成员无法对应公开 method ID 时抛 InternalError；bootstrap／obsolete 声明继续交回原入口。API 33／36 验证包含父类方法体更新、旧句柄、新句柄、失败批次、两轮恢复与 GC；SO 名称覆盖不是其他版本的设备证明。
+
+非 public 普通类复用同一命名解析器和反射转换路径，不新增 ELF 服务或 Hook。独立 `runNonpublicStatic` 证明在查找帧中分别观察声明与继承目标，验证同包合法调用返回值以及 publicLookup 的 IllegalAccessException；异常或任一观察缺失时只保留原 public 类能力。JNI 守卫只选择成员与核对 Class 身份，实际引用类的可见性、Lookup 权限与运行时包关系仍由 libcore 的 `checkAccess`／`VerifyAccess` 判定。API 33／36 回归另用同名包、不同定义加载器的真实 Lookup 验证拒绝，父类改体的新旧句柄、失败事务、恢复与 GC 继续覆盖。

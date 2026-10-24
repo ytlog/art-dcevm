@@ -42,6 +42,14 @@ public final class InterfaceSymbolState {
     public static class PublicStaticChild extends HiddenStaticBase { }
     public interface StaticInterface { static int interfaceOnly() { return 79; } }
     public static class StaticImplementor implements StaticInterface { }
+    static class PackageStaticOwner {
+        public static InterfaceSymbolFixture.Result object(InterfaceSymbolFixture.Result value) { return value; }
+        public static int echo(InterfaceSymbolFixture.Result value) { return value == null ? 83 : 89; }
+    }
+    static class PackageStaticMiddle extends PackageStaticOwner { }
+    static class PackageStaticLeaf extends PackageStaticMiddle { }
+    static class PackagePeerChild extends InterfaceSymbolFixture.Peer { }
+    private MethodHandle packagePeerHandle;
     public static class PeerStaticChild extends InterfaceSymbolFixture.Peer { }
     private MethodHandle inheritedPeerHandle;
     public static class StaticMiddle extends OrdinaryLookup { }
@@ -202,6 +210,40 @@ public final class InterfaceSymbolState {
         check.eq(prefix+"inheritedPeerCached", changed ? 61 : 59, result(() -> {
             if (inheritedPeerHandle == null) inheritedPeerHandle = MethodHandles.publicLookup().findStatic(PeerStaticChild.class,"staticValue",type);
             return (int) inheritedPeerHandle.invokeExact();
+        }));
+        MethodHandles.Lookup foreignAccess = (MethodHandles.Lookup) aliasReturn.getMethod("lookup").invoke(null);
+        check.eq(prefix+"packageForeignLookupClass", true, foreignAccess.lookupClass() == aliasReturn);
+        for (Class<?> owner : new Class<?>[]{PackageStaticOwner.class, PackageStaticLeaf.class}) {
+            String key = prefix + (owner == PackageStaticOwner.class ? "packageDeclared" : "packageInherited");
+            MethodHandles.Lookup access = MethodHandles.lookup();
+            check.eq(key+"Call", 89, result(() -> access.findStatic(owner,"echo",
+                    MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class)).invokeWithArguments(argument)));
+            check.eq(key+"NullCall", 83, result(() -> access.findStatic(owner,"echo",
+                    MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class)).invokeWithArguments((Object)null)));
+            check.eq(key+"IdentityCall", true, result(() -> access.findStatic(owner,"object",
+                    MethodType.methodType(InterfaceSymbolFixture.Result.class,InterfaceSymbolFixture.Result.class))
+                    .invokeWithArguments(argument) == argument));
+            check.eq(key+"AliasedReturn", "java.lang.IllegalAccessException", result(() -> access.findStatic(owner,"object",
+                    MethodType.methodType(aliasReturn,InterfaceSymbolFixture.Result.class))));
+            check.eq(key+"AliasedParameter", "java.lang.IllegalAccessException", result(() -> access.findStatic(owner,"echo",
+                    MethodType.methodType(int.class,aliasReturn))));
+            check.eq(key+"WrongReturn", "java.lang.NoSuchMethodException", result(() -> access.findStatic(owner,"echo",
+                    MethodType.methodType(String.class,InterfaceSymbolFixture.Result.class))));
+            check.eq(key+"PublicDenied", "java.lang.IllegalAccessException", result(() -> MethodHandles.publicLookup().findStatic(owner,"echo",
+                    MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class))));
+            check.eq(key+"NoAccessDenied", "java.lang.IllegalAccessException", result(() -> MethodHandles.publicLookup().in(owner).findStatic(owner,"echo",
+                    MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class))));
+            check.eq(key+"ForeignPackageDenied", "java.lang.IllegalAccessException", result(() -> foreignAccess.findStatic(owner,"echo",
+                    MethodType.methodType(int.class,InterfaceSymbolFixture.Result.class))));
+            check.eq(key+"WrongParameter", "java.lang.NoSuchMethodException", result(() -> access.findStatic(owner,"echo",
+                    MethodType.methodType(int.class,String.class))));
+            check.eq(key+"ReflectionAlias", "java.lang.NoSuchMethodException", result(() -> owner.getDeclaredMethod("echo",aliasReturn)));
+        }
+        check.eq(prefix+"packagePeerFresh", changed ? 61 : 59, result(() -> MethodHandles.lookup()
+                .findStatic(PackagePeerChild.class,"staticValue",type).invokeWithArguments()));
+        check.eq(prefix+"packagePeerCached", changed ? 61 : 59, result(() -> {
+            if (packagePeerHandle == null) packagePeerHandle = MethodHandles.lookup().findStatic(PackagePeerChild.class,"staticValue",type);
+            return (int) packagePeerHandle.invokeExact();
         }));
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));

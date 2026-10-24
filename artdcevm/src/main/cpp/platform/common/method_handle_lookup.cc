@@ -29,6 +29,9 @@ JavaVM* runtime_vm = nullptr;
 void* find_interface = nullptr;
 void* find_class = nullptr;
 bool inherited_static_verified = false;
+bool nonpublic_static_verified = false;
+thread_local bool probing_nonpublic_static = false;
+thread_local unsigned observed_nonpublic_static = 0;
 thread_local bool probing_inherited_static = false, observed_inherited_static = false;
 int runtime_api = 0;
 void* (*decode_global)(JavaVM*, jobject) = nullptr;
@@ -119,7 +122,8 @@ bool ResolveLookup(JNIEnv* jni, jobject klass, jstring name, jobjectArray args, 
   const bool virtual_lookup = virtual_depth >= 0;
   const bool recursive_lookup = virtual_depth > 2;
   if (!virtual_lookup && !static_lookup) return false;
-  if (static_lookup && !(flags & evolution::kAccPublic)) return false;
+  if (static_lookup && !(flags & evolution::kAccPublic) &&
+      ((flags & evolution::kAccInterface) || !(probing_nonpublic_static || nonpublic_static_verified))) return false;
   Local<jobject> loader{jni};
   if (environment->GetClassLoader(static_cast<jclass>(klass), &loader.value)) return ServiceFailure(jni);
   if (!loader.value) return false; // Boot interfaces cannot be enhanced; keep hidden-API filtering.
@@ -245,7 +249,10 @@ bool ResolveLookup(JNIEnv* jni, jobject klass, jstring name, jobjectArray args, 
       jni->ThrowNew(access_error, "method type has a different class-loader identity");
       return true;
     }
-    if (class_resolution && !jni->IsSameObject(klass, declaring.value)) {
+    const bool inherited = class_resolution && !jni->IsSameObject(klass, declaring.value);
+    if (class_resolution && probing_nonpublic_static && !(flags & evolution::kAccPublic))
+      observed_nonpublic_static |= inherited ? 2u : 1u;
+    if (inherited) {
       // Return the genuine reflected declaration to findStatic. Its existing
       // return-type and lookup-owner access checks still run before a handle
       // is created. Ordinary getDeclaredMethod never enters this stack chain.
@@ -388,6 +395,19 @@ bool Prepare(JNIEnv* jni, jvmtiEnv* env) {
     jni->CallStaticVoidMethod(probe.value, run_inherited);
     probing = probing_inherited_static = false;
     inherited_static_verified = observed_inherited_static && !jni->ExceptionCheck();
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+  }
+  // Nonpublic class resolution must separately prove both native paths and
+  // actual allowed calls plus libcore's denied lookup. Never grant access here.
+  nonpublic_static_verified = false;
+  jmethodID run_nonpublic = jni->GetStaticMethodID(probe.value, "runNonpublicStatic", "()V");
+  if (jni->ExceptionCheck()) jni->ExceptionClear();
+  if (inherited_static_verified && run_nonpublic) {
+    observed_nonpublic_static = 0;
+    probing = probing_nonpublic_static = true;
+    jni->CallStaticVoidMethod(probe.value, run_nonpublic);
+    probing = probing_nonpublic_static = false;
+    nonpublic_static_verified = observed_nonpublic_static == 3 && !jni->ExceptionCheck();
     if (jni->ExceptionCheck()) jni->ExceptionClear();
   }
   {

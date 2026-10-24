@@ -16,6 +16,19 @@ public final class MethodHandleLookupProbe {
     public static class OrdinaryHiding extends OrdinaryLeaf {
         public static int value() { return 5; }
     }
+    static class PackageOwner { public static int value() { return 7; } }
+    static class PackageLeaf extends PackageOwner { }
+    public static void runNonpublicStatic() throws Throwable {
+        for (Class<?> owner : new Class<?>[]{PackageOwner.class, PackageLeaf.class}) {
+            int value = (int) MethodHandles.lookup().findStatic(
+                    owner, "value", MethodType.methodType(int.class)).invokeExact();
+            if (value != 7) throw new AssertionError("nonpublic class static lookup changed target");
+            try {
+                MethodHandles.publicLookup().findStatic(owner, "value", MethodType.methodType(int.class));
+                throw new AssertionError("nonpublic class access check bypassed");
+            } catch (IllegalAccessException expected) { }
+        }
+    }
     public static void runInheritedStatic() throws Throwable {
         int inherited = (int) MethodHandles.publicLookup().findStatic(
                 OrdinaryLeaf.class, "value", MethodType.methodType(int.class)).invokeExact();

@@ -100,8 +100,18 @@ jobject ObjectMethod(JNIEnv*,jobject o,jmethodID m,va_list){Require(o==actual_me
 const char* Utf(JNIEnv*,jstring s,jboolean*){Require(s==name,"wrong lookup name");return requested_name;}
 void Release(JNIEnv*,jstring,const char*){}
 jint Throw(JNIEnv*,jclass c,const char*){if(reinterpret_cast<uintptr_t>(c)==7)internal_throws++;else if(reinterpret_cast<uintptr_t>(c)==8)missing_throws++;else access_throws++;pending=true;return 0;}
-jmethodID StaticID(JNIEnv*,jclass,const char* n,const char*) {return reinterpret_cast<jmethodID>(!std::strcmp(n,"runStatic")?19:!std::strcmp(n,"runInheritedStatic")?25:14);}
+jmethodID StaticID(JNIEnv*,jclass,const char* n,const char*) {return reinterpret_cast<jmethodID>(!std::strcmp(n,"runStatic")?19:!std::strcmp(n,"runInheritedStatic")?25:!std::strcmp(n,"runNonpublicStatic")?26:14);}
 void Run(JNIEnv* jni,jclass,jmethodID method,va_list) {
+  if(reinterpret_cast<uintptr_t>(method)==26){
+    if(mode==16){pending=false;return;}
+    lookup_static=true;static_method=true;interface_class=false;public_class=false;
+    for(int path=0;path<2;path++){
+      if((mode==18&&path==1)||(mode==19&&path==0))continue;
+      inherited_target=path==1;
+      reinterpret_cast<decltype(&Original)>(replacement)(jni,owner,name,arguments);
+    }
+    pending=mode==17;inherited_target=false;public_class=true;interface_class=true;lookup_static=false;return;
+  }
   if(reinterpret_cast<uintptr_t>(method)==25){
     if(mode==14){pending=false;return;}
     lookup_static=true;static_method=true;interface_class=false;inherited_target=true;
@@ -218,7 +228,10 @@ int main(int argc,char** argv){try{
  parameters={reinterpret_cast<jclass>(81)};
  Require(!invoke()&&pending,"ordinary static double alias fell through");
  scope=false;Require(invoke()==reflected&&!pending,"ordinary static reflection intercepted");scope=true;
- public_class=false;Require(invoke()==reflected&&!pending,"nonpublic static owner intercepted");public_class=true;
+ public_class=false;
+ if(mode>=13)Require(invoke()==reflected&&!pending,"unproved nonpublic static owner intercepted");
+ else Require(!invoke()&&pending,"proved nonpublic static alias escaped");
+ public_class=true;
  boot=true;Require(invoke()==reflected&&!pending,"boot static filtering bypassed");boot=false;
  missing_local=true;Require(!invoke()&&pending,"unreadable ordinary static local accepted");missing_local=false;
  requested=reinterpret_cast<jclass>(70); parameters.clear(); actual_parameters.clear();member_signature="()LResult;";
@@ -230,6 +243,11 @@ int main(int argc,char** argv){try{
  if(mode==13||mode==14||mode==15)Require(invoke()==reflected&&!pending,"unproved inherited resolver activated");
  else {
   Require(invoke()==actual_method&&!pending,"inherited static did not return actual reflected declaration");
+  public_class=false;
+  if(mode>=16)Require(invoke()==reflected&&!pending,"failed nonpublic proof enabled inherited resolution");
+  else Require(invoke()==actual_method&&!pending,"proved nonpublic inherited target not returned");
+  interface_class=true;Require(invoke()==reflected&&!pending,"nonpublic interface scope widened");interface_class=false;
+  public_class=true;
   requested=reinterpret_cast<jclass>(71);Require(!invoke()&&pending,"inherited return loader alias escaped");requested=reinterpret_cast<jclass>(70);
   member_signature="(LParam;)LResult;";parameters={reinterpret_cast<jclass>(81)};actual_parameters={reinterpret_cast<jclass>(80)};
   Require(!invoke()&&pending,"inherited parameter loader alias escaped");
@@ -274,7 +292,7 @@ def main():
         command=[shutil.which('clang++') or shutil.which('c++'),'-std=c++17','-Wall','-Wextra','-Werror','-I'+str(work),'-I'+str(native),'-I'+str(include),'-I'+str(include/platform),'-I'+str(ROOT/'third_party/jvmti'),str(source),str(native/'platform/common/method_handle_lookup.cc'),'-o',str(binary)]
         result=subprocess.run(command,capture_output=True,text=True);(evidence/'compile.log').write_text(result.stdout+result.stderr)
         if result.returncode:raise RuntimeError('Lookup compilation failed; inspect ignored evidence')
-        for mode in range(16):
+        for mode in range(20):
             result=subprocess.run([str(binary),str(mode)],capture_output=True,text=True,timeout=30);(evidence/f'case-{mode}.log').write_text(result.stdout+result.stderr)
             if result.returncode:raise RuntimeError('Lookup guard case failed; inspect ignored evidence')
             print(result.stdout.strip())
