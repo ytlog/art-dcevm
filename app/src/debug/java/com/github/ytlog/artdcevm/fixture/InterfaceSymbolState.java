@@ -64,6 +64,55 @@ public final class InterfaceSymbolState {
     public static class BootSubclass extends BootReceiver { }
     public static class BootHiding extends BootReceiver { public static int naturalOrder() { return 107; } }
     public interface BootOwn extends BootFunction { static String identity() { return "own"; } }
+    public interface BootSpecific extends java.util.function.Supplier<String>, java.util.function.IntSupplier, java.util.Comparator<String> {
+        @Override default String get() { return new InterfaceSymbolFixture.Peer().covariant(false); }
+        @Override default int getAsInt() { return InterfaceSymbolFixture.Peer.staticValue(); }
+        @Override default int compare(String a, String b) { return a.compareTo(b); }
+        @Override default java.util.Comparator<String> reversed() { return (a,b) -> 109; }
+    }
+    public interface BootSpecificLeaf extends BootSpecific { }
+    public interface BootSpecificOther extends java.util.function.Supplier<String> { }
+    public interface BootSpecificDiamond extends BootSpecificLeaf, BootSpecificOther { }
+    public interface BootSpecificReverse extends BootSpecificOther, BootSpecificLeaf { }
+    public static class BootSpecificReceiver implements BootSpecificDiamond, BootSpecificReverse { }
+    public static class BootSpecificSubclass extends BootSpecificReceiver { }
+    public static class BootSpecificOwn extends BootSpecificReceiver {
+        @Override public String get() { return "own"; }
+        @Override public int getAsInt() { return 113; }
+        @Override public java.util.Comparator<String> reversed() { return (a,b) -> 127; }
+    }
+    private final Method[] bootOverrideCache = new Method[8];
+    private void verifyBootOverride(Check check, String prefix, boolean changed) throws Exception {
+        Class<?>[] owners = {BootSpecific.class,BootSpecificLeaf.class,BootSpecificDiamond.class,
+                BootSpecificReverse.class,BootSpecificReceiver.class,BootSpecificSubclass.class,BootSpecificOwn.class};
+        for (int i=0;i<owners.length;++i) {
+            boolean own = i==6; Object receiver = own ? new BootSpecificOwn() : new BootSpecificReceiver();
+            Class<?> expectedOwner = own ? BootSpecificOwn.class : BootSpecific.class;
+            Method[] methods = {enumerated(owners[i],"get",Object.class),enumerated(owners[i],"get",String.class),
+                    enumerated(owners[i],"getAsInt",int.class),enumerated(owners[i],"reversed",java.util.Comparator.class)};
+            for (int n=0;n<methods.length;++n) {
+                Method m=methods[n];String key=prefix+"bootOverride"+i+"_"+n;
+                check.eq(key+"Owner",true,m.getDeclaringClass()==expectedOwner);
+                check.eq(key+"Bridge",n==0,m.isBridge());
+                check.eq(key+"Synthetic",n==0,m.isSynthetic());
+                check.eq(key+"Default",!own,m.isDefault());
+                Object expected = n<2 ? (own ? "own" : changed ? "after" : "before") : n==2 ? (own ? 113 : changed ? 61 : 59) : (own ? 127 : 109);
+                Object value=m.invoke(receiver);
+                check.eq(key+"Call",expected,n==3 ? ((java.util.Comparator<String>)value).compare("a","b") : value);
+                if (i==4) {
+                    if(bootOverrideCache[n]==null)bootOverrideCache[n]=m;
+                    Object cached=bootOverrideCache[n].invoke(receiver);
+                    check.eq(key+"Cached",expected,n==3 ? ((java.util.Comparator<String>)cached).compare("a","b") : cached);
+                }
+            }
+        }
+        check.eq(prefix+"bootOverrideNull","java.lang.NullPointerException",result(() -> bootOverrideCache[0].invoke(null)));
+        Method original=enumerated(java.util.function.Supplier.class,"get",Object.class);
+        check.eq(prefix+"bootOverrideBootOwner",true,original.getDeclaringClass()==java.util.function.Supplier.class);
+        check.eq(prefix+"bootOverrideBootBridge",false,original.isBridge());
+        check.eq(prefix+"bootOverrideBootCall",changed ? "after" : "before",original.invoke(new BootSpecificReceiver()));
+        check.eq(prefix+"bootOverrideDeclared",0,BootSpecificLeaf.class.getDeclaredMethods().length);
+    }
     private Method bootEnumerationCache;
     private void verifyBootEnumeration(Check check, String prefix, boolean changed) throws Exception {
         Class<?>[] owners = {BootComparator.class, BootFunction.class, BootCombined.class,
@@ -461,6 +510,7 @@ public final class InterfaceSymbolState {
         verifyEnumeration(check,prefix,changed);
         verifyStaticEnumeration(check,prefix,kind,changed);
         verifyBootEnumeration(check,prefix,changed);
+        verifyBootOverride(check,prefix,changed);
         check.eq(prefix+"ordinaryStaticReflectionAlias", "java.lang.NoSuchMethodException",
                 result(() -> OrdinaryLookup.class.getDeclaredMethod("staticEcho",aliasReturn)));
     }

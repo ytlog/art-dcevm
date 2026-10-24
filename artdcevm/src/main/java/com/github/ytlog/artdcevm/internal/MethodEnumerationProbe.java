@@ -30,6 +30,48 @@ public final class MethodEnumerationProbe {
         public int compare(String a, String b) { return a.compareTo(b); }
         public String apply(String a) { return a; }
     }
+    public interface BootstrapOverride extends java.util.function.Supplier<String>, java.util.function.IntSupplier, java.util.Comparator<String> {
+        @Override default String get() { return "override"; }
+        @Override default int getAsInt() { return 29; }
+        @Override default int compare(String a, String b) { return a.compareTo(b); }
+        @Override default java.util.Comparator<String> reversed() { return (a,b) -> 31; }
+    }
+    public interface BootstrapOverrideLeaf extends BootstrapOverride { }
+    public static class BootstrapOverrideReceiver implements BootstrapOverrideLeaf { }
+    public static class BootstrapOverrideOwn implements BootstrapOverrideLeaf {
+        @Override public String get() { return "own"; }
+        @Override public int getAsInt() { return 37; }
+        @Override public java.util.Comparator<String> reversed() { return (a,b) -> 41; }
+    }
+    public static void runBootstrapOverride() throws Exception {
+        for (Class<?> boot : new Class<?>[]{java.util.function.Supplier.class,java.util.function.IntSupplier.class,java.util.Comparator.class})
+            if(boot.getClassLoader()!=Object.class.getClassLoader()) throw new AssertionError("bootstrap identity");
+        for (Class<?> owner : new Class<?>[]{BootstrapOverrideLeaf.class,BootstrapOverrideReceiver.class,BootstrapOverrideOwn.class}) {
+            boolean own=owner==BootstrapOverrideOwn.class;
+            Object receiver=own ? new BootstrapOverrideOwn() : new BootstrapOverrideReceiver();
+            int methods=0;
+            for(Method m:owner.getMethods()) {
+                String name=m.getName();
+                if(!name.equals("get") && !name.equals("getAsInt") && !name.equals("reversed"))continue;
+                boolean bridge=name.equals("get") && m.getReturnType()==Object.class;
+                if(m.getDeclaringClass()!=(own ? BootstrapOverrideOwn.class : BootstrapOverride.class)
+                        || m.isBridge()!=bridge || m.isSynthetic()!=bridge || m.isDefault()==own)
+                    throw new AssertionError("bootstrap ancestor retained");
+                Object result=m.invoke(receiver);
+                boolean correct=name.equals("get") ? (own ? "own" : "override").equals(result)
+                        : name.equals("getAsInt") ? Integer.valueOf(own ? 37 : 29).equals(result)
+                        : ((java.util.Comparator<String>)result).compare("a","b")== (own ? 41 : 31);
+                if(!correct)throw new AssertionError("bootstrap override call");
+                ++methods;
+            }
+            if(methods!=4)throw new AssertionError("bootstrap override incomplete");
+        }
+        Method original=java.util.function.Supplier.class.getMethod("get");
+        if(original.getDeclaringClass()!=java.util.function.Supplier.class || original.isBridge()
+                || !"override".equals(original.invoke(new BootstrapOverrideReceiver()))
+                || BootstrapOverrideLeaf.class.getDeclaredMethods().length!=0)
+            throw new AssertionError("bootstrap own or declared view changed");
+    }
     public static void runBootstrapStatic() throws Exception {
         if (java.util.Comparator.class.getClassLoader()!=Object.class.getClassLoader()
                 || java.util.function.Function.class.getClassLoader()!=Object.class.getClassLoader())

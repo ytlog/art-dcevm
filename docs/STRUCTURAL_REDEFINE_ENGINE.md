@@ -592,3 +592,6 @@ ART 仍负责生成／过滤 Method 数组。枚举保护以当前 Class 身份�
 
 
 Bootstrap 接口 static 的应用继承过滤仍复用同一 Hook、类型化 Method 数组与活参数契约。先用公开 JVMTI 区分声明加载器，再读当前根 Class；bootstrap 根在读取应用 List 前委托原结果。仅独立 bootstrap 证明成功的应用根继续过滤，bootstrap 实例声明绝不参与最具体声明替换。`runBootstrapStatic` 依赖已有 static 证明，另要求应用接口／实现类过滤和自身 bootstrap 视图三路观察及实际调用；失败不影响旧两项能力。Java 探针以 Object.class 的加载器身份适配 Android/JBR 公开 API 差异，不用加载器名称、对象偏移或改动标准库。不存在新增 ELF 服务、ABI 或 Hook 所有者。
+
+
+Bootstrap 祖先被应用接口覆写的修正沿用原严格祖先关系、完整签名与活 List 替换路径；仅将独立证明通过后的 bootstrap 祖先纳入被替换项，仍不以 bootstrap 声明作为替换候选。公开 JVMTI 识别加载器，JNI Class 身份比较保证返回／参数类型一致。`runBootstrapOverride` 在基础最具体声明证明后独立执行，要求接口／实现类各自桥接／普通方法的四路成功替换，并验证类实现优先、原 bootstrap 调用及 declared 边界。失败保留已有能力；证明与启用复用唯一 Hook、串行事务准备和进程生命周期，无新增命名服务、ABI 或应用成员全局根。

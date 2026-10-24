@@ -1616,6 +1616,16 @@ def interface_symbol_checks(kind, changed, late=True):
                        _key+"Declared":_slot in (0,2,8)})
         if 2 <= _slot < 8: result.update({_key+"RankOwner":True, _key+"RankCall":7})
     result.update(enumerationExtraOwner=True, enumerationExtraCall=97)
+    for _slot in range(7):
+        _own = _slot == 6
+        for _method in range(4):
+            _key = "bootOverride"+str(_slot)+"_"+str(_method)
+            _value = ("own" if _own else "after" if changed else "before") if _method < 2 else (113 if _own else 61 if changed else 59) if _method == 2 else (127 if _own else 109)
+            result.update({_key+"Owner":True,_key+"Bridge":_method==0,_key+"Synthetic":_method==0,
+                           _key+"Default":not _own,_key+"Call":_value})
+            if _slot == 4: result[_key+"Cached"] = _value
+    result.update(bootOverrideNull="java.lang.NullPointerException",bootOverrideBootOwner=True,
+                  bootOverrideBootBridge=False,bootOverrideBootCall="after" if changed else "before",bootOverrideDeclared=0)
     for _slot in range(8):
         _key = "bootEnumeration"+str(_slot)
         result.update({_key+"Natural":1 if _slot==6 else 0, _key+"Identity":1 if _slot==7 else 0,
