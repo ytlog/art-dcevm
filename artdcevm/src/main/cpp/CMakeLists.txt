@@ -20,6 +20,7 @@ add_library(artdcevm SHARED
   platform/common/transaction_context.cc
   platform/common/member_retirement.cc
   platform/common/constructor_history.cc
+  platform/common/jit_lifecycle.cc
   platform/common/member_mapping.cc
   platform/common/method_enumeration.cc
   platform/common/method_handle_lookup.cc

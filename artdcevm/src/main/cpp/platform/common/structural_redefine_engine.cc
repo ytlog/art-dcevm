@@ -1,5 +1,6 @@
 #include "platform/common/structural_redefine_internal.h"
 #include "platform/common/constructor_history.h"
+#include "platform/common/jit_lifecycle.h"
 
 #include <algorithm>
 #include <array>
@@ -233,6 +234,10 @@ jvmtiError Install(JavaVM* vm, jvmtiEnv* env,
       {addresses[3], reinterpret_cast<void*>(CheckFields), &process->original_fields, names[3].name},
       {addresses[4], reinterpret_cast<void*>(CheckMethods), &process->original_methods, names[4].name},
       {addresses[0], reinterpret_cast<void*>(Route), &process->original_entry, names[0].name}};
+  if (!jit_lifecycle::Prepare(&replacements, &failure)) {
+    Diagnose(failure);
+    return JVMTI_ERROR_INTERNAL;
+  }
   replacements.insert(replacements.end(), std::begin(validators), std::end(validators));
   process->hook_tokens.resize(replacements.size(), nullptr);
   for (size_t i = 0; i < replacements.size(); ++i) {

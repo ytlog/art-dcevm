@@ -709,3 +709,24 @@ Java_com_github_ytlog_artdcevm_testing_StandardJvmtiClient_setClassHookAction(
   return client_env->SetEventNotificationMode(enabled ? JVMTI_ENABLE : JVMTI_DISABLE,
                                               JVMTI_EVENT_CLASS_FILE_LOAD_HOOK, nullptr);
 }
+
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_github_ytlog_artdcevm_testing_JitMixedInvalidationDiagnostic_warmBuilder(JNIEnv* jni,jclass,jint count) {
+  jclass type=jni->FindClass("java/lang/StringBuilder");
+  jmethodID ctor=jni->GetMethodID(type,"<init>","()V");
+  jmethodID append=jni->GetMethodID(type,"append","(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+  jmethodID append_int=jni->GetMethodID(type,"append","(I)Ljava/lang/StringBuilder;");
+  jmethodID clear=jni->GetMethodID(type,"setLength","(I)V");
+  jmethodID length=jni->GetMethodID(type,"length","()I");
+  jobject builder=jni->NewObject(type,ctor);jstring text=jni->NewStringUTF("value");jlong sum=0;
+  for(jint i=0;i<count&&!jni->ExceptionCheck();i++){
+    jobject r=jni->CallObjectMethod(builder,append,text);jni->DeleteLocalRef(r);
+    r=jni->CallObjectMethod(builder,append_int,42);jni->DeleteLocalRef(r);
+    sum+=jni->CallIntMethod(builder,length);jni->CallVoidMethod(builder,clear,0);
+  }
+  jni->DeleteLocalRef(text);jni->DeleteLocalRef(builder);jni->DeleteLocalRef(type);return sum;
+}
+
+extern "C" JNIEXPORT jlong JNICALL Java_com_github_ytlog_artdcevm_testing_JitMixedInvalidationDiagnostic_warmTarget(JNIEnv* jni,jclass,jobject target,jobject reflected,jint count){
+ jmethodID value=jni->FromReflectedMethod(reflected);jlong sum=0;for(jint i=0;i<count&&!jni->ExceptionCheck();i++)sum+=jni->CallIntMethod(target,value);return sum;}
