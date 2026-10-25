@@ -14,11 +14,12 @@ SOURCE = r'''
 #include <iostream>
 using namespace artdcevm;
 using namespace artdcevm::jit_lifecycle;
-int api=36, missing=0, frees=0;
+int api=36, missing=0;
+std::atomic<int> frees{0}, arrived{0};
 const void* code=reinterpret_cast<void*>(16);
 const void* other=reinterpret_cast<void*>(32);
-bool expect_removed=false, nested=false;
-Cache* alternate=nullptr;
+thread_local bool expect_removed=false, nested=false, force_free=false, concurrent=false;
+thread_local Cache* alternate=nullptr;
 extern "C" int android_get_device_api_level(){return api;}
 extern "C" void* shadowhook_dlopen(const char*){return reinterpret_cast<void*>(1);}
 extern "C" void shadowhook_dlclose(void*){}
@@ -36,6 +37,10 @@ void OriginalFree(void* cache,const void* value){
 }
 bool OriginalRemove(void* cache,void* method,bool release){
   assert(method==reinterpret_cast<void*>(64));
+  if(concurrent){
+    ++arrived;
+    while(arrived.load()!=2)std::this_thread::yield();
+  }
   if(nested){
     nested=false;
     bool prior=expect_removed;expect_removed=false;
@@ -45,7 +50,7 @@ bool OriginalRemove(void* cache,void* method,bool release){
     assert(!RemoveMethod(alternate,method,false));
     expect_removed=prior;
   }
-  if(release)FreeCode(cache,code);
+  if(release||force_free)FreeCode(cache,code);
   return release;
 }
 void Seed(Cache& c){c.method_code[code]=reinterpret_cast<void*>(64);
@@ -62,7 +67,7 @@ int main(){
   FreeCode(&c,code);assert(frees==1);
   assert(!RemoveMethod(&c,reinterpret_cast<void*>(64),false));assert(frees==1);
   expect_removed=true;nested=true;
-  assert(RemoveMethod(&c,reinterpret_cast<void*>(64),true));assert(releasing_cache==nullptr);
+  assert(RemoveMethod(&c,reinterpret_cast<void*>(64),true));assert(releasing.cache==nullptr&&releasing.method==nullptr);
   assert(c.method_code.count(code)==1); // ART, not this hook, owns mapping removal.
   assert(second.zombie_code.count(code)==1);
   // Reuse is legal after release; the original assertion would accept insertion.
@@ -70,7 +75,34 @@ int main(){
   // A non-method/JNI allocation is outside this repair.
   Seed(c);c.method_code.clear();expect_removed=false;
   assert(RemoveMethod(&c,reinterpret_cast<void*>(64),true));
-  assert(releasing_cache==nullptr);assert(frees==5);
+  assert(releasing.cache==nullptr&&releasing.method==nullptr);assert(frees==5);
+  // Same cache is insufficient: an unrelated method must retain its records.
+  Seed(c);c.method_code[code]=reinterpret_cast<void*>(128);
+  assert(RemoveMethod(&c,reinterpret_cast<void*>(64),true));assert(frees==6);
+  // ART does not free shared zygote code. Preserve even pre-existing records.
+  Seed(c);c.shared_region.exec_pages.begin=reinterpret_cast<uint8_t*>(16);
+  c.shared_region.exec_pages.size=16;
+  assert(RemoveMethod(&c,reinterpret_cast<void*>(64),true));assert(frees==7);
+  // The exclusive end is outside the shared region, as in MemMap::HasAddress.
+  c.shared_region.exec_pages.begin=nullptr;c.shared_region.exec_pages.size=16;
+  expect_removed=true;
+  assert(RemoveMethod(&c,reinterpret_cast<void*>(64),true));assert(frees==8);
+  // A nested non-releasing call must mask an outer release scope, even if a
+  // callback reaches FreeCode; after it returns the outer target is restored.
+  Seed(c);expect_removed=false;force_free=true;
+  releasing={&second,reinterpret_cast<void*>(128)};
+  assert(!RemoveMethod(&c,reinterpret_cast<void*>(64),false));assert(frees==9);
+  assert(releasing.cache==&second&&releasing.method==reinterpret_cast<void*>(128));
+  releasing={};force_free=false;
+  // Two releasing threads overlap, with the same code value in separate caches.
+  Cache left{},right{};Seed(left);Seed(right);
+  auto release=[](Cache* cache){
+    concurrent=true;expect_removed=true;
+    assert(RemoveMethod(cache,reinterpret_cast<void*>(64),true));
+    assert(releasing.cache==nullptr&&releasing.method==nullptr);
+  };
+  std::thread a(release,&left),b(release,&right);a.join();b.join();
+  assert(frees==11&&arrived==2);
   std::cout<<"JIT lifecycle release, reuse, GC, nested scope, thread isolation and admission PASS\n";
 }
 '''

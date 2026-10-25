@@ -32,7 +32,7 @@ ART 原生只允许“只增不删”，限制集中在少数几个决策函数�
 
 接口后端是“只接管决策点”原则的一项例外：为弥补 `FinishNewClassAllocations` 只收集子类、不会收集接口实现类的缺口，后端自行准备重建组分配和失败清理。提交、实例迁移、引用改写、去优化与缓存失效仍由 ART 执行。
 
-Android 16 另有一个受限的 JIT 生命周期修复：原生 `RemoveMethodLocked` 释放非 native 代码时没有移除对应 zombie 记录，地址复用后可能触发重复插入断言。`jit_lifecycle.cc` 只在该命名函数调用命名 `FreeCodeAndData`、且 ART 已持有两把 JIT 锁时，清除当前释放代码的 pending／processed zombie 记录。固定声明位于 `platform/abi/arm64/android16/jit_code_cache.h`，精确符号位于 `platform/symbols/jit_lifecycle_symbols.h`。保留原断言、代码释放、成员映射与 GC；独立 GC 释放路径和其他 API 不变，不扩展成缓存失效实现。API 36 缺任一命名入口时初始化失败。回归命令见 [TESTING.md](TESTING.md)。
+Android 16 另有一个受限的 JIT 生命周期修复：原生 `RemoveMethodLocked` 释放非 native 代码时没有移除对应 zombie 记录，地址复用后可能触发重复插入断言。`jit_lifecycle.cc` 只在该命名函数调用命名 `FreeCodeAndData`、且 ART 已持有两把 JIT 锁时，核对当前移除的方法身份并排除不会释放的 zygote 共享代码后，清除当前释放代码的 pending／processed zombie 记录。固定声明位于 `platform/abi/arm64/android16/jit_code_cache.h`，精确符号位于 `platform/symbols/jit_lifecycle_symbols.h`。保留原断言、代码释放、成员映射与 GC；独立 GC 释放路径和其他 API 不变，不扩展成缓存失效实现。API 36 缺任一命名入口时初始化失败。回归命令见 [TESTING.md](TESTING.md)。
 
 | ART 决策点 | ART 原行为 | 增强行为 |
 | --- | --- | --- |

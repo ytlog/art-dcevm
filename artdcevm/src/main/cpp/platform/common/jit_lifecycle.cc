@@ -8,23 +8,32 @@ namespace {
 using Cache = abi::arm64::android16::JitCodeCachePrefix;
 bool (*original_remove)(void*, void*, bool) = nullptr;
 void (*original_free)(void*, const void*) = nullptr;
-thread_local void* releasing_cache = nullptr;
+struct ReleaseTarget { void* cache; void* method; };
+thread_local ReleaseTarget releasing{};
 
 bool RemoveMethod(void* cache, void* method, bool release_memory) {
   // ART acquires jit_mutator_lock_ inside this call; its caller already holds
   // jit_lock_. Only FreeCodeAndData reached within this scope may clean records.
-  void* previous = releasing_cache;
-  releasing_cache = release_memory ? cache : nullptr;
+  const ReleaseTarget previous = releasing;
+  releasing = release_memory ? ReleaseTarget{cache, method} : ReleaseTarget{};
   const bool result = original_remove(cache, method, release_memory);
-  releasing_cache = previous;
+  releasing = previous;
   return result;
 }
 void FreeCode(void* cache, const void* code) {
-  if (releasing_cache == cache) {
+  if (releasing.cache == cache) {
     auto* state = static_cast<Cache*>(cache);
     // Match the upstream non-native removal branch. Both locks are held here.
     // Do not touch JNI bookkeeping or GC's independent FreeAllMethodHeaders path.
-    if (state->method_code.find(code) != state->method_code.end()) {
+    const auto entry = state->method_code.find(code);
+    // FreeCodeAndData is a no-op for shared zygote code. Match that boundary
+    // before mutating records, and require the exact method being removed.
+    const auto& shared = state->shared_region.exec_pages;
+    const uintptr_t address = reinterpret_cast<uintptr_t>(code);
+    const uintptr_t begin = reinterpret_cast<uintptr_t>(shared.begin);
+    const bool shared_code = address >= begin && address - begin < shared.size;
+    if (!shared_code && entry != state->method_code.end() &&
+        entry->second == releasing.method) {
       state->zombie_code.erase(code);
       state->processed_zombie_code.erase(code);
     }
