@@ -17,7 +17,7 @@ ART DCEVM 是 Android 运行时类重定义增强库，用于在应用运行期�
 - 保留已有对象的兼容字段值；新增字段为零值或 `null`，不重跑构造器。
 - 多类同批原子提交；拒绝整批时保留旧定义。
 
-不支持类/接口/注解/枚举种类切换，继承关系变化与缓存成员引用也有限制。详细规则见[限制与运行语义](docs/LIMITATIONS.md)，设备覆盖范围和待验证项见[兼容性结论](docs/COMPATIBILITY.md)。
+支持满足[种类转换规则](docs/CLASS_KIND_EVOLUTION.md)的变化：接口 ↔ 注解、保留 Enum 父类的枚举 ↔ 普通类，以及通过子类型、存活实例、活动帧和运行时服务检查的普通类 ↔ 接口/注解。新增或移除 Enum 父类仍不支持。继承关系变化与缓存成员引用遵循[限制与运行语义](docs/LIMITATIONS.md)，设备覆盖范围和待验证项见[兼容性结论](docs/COMPATIBILITY.md)。
 
 ## 快速开始
 
@@ -40,7 +40,7 @@ dependencyResolutionManagement {
 ```groovy
 // 应用模块 build.gradle
 dependencies {
-    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha.3'
+    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha.4'
 }
 ```
 
