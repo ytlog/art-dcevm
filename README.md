@@ -17,7 +17,7 @@ ART DCEVM enhances class redefinition on Android. It replaces Java method implem
 - Preserve compatible field values in live objects; new fields start at zero or `null`, without rerunning constructors.
 - Submit multiple classes atomically; a rejected batch preserves the old definitions.
 
-Class-kind changes are supported under the [kind-conversion rules](docs/CLASS_KIND_EVOLUTION.md): interface ↔ annotation, enum ↔ ordinary class while retaining the Enum superclass, and ordinary class ↔ interface/annotation subject to subtype, live-instance, active-frame and runtime-service checks. Adding or removing the Enum superclass remains unsupported. Inheritance changes and cached member references follow the [limitations and runtime semantics](docs/LIMITATIONS.en.md); see [compatibility](docs/COMPATIBILITY.en.md) for device coverage and pending validation.
+Class/interface/annotation/enum kind changes are unsupported, and inheritance changes and cached member references have restrictions. See [limitations and runtime semantics](docs/LIMITATIONS.en.md) for the detailed rules, and [compatibility](docs/COMPATIBILITY.en.md) for device coverage and pending validation.
 
 ## Quick start
 
@@ -40,7 +40,7 @@ dependencyResolutionManagement {
 ```groovy
 // app module build.gradle
 dependencies {
-    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha.4'
+    implementation 'io.github.ytlog:artdcevm:0.1.0-alpha.3'
 }
 ```
 
